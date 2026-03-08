@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:careasy_app/utils/constants.dart';
-import 'package:careasy_app/screens/login_screen.dart';
-import 'package:careasy_app/screens/register_screen.dart';
+import 'package:careasy_app_mobile/utils/constants.dart';
+import 'package:careasy_app_mobile/screens/login_screen.dart';
+import 'package:careasy_app_mobile/screens/register_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});

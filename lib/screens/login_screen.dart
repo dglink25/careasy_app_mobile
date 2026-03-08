@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:careasy_app/utils/constants.dart';
-import 'package:careasy_app/screens/register_screen.dart';
+import 'package:careasy_app_mobile/utils/constants.dart';
+import 'package:careasy_app_mobile/screens/register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
