@@ -16,12 +16,13 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
   final _storage = const FlutterSecureStorage();
   bool _isLoading = true;
   String? _errorMessage;
-  bool _isRetrying = false;
 
+  // Configuration correcte avec vos identifiants
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
-    // Utilisez le Client ID Web (pas celui Android)
-    clientId: '467002761555-iqqft5l3n5d2b9kv5hdaka4kivvkkhp3.apps.googleusercontent.com',
+    // Client ID ANDROID
+    clientId: '467002761555-ngtlk28b8ltqo50bdgivnkeqvmef47pf.apps.googleusercontent.com',
+    // Client ID WEB (pour le backend)
     serverClientId: '467002761555-iqqft5l3n5d2b9kv5hdaka4kivvkkhp3.apps.googleusercontent.com',
   );
 
@@ -38,14 +39,13 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     });
 
     try {
-      // Forcer la déconnexion pour permettre le choix du compte
+      // Déconnexion préalable pour forcer le choix du compte
       await _googleSignIn.signOut();
       
       // Tentative de connexion
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
 
       if (googleUser == null) {
-        // L'utilisateur a annulé
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -58,20 +58,21 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
         return;
       }
 
-      // Authentification réussie
+      print('✅ Connexion Google réussie pour: ${googleUser.email}');
+      
+      // Récupérer l'authentification
       final GoogleSignInAuthentication googleAuth = 
           await googleUser.authentication;
 
-      // Envoi au backend
+      // ✅ Envoyer le token au backend (version mobile)
       await _sendTokenToBackend(
         googleAuth.idToken!,
         googleUser.email,
         googleUser.displayName,
-        googleUser.photoUrl,
       );
 
     } catch (error) {
-      print('Erreur Google Sign-In: $error');
+      print('❌ Erreur Google Sign-In: $error');
       
       String userMessage = _getUserFriendlyErrorMessage(error);
       
@@ -86,7 +87,7 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     final errorString = error.toString();
     
     if (errorString.contains('ApiException: 10')) {
-      return 'Erreur de configuration (CODE 10). Veuillez contacter le support.';
+      return 'Erreur de configuration (CODE 10). Vos empreintes SHA sont bien configurées ?';
     } else if (errorString.contains('network_error')) {
       return 'Erreur réseau. Vérifiez votre connexion internet.';
     } else if (errorString.contains('sign_in_canceled')) {
@@ -102,11 +103,16 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     String idToken, 
     String email, 
     String? name,
-    String? photoUrl,
   ) async {
     try {
+      print('Envoi du token au backend mobile...');
+      
+      // URL vers votre nouvelle route mobile
+      final url = '${AppConstants.apiBaseUrl}/google/callback/mobile';
+      print('📡 URL: $url');
+      
       final response = await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/auth/google/callback'),
+        Uri.parse(url),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -115,22 +121,28 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
           'id_token': idToken,
           'email': email,
           'name': name,
-          'photo_url': photoUrl,
         }),
       ).timeout(const Duration(seconds: 15));
 
+      print('Statut: ${response.statusCode}');
+      print('Body: ${response.body}');
+
       final responseData = jsonDecode(response.body);
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        // Stockage du token
         if (responseData['token'] != null) {
           await _storage.write(key: 'auth_token', value: responseData['token']);
+          print('Token stocké');
         }
         
+        // Stockage des données utilisateur
         if (responseData['user'] != null) {
           await _storage.write(
             key: 'user_data', 
             value: jsonEncode(responseData['user'])
           );
+          print('Données utilisateur stockées: ${responseData['user']['name']}');
         }
 
         if (mounted) {
@@ -141,15 +153,17 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
               behavior: SnackBarBehavior.floating,
             ),
           );
-          Navigator.pop(context, true);
+          Navigator.pop(context, true); // Succès
         }
       } else {
         throw Exception(responseData['message'] ?? 'Erreur serveur');
       }
-    } catch (e) {
-      print('Erreur envoi token: $e');
+    } 
+    catch (e) {
+      print('Erreur: $e');
       throw Exception('Impossible de communiquer avec le serveur');
-    } finally {
+    } 
+    finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
@@ -158,7 +172,6 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
 
   void _retry() {
     setState(() {
-      _isRetrying = true;
       _errorMessage = null;
     });
     _signInWithGoogle();
@@ -193,12 +206,9 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
           valueColor: AlwaysStoppedAnimation<Color>(AppConstants.primaryRed),
         ),
         const SizedBox(height: 24),
-        Text(
-          _isRetrying ? 'Nouvelle tentative...' : 'Connexion en cours...',
-          style: const TextStyle(
-            fontSize: 16,
-            color: Color(0xFF2D3436),
-          ),
+        const Text(
+          'Connexion en cours...',
+          style: TextStyle(fontSize: 16, color: Color(0xFF2D3436)),
         ),
       ],
     );
@@ -217,56 +227,20 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
               color: Colors.red.withOpacity(0.1),
               shape: BoxShape.circle,
             ),
-            child: const Icon(
-              Icons.error_outline,
-              color: Colors.red,
-              size: 48,
-            ),
+            child: const Icon(Icons.error_outline, color: Colors.red, size: 48),
           ),
           const SizedBox(height: 16),
           const Text(
             'Erreur de connexion',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF2D3436),
-            ),
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
           Text(
             _errorMessage!,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 14,
-              color: Color(0xFF718096),
-            ),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF718096)),
           ),
           const SizedBox(height: 24),
-          if (_errorMessage!.contains('CODE 10'))
-            Container(
-              padding: const EdgeInsets.all(16),
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Column(
-                children: [
-                  Text(
-                    'Solution rapide :',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Ajoutez les empreintes SHA1 et SHA256 de votre application dans Firebase Console',
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
