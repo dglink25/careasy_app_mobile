@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "271933456982",
+    "project_id": "careasy-90edd",
+    "storage_bucket": "careasy-90edd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:271933456982:android:2d6ac8533659335e3d71f7",
+        "android_client_info": {
+          "package_name": "com.careasy.careasy_app_mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAeHiV-pDxF7F9VOi-qoKFOKB0AsIbKQZU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:271933456982:android:827250c8464719473d71f7",
+        "android_client_info": {
+          "package_name": "com.careasy_app_mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAeHiV-pDxF7F9VOi-qoKFOKB0AsIbKQZU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
