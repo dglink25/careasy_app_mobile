@@ -44,6 +44,8 @@
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<true/>
 </dict>
 </plist>
