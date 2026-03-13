@@ -5,6 +5,10 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
+import 'package:careasy_app_mobile/screens/messages_screen.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -78,9 +82,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       final token = await _storage.read(key: 'auth_token');
       
-      // Recherche combinée
       final response = await http.get(
-        Uri.parse('${AppConstants.apiBaseUrl}/search?q=$query'),
+        Uri.parse('${AppConstants.apiBaseUrl}/search?q=$query&type=all'),
         headers: {
           'Authorization': 'Bearer $token',
           'Accept': 'application/json',
@@ -136,8 +139,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
       );
 
-      print('Services response: ${response.statusCode}');
-      
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         setState(() {
@@ -170,8 +171,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
       );
 
-      print('Entreprises response: ${response.statusCode}');
-      
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         setState(() {
@@ -200,8 +199,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
       );
 
-      print('Domaines response: ${response.statusCode}');
-      
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         setState(() {
@@ -258,7 +255,252 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }).toList();
   }
 
-  void _showContactModal(Map<String, dynamic> service) async {
+  // FONCTION CORRIGÉE POUR FORMATER LES NUMÉROS DE TÉLÉPHONE
+  String _formatPhoneNumber(String phone) {
+    if (phone.isEmpty) return '';
+    
+    // Supprimer tous les caractères non numériques
+    String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    print('Numéro original: $phone');
+    print('Numéro nettoyé: $cleaned');
+    
+    // Si le numéro commence déjà par +, le garder tel quel
+    if (phone.startsWith('+')) {
+      return phone;
+    }
+    
+    // Cas 1: Format avec indicatif 229 (ex: 22994119476)
+    if (cleaned.startsWith('229') && cleaned.length >= 11) {
+      return '+$cleaned';
+    }
+    
+    // Cas 2: Format avec 0 (ex: 0194119476 ou 094119476)
+    if (cleaned.startsWith('0') && cleaned.length == 10) {
+      return '+229${cleaned.substring(1)}';
+    }
+    
+    // Cas 3: Format sans indicatif (ex: 94119476)
+    if (cleaned.length == 8) {
+      return '+229$cleaned';
+    }
+    
+    // Cas 4: Format avec 00229 (ex: 0022994119476)
+    if (cleaned.startsWith('00229')) {
+      return '+${cleaned.substring(2)}';
+    }
+    
+    // Si le numéro contient déjà un + mais pas au début
+    if (cleaned.contains('+')) {
+      return cleaned;
+    }
+    
+    // Par défaut, ajouter l'indicatif du Bénin
+    return '+229$cleaned';
+  }
+
+  // FONCTION POUR DEMANDER LA PERMISSION D'APPEL
+  Future<bool> _requestPhonePermission() async {
+    if (kIsWeb) return true;
+    
+    var status = await Permission.phone.status;
+    if (!status.isGranted) {
+      status = await Permission.phone.request();
+    }
+    return status.isGranted;
+  }
+
+  // FONCTION CORRIGÉE POUR L'APPEL TÉLÉPHONIQUE
+  Future<void> _makePhoneCall(String phoneNumber) async {
+    try {
+      if (phoneNumber.isEmpty) {
+        _showError('Numéro de téléphone non disponible');
+        return;
+      }
+
+      // Demander la permission
+      if (!kIsWeb) {
+        bool hasPermission = await _requestPhonePermission();
+        if (!hasPermission) {
+          _showError('Permission d\'appel refusée');
+          return;
+        }
+      }
+
+      final formattedNumber = _formatPhoneNumber(phoneNumber);
+      print('Numéro formaté pour appel: $formattedNumber');
+      
+      // Essayer différents formats d'URL
+      final urls = [
+        'tel:$formattedNumber',
+        'tel:${formattedNumber.replaceAll('+', '')}',
+        'tel:${formattedNumber.replaceAll('+', '00')}',
+      ];
+
+      bool launched = false;
+      for (String url in urls) {
+        final uri = Uri.parse(url);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri);
+          launched = true;
+          break;
+        }
+      }
+
+      if (!launched) {
+        // Dernière tentative avec tel://
+        final fallbackUri = Uri.parse('tel://$formattedNumber');
+        if (await canLaunchUrl(fallbackUri)) {
+          await launchUrl(fallbackUri);
+        } else {
+          _showError('Impossible de passer l\'appel. Vérifiez que votre appareil peut passer des appels.');
+        }
+      }
+    } catch (e) {
+      print('Erreur appel: $e');
+      _showError('Erreur lors de l\'appel: ${e.toString()}');
+    }
+  }
+
+  // FONCTION CORRIGÉE POUR WHATSAPP
+  Future<void> _openWhatsApp(String phoneNumber) async {
+    try {
+      if (phoneNumber.isEmpty) {
+        _showError('Numéro WhatsApp non disponible');
+        return;
+      }
+
+      final formattedNumber = _formatPhoneNumber(phoneNumber);
+      // Enlever le + et les espaces pour WhatsApp
+      final cleanNumber = formattedNumber.replaceAll('+', '').replaceAll(' ', '');
+      print('Numéro formaté pour WhatsApp: $cleanNumber');
+      
+      // Essayer différents formats d'URL WhatsApp
+      final urls = [
+        'https://wa.me/$cleanNumber',
+        'whatsapp://send?phone=$cleanNumber',
+        'https://api.whatsapp.com/send?phone=$cleanNumber',
+        'https://web.whatsapp.com/send?phone=$cleanNumber',
+      ];
+
+      bool launched = false;
+      for (String url in urls) {
+        final uri = Uri.parse(url);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(
+            uri,
+            mode: LaunchMode.externalApplication,
+          );
+          launched = true;
+          break;
+        }
+      }
+
+      if (!launched) {
+        // Afficher une option pour copier le numéro
+        _showWhatsAppFallback(cleanNumber);
+      }
+    } catch (e) {
+      print('Erreur WhatsApp: $e');
+      _showWhatsAppFallback(phoneNumber);
+    }
+  }
+
+  // FONCTION DE SECOURS POUR WHATSAPP
+  void _showWhatsAppFallback(String phoneNumber) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.orange,
+              size: 50,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'WhatsApp non disponible',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Impossible d\'ouvrir WhatsApp automatiquement. Vous pouvez copier le numéro et l\'ajouter manuellement.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      phoneNumber,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, color: AppConstants.primaryRed),
+                    onPressed: () {
+                      // Copier le numéro
+                      // await Clipboard.setData(ClipboardData(text: phoneNumber));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Numéro copié !'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppConstants.primaryRed,
+                minimumSize: const Size(double.infinity, 45),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // MODAL DE CONTACT AMÉLIORÉ
+  void _showContactModal(Map<String, dynamic> service) {
     final entreprise = service['entreprise'] ?? {};
     final whatsapp = entreprise['whatsapp_phone'] ?? '';
     final phone = entreprise['call_phone'] ?? '';
@@ -270,155 +512,188 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       builder: (context) => Container(
         decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
         ),
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: DraggableScrollableSheet(
-          initialChildSize: 0.5,
-          minChildSize: 0.3,
-          maxChildSize: 0.9,
-          expand: false,
-          builder: (context, scrollController) {
-            return Column(
-              children: [
-                // Handle
-                Container(
-                  margin: const EdgeInsets.only(top: 12),
-                  height: 4,
-                  width: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                
-                // Header
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 25,
-                        backgroundColor: AppConstants.primaryRed.withOpacity(0.1),
-                        backgroundImage: entreprise['logo'] != null
-                            ? NetworkImage(entreprise['logo'])
-                            : null,
-                        child: entreprise['logo'] == null
-                            ? Icon(Icons.business, color: AppConstants.primaryRed)
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              height: 4,
+              width: 40,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            
+            // Header
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Hero(
+                    tag: 'service-${service['id']}',
+                    child: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(16),
+                        image: service['medias'] != null && (service['medias'] as List).isNotEmpty
+                            ? DecorationImage(
+                                image: NetworkImage((service['medias'] as List).first),
+                                fit: BoxFit.cover,
+                              )
                             : null,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      child: service['medias'] == null || (service['medias'] as List).isEmpty
+                          ? Icon(Icons.build_circle, size: 30, color: AppConstants.primaryRed)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          service['name'] ?? 'Service',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
                           children: [
-                            Text(
-                              service['name'] ?? 'Service',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              entreprise['name'] ?? 'Entreprise',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
+                            Icon(Icons.business, size: 14, color: Colors.grey[600]),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                entreprise['name'] ?? 'Entreprise',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[600],
+                                ),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const Divider(),
-                
-                // Contact options
-                Expanded(
-                  child: ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.all(20),
-                    children: [
-                      if (phone.isNotEmpty) ...[
-                        _buildContactOption(
-                          icon: Icons.phone,
-                          iconColor: Colors.green,
-                          title: 'Appeler',
-                          subtitle: phone,
-                          onTap: () async {
-                            Navigator.pop(context);
-                            final telUrl = 'tel:$phone';
-                            if (await canLaunch(telUrl)) {
-                              await launch(telUrl);
-                            } else {
-                              _showError('Impossible de passer l\'appel');
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 12),
                       ],
-                      
-                      if (whatsapp.isNotEmpty) ...[
-                        _buildContactOption(
-                          icon: Icons.message,
-                          iconColor: Colors.green,
-                          title: 'WhatsApp',
-                          subtitle: whatsapp,
-                          onTap: () async {
-                            Navigator.pop(context);
-                            final cleanPhone = whatsapp.replaceAll('+', '').replaceAll(' ', '');
-                            final whatsappUrl = 'https://wa.me/$cleanPhone';
-                            if (await canLaunch(whatsappUrl)) {
-                              await launch(whatsappUrl);
-                            } else {
-                              _showError('Impossible d\'ouvrir WhatsApp');
-                            }
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      
-                      _buildContactOption(
-                        icon: Icons.calendar_today,
-                        iconColor: Colors.blue,
-                        title: 'Prendre rendez-vous',
-                        subtitle: 'Planifier un rendez-vous',
-                        onTap: () {
-                          Navigator.pop(context);
-                          _showServiceDetails(service);
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      
-                      _buildContactOption(
-                        icon: Icons.info_outline,
-                        iconColor: Colors.orange,
-                        title: 'Voir détails',
-                        subtitle: 'Plus d\'informations sur ce service',
-                        onTap: () {
-                          Navigator.pop(context);
-                          _showServiceDetails(service);
-                        },
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ],
-            );
-          },
+                  IconButton(
+                    icon: Icon(Icons.close, color: Colors.grey[600]),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            
+            const Divider(height: 1),
+            
+            // Options de contact
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  if (phone.isNotEmpty) ...[
+                    _buildContactButton(
+                      icon: Icons.phone,
+                      color: Colors.green,
+                      title: 'Appeler',
+                      subtitle: phone,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        // Afficher un indicateur de chargement
+                        showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (context) => const Center(
+                            child: CircularProgressIndicator(),
+                          ),
+                        );
+                        await _makePhoneCall(phone);
+                        if (context.mounted) {
+                          Navigator.pop(context); // Fermer l'indicateur
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  
+                  if (whatsapp.isNotEmpty) ...[
+                    _buildContactButton(
+                      icon: Icons.chat,
+                      color: const Color(0xFF25D366),
+                      title: 'WhatsApp',
+                      subtitle: whatsapp,
+                      onTap: () async {
+                        Navigator.pop(context);
+                        // Afficher un indicateur de chargement
+                        showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (context) => const Center(
+                            child: CircularProgressIndicator(),
+                          ),
+                        );
+                        await _openWhatsApp(whatsapp);
+                        if (context.mounted) {
+                          Navigator.pop(context); // Fermer l'indicateur
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  
+                  _buildContactButton(
+                    icon: Icons.calendar_month,
+                    color: Colors.blue,
+                    title: 'Prendre rendez-vous',
+                    subtitle: 'Planifier une intervention',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showServiceDetails(service);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  
+                  _buildContactButton(
+                    icon: Icons.message,
+                    color: Colors.purple,
+                    title: 'Message',
+                    subtitle: 'Envoyer un message à l\'entreprise',
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => MessagesScreen(
+                            serviceName: service['name'],
+                            entrepriseName: entreprise['name'],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 20),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildContactOption({
+  // BOUTON DE CONTACT AMÉLIORÉ
+  Widget _buildContactButton({
     required IconData icon,
-    required Color iconColor,
+    required Color color,
     required String title,
     required String subtitle,
     required VoidCallback onTap,
@@ -427,22 +702,33 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[200]!),
-            borderRadius: BorderRadius.circular(12),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.grey[200]!,
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.grey.withOpacity(0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: iconColor, size: 24),
+                child: Icon(icon, color: color, size: 24),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -467,7 +753,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ],
                 ),
               ),
-              Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 14,
+                color: Colors.grey[400],
+              ),
             ],
           ),
         ),
@@ -490,6 +780,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         content: Text(message),
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
       ),
     );
   }
@@ -505,42 +798,50 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return Scaffold(
       backgroundColor: Colors.grey[50],
       
-      // App Bar personnalisée
       appBar: AppBar(
         elevation: 0,
         backgroundColor: AppConstants.primaryRed,
         foregroundColor: Colors.white,
         title: _isSearching
-            ? Container(
-                height: 40,
+            ? AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOut,
+                width: _isSearching ? size.width * 0.75 : 0,
+                height: 45,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.white,
                   borderRadius: BorderRadius.circular(25),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: TextField(
                   controller: _searchController,
                   focusNode: _searchFocusNode,
                   autofocus: true,
-                  style: const TextStyle(color: Colors.white),
+                  style: const TextStyle(color: Colors.black87, fontSize: 14),
                   decoration: InputDecoration(
-                    hintText: 'Rechercher...',
-                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.7)),
-                    prefixIcon: const Icon(Icons.search, color: Colors.white, size: 20),
+                    hintText: 'Rechercher un service...',
+                    hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
+                    prefixIcon: Icon(Icons.search, color: AppConstants.primaryRed, size: 20),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.white, size: 18),
+                      icon: Icon(Icons.close, color: Colors.grey[600], size: 18),
                       onPressed: () {
                         _searchController.clear();
                         setState(() => _isSearching = false);
                       },
                     ),
                     border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
               )
             : Row(
                 children: [
-                  // Logo
                   Container(
                     height: 32,
                     width: 32,
@@ -573,23 +874,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ],
               ),
         actions: [
-          // Recherche
-          IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.white),
-            onPressed: () {
-              setState(() {
-                if (_isSearching) {
-                  _isSearching = false;
-                  _searchController.clear();
-                  _searchFocusNode.unfocus();
-                } else {
-                  _isSearching = true;
-                  _searchFocusNode.requestFocus();
-                }
-              });
-            },
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            child: IconButton(
+              icon: Icon(
+                _isSearching ? Icons.close : Icons.search,
+                color: Colors.white,
+                size: 24,
+              ),
+              onPressed: () {
+                setState(() {
+                  if (_isSearching) {
+                    _isSearching = false;
+                    _searchController.clear();
+                    _searchFocusNode.unfocus();
+                  } else {
+                    _isSearching = true;
+                    _searchFocusNode.requestFocus();
+                  }
+                });
+              },
+            ),
           ),
-          // Notifications
           Stack(
             children: [
               IconButton(
@@ -610,7 +917,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ],
           ),
-          // Paramètres
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: Colors.white),
             onPressed: () => _showComingSoon('Paramètres'),
@@ -628,7 +934,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   : CustomScrollView(
                       controller: _serviceScrollController,
                       slivers: [
-                        // Categories
                         SliverAppBar(
                           pinned: true,
                           floating: true,
@@ -685,12 +990,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ),
                         ),
 
-                        // Contenu principal
                         SliverPadding(
                           padding: EdgeInsets.all(size.width * 0.04),
                           sliver: SliverList(
                             delegate: SliverChildListDelegate([
-                              // Section Services
                               _buildSectionHeader(
                                 'Services populaires',
                                 onSeeAll: () => _showComingSoon('Tous les services'),
@@ -705,7 +1008,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               
                               const SizedBox(height: 24),
                               
-                              // Section Entreprises
                               _buildSectionHeader(
                                 'Entreprises',
                                 onSeeAll: () => _showComingSoon('Toutes les entreprises'),
@@ -726,7 +1028,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
             ),
 
-      // Bottom Navigation Bar
+      // BOTTOM NAVIGATION BAR AMÉLIORÉE
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -739,20 +1041,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ],
         ),
         child: SafeArea(
-          child: Container(
-            height: 60,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _buildNavItem(Icons.home, 'Accueil', 0),
-                _buildNavItem(Icons.calendar_today, 'Rendez-vous', 1),
+                _buildNavItem(Icons.message, 'Messages', 1),
+                _buildNavItem(Icons.calendar_today, 'Rendez-vous', 2),
                 _buildNavItem(
                   hasEntreprise ? Icons.business : Icons.add_business,
                   hasEntreprise ? 'Entreprise' : 'Créer',
-                  2,
+                  3,
                 ),
-                _buildProfileNavItem(userName, userPhoto, 3),
+                _buildProfileNavItem(userName, userPhoto, 4),
               ],
             ),
           ),
@@ -773,6 +1075,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               'Aucun résultat trouvé',
               style: TextStyle(fontSize: 16, color: Colors.grey[600]),
             ),
+            const SizedBox(height: 8),
+            Text(
+              'Essayez avec d\'autres mots-clés',
+              style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            ),
           ],
         ),
       );
@@ -784,36 +1091,111 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       itemBuilder: (context, index) {
         final item = _searchResults[index];
         final type = item['type'];
+        final isService = type == 'service';
         
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.grey[200],
-              backgroundImage: item['logo'] != null
-                  ? NetworkImage(item['logo'])
-                  : null,
-              child: item['logo'] == null
-                  ? Icon(type == 'service' ? Icons.build : Icons.business, size: 20)
-                  : null,
-            ),
-            title: Text(item['name'] ?? ''),
-            subtitle: Text(type == 'service' ? 'Service' : 'Entreprise'),
-            trailing: const Icon(Icons.arrow_forward),
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: InkWell(
             onTap: () {
-              if (type == 'service') {
+              if (isService) {
                 _showServiceDetails(item);
               } else {
                 _showComingSoon('Détails entreprise');
               }
             },
+            borderRadius: BorderRadius.circular(15),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(12),
+                      image: item['logo'] != null || (isService && item['medias'] != null && (item['medias'] as List).isNotEmpty)
+                          ? DecorationImage(
+                              image: NetworkImage(
+                                isService 
+                                    ? (item['medias'] as List).first 
+                                    : item['logo']
+                              ),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                    ),
+                    child: (item['logo'] == null && (!isService || ((item['medias'] as List?)?.isEmpty ?? true)))
+                        ? Icon(
+                            isService ? Icons.build : Icons.business,
+                            size: 24,
+                            color: Colors.grey[400],
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item['name'] ?? '',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isService 
+                                    ? Colors.blue.withOpacity(0.1)
+                                    : Colors.green.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                isService ? 'Service' : 'Entreprise',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isService ? Colors.blue : Colors.green,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (isService && item['price'] != null) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                '${item['price']} FCFA',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppConstants.primaryRed,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
+                ],
+              ),
+            ),
           ),
         );
       },
     );
   }
 
+  // ITEM DE NAVIGATION AMÉLIORÉ
   Widget _buildNavItem(IconData icon, String label, int index) {
     final isSelected = _currentIndex == index;
     
@@ -821,13 +1203,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: InkWell(
         onTap: () {
           setState(() => _currentIndex = index);
-          if (index == 1) _showComingSoon('Rendez-vous');
-          if (index == 2) _handleEntrepriseTap();
-          if (index == 3) _showProfileDialog();
+          if (index == 1) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const MessagesScreen()),
+            );
+          }
+          if (index == 2) _showComingSoon('Rendez-vous');
+          if (index == 3) _handleEntrepriseTap();
+          if (index == 4) _showProfileDialog();
         },
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -840,10 +1228,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   color: isSelected ? AppConstants.primaryRed : Colors.grey,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -863,12 +1254,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         },
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 6),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               CircleAvatar(
-                radius: 12,
+                radius: 11,
                 backgroundImage: userPhoto.isNotEmpty
                     ? NetworkImage(userPhoto)
                     : null,
@@ -876,21 +1267,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 child: userPhoto.isEmpty
                     ? Icon(
                         Icons.person,
-                        size: 14,
+                        size: 12,
                         color: Colors.grey[600],
                       )
                     : null,
               ),
               const SizedBox(height: 2),
               Text(
-                userName.split(' ').first,
+                'Profil',
                 style: TextStyle(
                   fontSize: 10,
                   color: isSelected ? AppConstants.primaryRed : Colors.grey,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
-                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -953,7 +1345,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Image carousel
             Stack(
               children: [
                 ClipRRect(
@@ -986,7 +1377,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                 ),
                 
-                // Image indicators
                 if (medias.length > 1)
                   Positioned(
                     bottom: 8,
@@ -1011,7 +1401,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                   ),
                 
-                // Promo badge
                 if (hasPromo && isPromoActive)
                   Positioned(
                     top: 8,
@@ -1038,7 +1427,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ],
             ),
             
-            // Service info
             Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1046,13 +1434,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Logo entreprise
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundColor: Colors.grey[200],
-                        backgroundImage: entreprise['logo'] != null
-                            ? NetworkImage(entreprise['logo'])
-                            : null,
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(10),
+                          image: entreprise['logo'] != null
+                              ? DecorationImage(
+                                  image: NetworkImage(entreprise['logo']),
+                                  fit: BoxFit.cover,
+                                )
+                              : null,
+                        ),
                         child: entreprise['logo'] == null
                             ? Icon(
                                 Icons.business,
@@ -1063,7 +1457,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                       const SizedBox(width: 12),
                       
-                      // Infos
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1114,7 +1507,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ),
                       ),
                       
-                      // Prix
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -1176,7 +1568,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   
                   const SizedBox(height: 12),
                   
-                  // Boutons
                   Row(
                     children: [
                       Expanded(
@@ -1200,7 +1591,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         child: OutlinedButton.icon(
                           onPressed: () => _showServiceDetails(service),
                           icon: const Icon(Icons.info_outline, size: 16),
-                          label: const Text('Voir plus'),
+                          label: const Text('Détails'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppConstants.primaryRed,
                             side: BorderSide(color: AppConstants.primaryRed),
@@ -1252,7 +1643,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo
               ClipRRect(
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(12),
@@ -1563,7 +1953,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Avatar
               CircleAvatar(
                 radius: 40,
                 backgroundImage: _userData?['profile_photo_url'] != null
@@ -1597,14 +1986,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               const Divider(),
               const SizedBox(height: 8),
               
-              // Informations
               _buildInfoRow(Icons.email, 'Email', _userData?['email'] ?? 'Non renseigné'),
               _buildInfoRow(Icons.phone, 'Téléphone', _userData?['phone'] ?? 'Non renseigné'),
               _buildInfoRow(Icons.person, 'Rôle', _userData?['role'] ?? 'Client'),
               
               const SizedBox(height: 16),
               
-              // Boutons
               Row(
                 children: [
                   Expanded(
@@ -1663,332 +2050,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               value,
               style: const TextStyle(fontSize: 13),
               overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// Nouvelle page de détails du service
-class ServiceDetailScreen extends StatelessWidget {
-  final Map<String, dynamic> service;
-
-  const ServiceDetailScreen({super.key, required this.service});
-
-  @override
-  Widget build(BuildContext context) {
-    final entreprise = service['entreprise'] ?? {};
-    final medias = service['medias'] is List ? service['medias'] : [];
-    final hasPromo = service['has_promo'] ?? false;
-    final isPromoActive = service['is_promo_active'] ?? false;
-
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 300,
-            pinned: true,
-            stretch: true,
-            backgroundColor: AppConstants.primaryRed,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Image
-                  medias.isNotEmpty
-                      ? Image.network(
-                          medias[0],
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            color: Colors.grey[300],
-                            child: Center(
-                              child: Icon(Icons.image_not_supported, size: 50, color: Colors.grey[600]),
-                            ),
-                          ),
-                        )
-                      : Container(
-                          color: Colors.grey[300],
-                          child: Center(
-                            child: Icon(Icons.image_not_supported, size: 50, color: Colors.grey[600]),
-                          ),
-                        ),
-                  
-                  // Gradient
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.7),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  // Info overlay
-                  Positioned(
-                    bottom: 20,
-                    left: 20,
-                    right: 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          service['name'] ?? 'Service',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 12,
-                              backgroundColor: Colors.white,
-                              backgroundImage: entreprise['logo'] != null
-                                  ? NetworkImage(entreprise['logo'])
-                                  : null,
-                              child: entreprise['logo'] == null
-                                  ? Icon(Icons.business, size: 12, color: AppConstants.primaryRed)
-                                  : null,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                entreprise['name'] ?? 'Entreprise',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ),
-          
-          SliverPadding(
-            padding: const EdgeInsets.all(16),
-            sliver: SliverList(
-              delegate: SliverChildListDelegate([
-                // Prix
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Prix',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (service['is_price_on_request'] == true)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.blue[50],
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            'Sur devis',
-                            style: TextStyle(
-                              color: Colors.blue[700],
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        )
-                      else if (hasPromo && isPromoActive)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '${service['price_promo']} FCFA',
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: AppConstants.primaryRed,
-                              ),
-                            ),
-                            Text(
-                              '${service['price']} FCFA',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[500],
-                                decoration: TextDecoration.lineThrough,
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        Text(
-                          service['price'] != null ? '${service['price']} FCFA' : '---',
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: AppConstants.primaryRed,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Description
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Description',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        service['descriptions'] ?? 'Aucune description disponible',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[700],
-                          height: 1.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Horaires
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Horaires',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Icon(Icons.access_time, size: 20, color: AppConstants.primaryRed),
-                          const SizedBox(width: 8),
-                          Text(
-                            service['is_always_open'] == true
-                                ? 'Ouvert 24h/24'
-                                : service['start_time'] != null && service['end_time'] != null
-                                    ? '${service['start_time']} - ${service['end_time']}'
-                                    : 'Horaires variables',
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // Contact
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Contact',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (entreprise['call_phone'] != null)
-                        ListTile(
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.green[50],
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.phone, color: Colors.green),
-                          ),
-                          title: const Text('Téléphone'),
-                          subtitle: Text(entreprise['call_phone']),
-                          onTap: () async {
-                            final telUrl = 'tel:${entreprise['call_phone']}';
-                            if (await canLaunch(telUrl)) {
-                              await launch(telUrl);
-                            }
-                          },
-                        ),
-                      if (entreprise['whatsapp_phone'] != null)
-                        ListTile(
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.green[50],
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.message, color: Colors.green),
-                          ),
-                          title: const Text('WhatsApp'),
-                          subtitle: Text(entreprise['whatsapp_phone']),
-                          onTap: () async {
-                            final cleanPhone = entreprise['whatsapp_phone'].replaceAll('+', '').replaceAll(' ', '');
-                            final whatsappUrl = 'https://wa.me/$cleanPhone';
-                            if (await canLaunch(whatsappUrl)) {
-                              await launch(whatsappUrl);
-                            }
-                          },
-                        ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 20),
-              ]),
             ),
           ),
         ],
