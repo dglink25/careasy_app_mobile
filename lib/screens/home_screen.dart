@@ -9,6 +9,9 @@ import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
 import 'package:careasy_app_mobile/screens/messages_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:careasy_app_mobile/screens/all_services_screen.dart';
+import 'package:careasy_app_mobile/screens/all_entreprises_screen.dart';
+import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -996,7 +999,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             delegate: SliverChildListDelegate([
                               _buildSectionHeader(
                                 'Services populaires',
-                                onSeeAll: () => _showComingSoon('Tous les services'),
+                                onSeeAll: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AllServicesScreen(
+                                      initialServices: _services,
+                                      initialDomaines: _domaines,
+                                    ),
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 12),
                               
@@ -1007,10 +1018,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       : _buildServicesList(),
                               
                               const SizedBox(height: 24),
-                              
                               _buildSectionHeader(
                                 'Entreprises',
-                                onSeeAll: () => _showComingSoon('Toutes les entreprises'),
+                                onSeeAll: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AllEntreprisesScreen(
+                                      initialEntreprises: _entreprises,
+                                      initialDomaines: _domaines,
+                                    ),
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 12),
                               
@@ -1638,7 +1656,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           borderRadius: BorderRadius.circular(12),
         ),
         child: InkWell(
-          onTap: () => _showComingSoon('Profil entreprise'),
+         onTap: () => Navigator.push(
+  context,
+  MaterialPageRoute(
+    builder: (_) => EntrepriseDetailScreen(entreprise: entreprise),
+  ),
+),
           borderRadius: BorderRadius.circular(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
