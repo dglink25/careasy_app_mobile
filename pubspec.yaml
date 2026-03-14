@@ -1,55 +1,68 @@
 name: careasy_app_mobile
-description: CarEasy
+description: CarEasy Mobile Application
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.10.8
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
+  
+  # Core
   cupertino_icons: ^1.0.8
-  dio: ^5.4.0
-  provider: ^6.1.1
-  shared_preferences: ^2.2.2
-  flutter_svg: ^2.0.9
-  flutter_secure_storage: ^9.0.0
-  webview_flutter: ^4.4.2
-  http: ^1.1.0
-  google_sign_in: ^6.2.1
-  firebase_core: ^4.5.0
-  url_launcher: ^6.2.1
-  permission_handler: ^11.0.1
+  http: ^1.2.2
+  flutter_secure_storage: ^9.2.2
+  provider: ^6.1.2
+  shared_preferences: ^2.3.5
+  
+  # Firebase
+  firebase_core: ^3.12.1
+  
+  # UI
+  intl: ^0.19.0
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  badges: ^3.1.2
+  
+  # Messagerie temps réel
+  pusher_channels_flutter: ^2.4.0
+  
+  # Notifications
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+  
+  # Permissions
+  permission_handler: ^11.3.1
+  
+  # URL Launcher
+  url_launcher: ^6.3.1
+  
+  # Media - UNIQUEMENT CEUX-CI
+  image_picker: ^1.1.2
+  file_picker: ^8.1.7
+  # record: SUPPRIMÉ
+  # audio_recorder: SUPPRIMÉ
+  
+  # Audio - OPTIONNEL (si vous voulez la lecture audio uniquement)
+  audioplayers: ^5.2.1
+  
+  # Video
+  video_player: ^2.9.3
+  chewie: ^1.8.5
+  
+  # Utils
+  connectivity_plus: ^6.1.3
+  path_provider: ^2.1.5
+  
+  # Google Sign In
+  google_sign_in: ^6.2.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
-  # ⚠️ UN SEUL package pour les icônes
-  flutter_launcher_icons: "^0.14.4"  # Version à jour
-
-# ⚠️ SUPPRIMEZ complètement cette section
-# flutter_icons:
-#   android: true
-#   ios: true
-#   image_path: "assets/images/logo.png"
-
-flutter_launcher_icons:
-  android: true
-  ios: true
-  image_path: "assets/images/logo.png"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logo.png"
-  adaptive_icon_round: "assets/images/logo.png"  # Important pour les icônes rondes
-  adaptive_icon_monochrome: "assets/images/logo.png"  # Optionnel
-  min_sdk_android: 21
-  remove_alpha_ios: true
-  background_color_ios: "#FFFFFF"
-  android_icon_round: "assets/images/logo.png"  # Forcer la génération de l'icône ronde
-  android_adaptive_icon_foreground: "assets/images/logo.png"
-  android_adaptive_icon_background: "#FFFFFF"
-  android_adaptive_icon_monochrome: "assets/images/logo.png"
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true

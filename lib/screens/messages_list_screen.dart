@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
 import 'package:badges/badges.dart' as badges;
-
+import 'package:intl/intl.dart';
 import '../providers/message_provider.dart';
-import '../providers/auth_provider.dart';
 import '../models/conversation_model.dart';
 import '../utils/constants.dart';
-import 'chat_screen.dart';
+import './chat_screen.dart';
 import 'package:shimmer/shimmer.dart';
 
-class MessagesScreen extends StatefulWidget {
-  const MessagesScreen({super.key});
+class MessagesListScreen extends StatefulWidget {
+  const MessagesListScreen({super.key});
 
   @override
-  State<MessagesScreen> createState() => _MessagesScreenState();
+  State<MessagesListScreen> createState() => _MessagesListScreenState();
 }
 
-class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProviderStateMixin {
+class _MessagesListScreenState extends State<MessagesListScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
@@ -145,6 +143,9 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppConstants.primaryRed,
                     foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                   child: const Text('Réessayer'),
                 ),
@@ -197,6 +198,9 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                       horizontal: 24,
                       vertical: 12,
                     ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
               ],
@@ -222,12 +226,12 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
 
   Widget _buildConversationItem(ConversationModel conversation, MessageProvider provider) {
     final hasUnread = conversation.unreadCount > 0;
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final isOnline = conversation.otherUser.isOnline;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       elevation: hasUnread ? 3 : 1,
+      shadowColor: hasUnread ? AppConstants.primaryRed.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: hasUnread 
@@ -236,7 +240,8 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
       ),
       child: InkWell(
         onTap: () async {
-          await provider.markAsRead(conversation.id);
+          // Marquer comme lu avant de naviguer
+          await provider.markConversationAsRead(conversation.id);
           
           if (mounted) {
             Navigator.push(
@@ -249,7 +254,10 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                   entrepriseName: conversation.entrepriseName,
                 ),
               ),
-            ).then((_) => provider.loadConversations());
+            ).then((_) {
+              // Recharger les conversations au retour
+              provider.loadConversations();
+            });
           }
         },
         borderRadius: BorderRadius.circular(12),
@@ -257,6 +265,7 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
+              // Avatar avec indicateur de statut
               Stack(
                 children: [
                   CircleAvatar(
@@ -288,13 +297,18 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                         decoration: BoxDecoration(
                           color: Colors.green,
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
+                          border: Border.all(
+                            color: Colors.white,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
                 ],
               ),
               const SizedBox(width: 12),
+
+              // Contenu
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -313,7 +327,10 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                         ),
                         if (conversation.serviceName != null)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.blue[50],
                               borderRadius: BorderRadius.circular(4),
@@ -332,47 +349,87 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                           conversation.lastMessage != null
                               ? _formatMessageTime(conversation.lastMessage!.createdAt)
                               : _formatMessageTime(conversation.updatedAt),
-                          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                          ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    if (conversation.lastMessage != null)
-                      Text(
-                        '${conversation.lastMessage!.isMe ? 'Vous: ' : ''}${conversation.lastMessage!.content}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
-                          color: Colors.grey[600],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                    
+                    // Dernier message
+                    Row(
+                      children: [
+                        if (conversation.lastMessage != null) ...[
+                          if (conversation.lastMessage!.type != 'text')
+                            Container(
+                              margin: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                _getMessageTypeIcon(conversation.lastMessage!.type),
+                                size: 14,
+                                color: Colors.grey[500],
+                              ),
+                            ),
+                          Expanded(
+                            child: Text(
+                              conversation.lastMessage!.isMe ? 'Vous: ' : '',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                                color: Colors.grey[600],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
+
+              // Badge de non lus
               if (hasUnread)
-                Container(
-                  margin: const EdgeInsets.only(left: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppConstants.primaryRed,
-                    borderRadius: BorderRadius.circular(12),
+                badges.Badge(
+                badgeContent: Text(
+                  '${conversation.unreadCount}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
                   ),
-                  child: Text(
-                    '${conversation.unreadCount}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                )
+                ),
+                badgeStyle: badges.BadgeStyle(
+                  badgeColor: AppConstants.primaryRed,
+                ),
+                position: badges.BadgePosition.topEnd(),
+                child: const SizedBox(width: 30, height: 30),
+              )
             ],
           ),
         ),
       ),
     );
+  }
+
+  IconData _getMessageTypeIcon(String type) {
+    switch (type) {
+      case 'image':
+        return Icons.image;
+      case 'video':
+        return Icons.videocam;
+      case 'audio':
+      case 'vocal':
+        return Icons.mic;
+      case 'document':
+        return Icons.insert_drive_file;
+      case 'location':
+        return Icons.location_on;
+      default:
+        return Icons.message;
+    }
   }
 
   Widget _buildCallsTab() {

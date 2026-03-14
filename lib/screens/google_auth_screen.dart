@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:careasy_app_mobile/utils/constants.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../utils/constants.dart';
+import '../providers/auth_provider.dart';
+import 'package:provider/provider.dart';
 
 class GoogleAuthScreen extends StatefulWidget {
   const GoogleAuthScreen({super.key});
@@ -17,19 +19,19 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
-  // Configuration correcte avec vos identifiants
+  // Configuration Google Sign In
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
-    // Client ID ANDROID
     clientId: '467002761555-ngtlk28b8ltqo50bdgivnkeqvmef47pf.apps.googleusercontent.com',
-    // Client ID WEB (pour le backend)
     serverClientId: '467002761555-iqqft5l3n5d2b9kv5hdaka4kivvkkhp3.apps.googleusercontent.com',
   );
 
   @override
   void initState() {
     super.initState();
-    _signInWithGoogle();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _signInWithGoogle();
+    });
   }
 
   Future<void> _signInWithGoogle() async {
@@ -39,8 +41,12 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
     });
 
     try {
-      // Déconnexion préalable pour forcer le choix du compte
-      await _googleSignIn.signOut();
+      // Tentative de déconnexion pour forcer le choix
+      try {
+        await _googleSignIn.signOut();
+      } catch (e) {
+        // Ignorer l'erreur si pas de session
+      }
       
       // Tentative de connexion
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
@@ -64,11 +70,15 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
       final GoogleSignInAuthentication googleAuth = 
           await googleUser.authentication;
 
-      // ✅ Envoyer le token au backend (version mobile)
+      if (googleAuth.idToken == null) {
+        throw Exception('ID Token manquant');
+      }
+
+      // Envoyer le token au backend
       await _sendTokenToBackend(
         googleAuth.idToken!,
         googleUser.email,
-        googleUser.displayName,
+        googleUser.displayName ?? googleUser.email.split('@').first,
       );
 
     } catch (error) {
@@ -76,38 +86,37 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
       
       String userMessage = _getUserFriendlyErrorMessage(error);
       
-      setState(() {
-        _errorMessage = userMessage;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = userMessage;
+          _isLoading = false;
+        });
+      }
     }
   }
 
   String _getUserFriendlyErrorMessage(dynamic error) {
-    final errorString = error.toString();
+    final errorString = error.toString().toLowerCase();
     
-    if (errorString.contains('ApiException: 10')) {
-      return 'Erreur de configuration (CODE 10). Vos empreintes SHA sont bien configurées ?';
-    } else if (errorString.contains('network_error')) {
+    if (errorString.contains('network_error') || errorString.contains('socket')) {
       return 'Erreur réseau. Vérifiez votre connexion internet.';
-    } else if (errorString.contains('sign_in_canceled')) {
+    } else if (errorString.contains('sign_in_canceled') || errorString.contains('canceled')) {
       return 'Connexion annulée.';
-    } else if (errorString.contains('sign_in_required')) {
+    } else if (errorString.contains('sign_in_required') || errorString.contains('no account')) {
       return 'Aucun compte Google trouvé sur cet appareil.';
+    } else if (errorString.contains('developer_error') || errorString.contains('10')) {
+      return 'Erreur de configuration. Veuillez contacter le support.';
+    } else if (errorString.contains('timeout')) {
+      return 'Délai d\'attente dépassé. Vérifiez votre connexion.';
     } else {
-      return 'Erreur inattendue: ${error.toString().split(',').first}';
+      return 'Erreur inattendue. Veuillez réessayer.';
     }
   }
 
-  Future<void> _sendTokenToBackend(
-    String idToken, 
-    String email, 
-    String? name,
-  ) async {
+  Future<void> _sendTokenToBackend(String idToken, String email, String name) async {
     try {
-      print('Envoi du token au backend mobile...');
+      print('Envoi du token au backend...');
       
-      // URL vers votre nouvelle route mobile
       final url = '${AppConstants.apiBaseUrl}/google/callback/mobile';
       print('📡 URL: $url');
       
@@ -121,58 +130,71 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
           'id_token': idToken,
           'email': email,
           'name': name,
+          'provider': 'google',
         }),
       ).timeout(const Duration(seconds: 15));
 
       print('Statut: ${response.statusCode}');
       print('Body: ${response.body}');
 
-      final responseData = jsonDecode(response.body);
-
-      if (response.statusCode == 200 && responseData['success'] == true) {
-        // Stockage du token
-        if (responseData['token'] != null) {
-          await _storage.write(key: 'auth_token', value: responseData['token']);
-          print('Token stocké');
-        }
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
         
-        // Stockage des données utilisateur
-        if (responseData['user'] != null) {
-          await _storage.write(
-            key: 'user_data', 
-            value: jsonEncode(responseData['user'])
-          );
-          print('Données utilisateur stockées: ${responseData['user']['name']}');
-        }
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Connexion avec Google réussie !'),
-              backgroundColor: Colors.green,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-          Navigator.pop(context, true); // Succès
+        if (responseData['success'] == true || responseData['token'] != null) {
+          final token = responseData['token'] ?? responseData['access_token'];
+          final userData = responseData['user'] ?? responseData['data'];
+          
+          if (token != null) {
+            // Stockage du token
+            await _storage.write(key: 'auth_token', value: token);
+            
+            // Stockage des données utilisateur
+            if (userData != null) {
+              await _storage.write(
+                key: 'user_data', 
+                value: jsonEncode(userData)
+              );
+            }
+            
+            // Mettre à jour le provider
+            if (mounted) {
+              final authProvider = Provider.of<AuthProvider>(context, listen: false);
+              await authProvider.login(token, userData ?? {});
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Connexion avec Google réussie !'),
+                  backgroundColor: Colors.green,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              
+              Navigator.pop(context, true);
+            }
+          } else {
+            throw Exception('Token non reçu');
+          }
+        } else {
+          throw Exception(responseData['message'] ?? 'Erreur serveur');
         }
       } else {
-        throw Exception(responseData['message'] ?? 'Erreur serveur');
+        String errorMsg = 'Erreur serveur (${response.statusCode})';
+        try {
+          final errorData = jsonDecode(response.body);
+          errorMsg = errorData['message'] ?? errorMsg;
+        } catch (_) {}
+        throw Exception(errorMsg);
       }
-    } 
-    catch (e) {
-      print('Erreur: $e');
-      throw Exception('Impossible de communiquer avec le serveur');
-    } 
-    finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    } catch (e) {
+      print('Erreur envoi token: $e');
+      rethrow;
     }
   }
 
   void _retry() {
     setState(() {
       _errorMessage = null;
+      _isLoading = true;
     });
     _signInWithGoogle();
   }
@@ -190,10 +212,12 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
       ),
-      body: Center(
-        child: _errorMessage != null
-            ? _buildErrorView()
-            : _buildLoadingView(),
+      body: SafeArea(
+        child: Center(
+          child: _errorMessage != null
+              ? _buildErrorView()
+              : _buildLoadingView(),
+        ),
       ),
     );
   }
@@ -208,7 +232,12 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
         const SizedBox(height: 24),
         const Text(
           'Connexion en cours...',
-          style: TextStyle(fontSize: 16, color: Color(0xFF2D3436)),
+          style: TextStyle(fontSize: 16),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Veuillez patienter',
+          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
         ),
       ],
     );
@@ -238,7 +267,7 @@ class _GoogleAuthScreenState extends State<GoogleAuthScreen> {
           Text(
             _errorMessage!,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF718096)),
+            style: const TextStyle(fontSize: 14, color: Colors.grey),
           ),
           const SizedBox(height: 24),
           Row(

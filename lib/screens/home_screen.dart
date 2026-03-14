@@ -9,6 +9,8 @@ import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
 import 'package:careasy_app_mobile/screens/messages_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:provider/provider.dart';
+import '../providers/message_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -259,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   String _formatPhoneNumber(String phone) {
     if (phone.isEmpty) return '';
     
-    // Supprimer tous les caractères non numériques
+    // Supprimer tous les caractères non numériques sauf +
     String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
     print('Numéro original: $phone');
     print('Numéro nettoyé: $cleaned');
@@ -302,14 +304,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<bool> _requestPhonePermission() async {
     if (kIsWeb) return true;
     
-    var status = await Permission.phone.status;
-    if (!status.isGranted) {
-      status = await Permission.phone.request();
+    try {
+      var status = await Permission.phone.status;
+      if (!status.isGranted) {
+        status = await Permission.phone.request();
+      }
+      return status.isGranted;
+    } catch (e) {
+      print('Erreur permission: $e');
+      return false;
     }
-    return status.isGranted;
   }
 
-  // FONCTION CORRIGÉE POUR L'APPEL TÉLÉPHONIQUE
+  // NOUVELLE FONCTION POUR LES APPELS SANS canLaunch
   Future<void> _makePhoneCall(String phoneNumber) async {
     try {
       if (phoneNumber.isEmpty) {
@@ -329,84 +336,41 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final formattedNumber = _formatPhoneNumber(phoneNumber);
       print('Numéro formaté pour appel: $formattedNumber');
       
-      // Essayer différents formats d'URL
-      final urls = [
-        'tel:$formattedNumber',
-        'tel:${formattedNumber.replaceAll('+', '')}',
-        'tel:${formattedNumber.replaceAll('+', '00')}',
-      ];
-
-      bool launched = false;
-      for (String url in urls) {
-        final uri = Uri.parse(url);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri);
-          launched = true;
-          break;
-        }
-      }
-
-      if (!launched) {
-        // Dernière tentative avec tel://
-        final fallbackUri = Uri.parse('tel://$formattedNumber');
-        if (await canLaunchUrl(fallbackUri)) {
-          await launchUrl(fallbackUri);
-        } else {
-          _showError('Impossible de passer l\'appel. Vérifiez que votre appareil peut passer des appels.');
+      // URL encodée correctement
+      final telUrl = 'tel:$formattedNumber';
+      final uri = Uri.parse(telUrl);
+      
+      // Essayer de lancer directement sans canLaunch (qui peut échouer)
+      try {
+        await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+        );
+      } catch (e) {
+        print('Erreur launchUrl: $e');
+        
+        // Tentative avec un format alternatif
+        final fallbackUrl = 'tel:${formattedNumber.replaceAll('+', '')}';
+        final fallbackUri = Uri.parse(fallbackUrl);
+        
+        try {
+          await launchUrl(
+            fallbackUri,
+            mode: LaunchMode.externalApplication,
+          );
+        } catch (e2) {
+          print('Erreur fallback: $e2');
+          _showPhoneFallback(formattedNumber);
         }
       }
     } catch (e) {
       print('Erreur appel: $e');
-      _showError('Erreur lors de l\'appel: ${e.toString()}');
+      _showPhoneFallback(phoneNumber);
     }
   }
 
-  // FONCTION CORRIGÉE POUR WHATSAPP
-  Future<void> _openWhatsApp(String phoneNumber) async {
-    try {
-      if (phoneNumber.isEmpty) {
-        _showError('Numéro WhatsApp non disponible');
-        return;
-      }
-
-      final formattedNumber = _formatPhoneNumber(phoneNumber);
-      // Enlever le + et les espaces pour WhatsApp
-      final cleanNumber = formattedNumber.replaceAll('+', '').replaceAll(' ', '');
-      print('Numéro formaté pour WhatsApp: $cleanNumber');
-      
-      // Essayer différents formats d'URL WhatsApp
-      final urls = [
-        'https://wa.me/$cleanNumber',
-        'whatsapp://send?phone=$cleanNumber',
-        'https://api.whatsapp.com/send?phone=$cleanNumber',
-        'https://web.whatsapp.com/send?phone=$cleanNumber',
-      ];
-
-      bool launched = false;
-      for (String url in urls) {
-        final uri = Uri.parse(url);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(
-            uri,
-            mode: LaunchMode.externalApplication,
-          );
-          launched = true;
-          break;
-        }
-      }
-
-      if (!launched) {
-        // Afficher une option pour copier le numéro
-        _showWhatsAppFallback(cleanNumber);
-      }
-    } catch (e) {
-      print('Erreur WhatsApp: $e');
-      _showWhatsAppFallback(phoneNumber);
-    }
-  }
-
-  // FONCTION DE SECOURS POUR WHATSAPP
-  void _showWhatsAppFallback(String phoneNumber) {
+  // FONCTION DE SECOURS POUR LES APPELS
+  void _showPhoneFallback(String phoneNumber) {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -427,13 +391,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
             const SizedBox(height: 20),
             const Icon(
-              Icons.warning_amber_rounded,
-              color: Colors.orange,
+              Icons.phone,
+              color: Colors.green,
               size: 50,
             ),
             const SizedBox(height: 16),
             const Text(
-              'WhatsApp non disponible',
+              'Composez le numéro',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -441,7 +405,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
             const SizedBox(height: 8),
             Text(
-              'Impossible d\'ouvrir WhatsApp automatiquement. Vous pouvez copier le numéro et l\'ajouter manuellement.',
+              'Impossible de lancer l\'appel automatiquement. Vous pouvez composer manuellement le numéro :',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.grey[600],
@@ -449,6 +413,241 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ),
             const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      phoneNumber,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, color: AppConstants.primaryRed),
+                    onPressed: () {
+                      // Copier le numéro
+                      // await Clipboard.setData(ClipboardData(text: phoneNumber));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Numéro copié !'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey[700],
+                      side: BorderSide(color: Colors.grey[300]!),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('Fermer'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _makePhoneCall(phoneNumber);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('Réessayer'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // NOUVELLE FONCTION POUR WHATSAPP SANS canLaunch
+  Future<void> _openWhatsApp(String phoneNumber) async {
+    try {
+      if (phoneNumber.isEmpty) {
+        _showError('Numéro WhatsApp non disponible');
+        return;
+      }
+
+      final formattedNumber = _formatPhoneNumber(phoneNumber);
+      final cleanNumber = formattedNumber.replaceAll('+', '').replaceAll(' ', '');
+      print('Numéro formaté pour WhatsApp: $cleanNumber');
+      
+      // Essayer directement l'URL WhatsApp sans canLaunch
+      final whatsappUrl = 'https://wa.me/$cleanNumber';
+      final whatsappIntent = 'whatsapp://send?phone=$cleanNumber';
+      
+      bool launched = false;
+      
+      // Essayer d'abord l'intent WhatsApp
+      try {
+        final intentUri = Uri.parse(whatsappIntent);
+        await launchUrl(
+          intentUri,
+          mode: LaunchMode.externalApplication,
+        );
+        launched = true;
+      } catch (e) {
+        print('Erreur intent WhatsApp: $e');
+      }
+      
+      // Si l'intent a échoué, essayer l'URL web
+      if (!launched) {
+        try {
+          final webUri = Uri.parse(whatsappUrl);
+          await launchUrl(
+            webUri,
+            mode: LaunchMode.externalApplication,
+          );
+          launched = true;
+        } catch (e) {
+          print('Erreur web WhatsApp: $e');
+        }
+      }
+      
+      // Si tout a échoué, proposer l'API WhatsApp
+      if (!launched) {
+        try {
+          final apiUri = Uri.parse('https://api.whatsapp.com/send?phone=$cleanNumber');
+          await launchUrl(
+            apiUri,
+            mode: LaunchMode.externalApplication,
+          );
+          launched = true;
+        } catch (e) {
+          print('Erreur API WhatsApp: $e');
+        }
+      }
+      
+      if (!launched) {
+        _showWhatsAppFallback(cleanNumber);
+      }
+    } catch (e) {
+      print('Erreur WhatsApp: $e');
+      _showWhatsAppFallback(phoneNumber);
+    }
+  }
+
+  // FONCTION DE SECOURS POUR WHATSAPP (améliorée)
+  void _showWhatsAppFallback(String phoneNumber) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF25D366).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.chat,
+                color: Color(0xFF25D366),
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Ouvrir WhatsApp',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Choisissez comment ouvrir WhatsApp :',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 20),
+            
+            // Option 1: WhatsApp Business
+            _buildWhatsAppOption(
+              icon: Icons.business_center,
+              title: 'WhatsApp Business',
+              subtitle: 'Ouvrir avec WhatsApp Business',
+              onTap: () {
+                Navigator.pop(context);
+                _launchWhatsAppWithPackage(phoneNumber, 'com.whatsapp.w4b');
+              },
+            ),
+            
+            const SizedBox(height: 8),
+            
+            // Option 2: WhatsApp Standard
+            _buildWhatsAppOption(
+              icon: Icons.chat,
+              title: 'WhatsApp',
+              subtitle: 'Ouvrir avec WhatsApp standard',
+              onTap: () {
+                Navigator.pop(context);
+                _launchWhatsAppWithPackage(phoneNumber, 'com.whatsapp');
+              },
+            ),
+            
+            const SizedBox(height: 8),
+            
+            // Option 3: WhatsApp Web
+            _buildWhatsAppOption(
+              icon: Icons.public,
+              title: 'WhatsApp Web',
+              subtitle: 'Ouvrir dans le navigateur',
+              onTap: () {
+                Navigator.pop(context);
+                _launchWhatsAppWeb(phoneNumber);
+              },
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // Option 4: Copier le numéro
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -481,7 +680,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ],
               ),
             ),
+            
             const SizedBox(height: 16),
+            
             ElevatedButton(
               onPressed: () => Navigator.pop(context),
               style: ElevatedButton.styleFrom(
@@ -494,6 +695,108 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: const Text('Fermer'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // NOUVELLE FONCTION POUR LANCER WHATSAPP AVEC UN PACKAGE SPÉCIFIQUE
+  Future<void> _launchWhatsAppWithPackage(String phoneNumber, String package) async {
+    try {
+      final cleanNumber = phoneNumber.replaceAll('+', '').replaceAll(' ', '');
+      
+      // Essayer avec l'intent spécifique au package
+      final intentUrl = 'intent://send?phone=$cleanNumber#Intent;package=$package;scheme=whatsapp;end';
+      
+      try {
+        final uri = Uri.parse(intentUrl);
+        await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication,
+        );
+      } catch (e) {
+        print('Erreur intent package: $e');
+        
+        // Fallback à l'URL standard
+        await _launchWhatsAppWeb(phoneNumber);
+      }
+    } catch (e) {
+      print('Erreur launchWhatsAppWithPackage: $e');
+      _showError('Impossible d\'ouvrir WhatsApp');
+    }
+  }
+
+  // NOUVELLE FONCTION POUR LANCER WHATSAPP WEB
+  Future<void> _launchWhatsAppWeb(String phoneNumber) async {
+    try {
+      final cleanNumber = phoneNumber.replaceAll('+', '').replaceAll(' ', '');
+      final webUrl = 'https://web.whatsapp.com/send?phone=$cleanNumber';
+      final uri = Uri.parse(webUrl);
+      
+      await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (e) {
+      print('Erreur launchWhatsAppWeb: $e');
+      _showError('Impossible d\'ouvrir WhatsApp Web');
+    }
+  }
+
+  // NOUVEAU WIDGET POUR LES OPTIONS WHATSAPP
+  Widget _buildWhatsAppOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF25D366).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: const Color(0xFF25D366), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey[400]),
+            ],
+          ),
         ),
       ),
     );
@@ -669,14 +972,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => MessagesScreen(
-                            serviceName: service['name'],
-                            entrepriseName: entreprise['name'],
-                          ),
-                        ),
-                      );
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const MessagesScreen(),
+                      ),
+                    );
                     },
                   ),
                 ],
@@ -1207,7 +1507,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const MessagesScreen()),
-            );
+            ).then((_) {
+            // Recharger les conversations au retour
+            if (mounted) {
+              context.read<MessageProvider>().loadConversations();
+            }
+          });
           }
           if (index == 2) _showComingSoon('Rendez-vous');
           if (index == 3) _handleEntrepriseTap();
