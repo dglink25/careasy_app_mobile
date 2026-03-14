@@ -14,6 +14,9 @@ import '../providers/message_provider.dart';
 import 'package:careasy_app_mobile/screens/all_services_screen.dart';
 import 'package:careasy_app_mobile/screens/all_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
+import '../models/user_model.dart';
+import 'chat_screen.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -490,6 +493,125 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ),
       ),
     );
+  }
+
+
+  Future<void> _startConversationWithEntreprise(Map<String, dynamic> service) async {
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      final userId = _userData?['id'];
+      
+      // Vérification complète des données
+      print('Service data: $service');
+      
+      // Récupérer l'entreprise de plusieurs façons possibles
+      Map<String, dynamic>? entreprise;
+      
+      if (service['entreprise'] != null) {
+        entreprise = service['entreprise'] is Map 
+            ? Map<String, dynamic>.from(service['entreprise']) 
+            : null;
+      } else if (service['entreprise_id'] != null) {
+        // Si on a seulement l'ID, on pourrait faire un appel supplémentaire
+        entreprise = {'id': service['entreprise_id']};
+      }
+      
+      if (entreprise == null) {
+        _showError('Entreprise non identifiée');
+        return;
+      }
+      
+      final entrepriseId = entreprise['id']?.toString();
+      
+      if (entrepriseId == null || entrepriseId.isEmpty) {
+        print('Entreprise data: $entreprise');
+        _showError('ID entreprise manquant');
+        return;
+      }
+
+      // Afficher chargement
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: AppConstants.primaryRed),
+        ),
+      );
+
+      // Démarrer la conversation via l'API
+      final response = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'service_id': service['id'],
+          'entreprise_id': entrepriseId,
+          'user_id': userId,
+        }),
+      );
+
+      if (context.mounted) Navigator.pop(context); // Fermer le dialogue de chargement
+
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        
+        // Récupérer l'ID de conversation selon le format de réponse
+        String conversationId;
+        if (data['conversation_id'] != null) {
+          conversationId = data['conversation_id'].toString();
+        } else if (data['conversation'] != null && data['conversation']['id'] != null) {
+          conversationId = data['conversation']['id'].toString();
+        } else if (data['id'] != null) {
+          conversationId = data['id'].toString();
+        } else {
+          throw Exception('Format de réponse inattendu');
+        }
+        
+        if (context.mounted) {
+          // Créer l'objet UserModel pour l'autre utilisateur
+          final otherUser = UserModel(
+            id: entrepriseId,
+            name: entreprise['name'] ?? 
+                  service['entreprise_name'] ?? 
+                  'Entreprise',
+            email: '',
+            photoUrl: entreprise['logo'] ?? service['entreprise_logo'],
+            role: 'entreprise',
+            isOnline: false,
+          );
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChangeNotifierProvider.value(
+                value: context.read<MessageProvider>(),
+                child: ChatScreen(
+                  conversationId: conversationId,
+                  otherUser: otherUser,
+                  serviceName: service['name']?.toString() ?? '',
+                  entrepriseName: entreprise != null 
+                      ? (entreprise['name']?.toString() ?? 'Entreprise')
+                      : 'Entreprise',
+                ),
+              ),
+            ),
+          );
+        }
+      } else {
+        _showError('Impossible de démarrer la conversation (${response.statusCode})');
+      }
+    } catch (e) {
+      if (context.mounted) Navigator.pop(context);
+      print('Erreur démarrage conversation: $e');
+      print('Stack trace: ${StackTrace.current}');
+      _showError('Erreur de connexion: ${e.toString()}');
+    }
   }
 
   // NOUVELLE FONCTION POUR WHATSAPP SANS canLaunch
@@ -971,16 +1093,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     icon: Icons.message,
                     color: Colors.purple,
                     title: 'Message',
-                    subtitle: 'Envoyer un message à l\'entreprise',
+                    subtitle: 'Envoyer un message à l\'entreprise pour ce service',
                     onTap: () {
                       Navigator.pop(context);
-                      Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const MessagesScreen(),
-                      ),
-                    );
+                      _startConversationWithEntreprise(service);
                     },
+                  
                   ),
                 ],
               ),

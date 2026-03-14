@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:badges/badges.dart' as badges;
-
 import '../providers/message_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/conversation_model.dart';
+import '../models/user_model.dart';
 import '../utils/constants.dart';
 import 'chat_screen.dart';
-import 'package:shimmer/shimmer.dart';
+import 'home_screen.dart';
+import 'all_services_screen.dart';
+import 'all_entreprises_screen.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:convert';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -17,23 +20,52 @@ class MessagesScreen extends StatefulWidget {
   State<MessagesScreen> createState() => _MessagesScreenState();
 }
 
-class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProviderStateMixin {
+class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
+  final _storage = const FlutterSecureStorage();
+  
+  int _currentIndex = 1; // Messages est l'index 1
+  Map<String, dynamic>? _userData;
+  bool _hasEntreprise = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadUserData();
       context.read<MessageProvider>().loadConversations();
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      context.read<MessageProvider>().loadConversations();
+    }
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      final userDataString = await _storage.read(key: 'user_data');
+      if (userDataString != null) {
+        setState(() {
+          _userData = jsonDecode(userDataString);
+          _hasEntreprise = _userData?['has_entreprise'] ?? false;
+        });
+      }
+    } catch (e) {
+      print('Erreur chargement user data: $e');
+    }
+  }
+
+  @override
   void dispose() {
     _tabController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -48,8 +80,192 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
     }
   }
 
+  void _showComingSoon(String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$feature - Bientôt disponible'),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _handleEntrepriseTap() {
+    if (_hasEntreprise) {
+      _showComingSoon('Mon entreprise');
+    } else {
+      _showCreateEntrepriseDialog();
+    }
+  }
+
+  void _showCreateEntrepriseDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Créer une entreprise'),
+        content: const Text(
+          'Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une maintenant ?',
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Plus tard'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _showComingSoon('Création entreprise');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppConstants.primaryRed,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('Créer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showProfileDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 40,
+                backgroundImage: _userData?['profile_photo_url'] != null
+                    ? NetworkImage(_userData!['profile_photo_url'])
+                    : null,
+                backgroundColor: Colors.grey[200],
+                child: _userData?['profile_photo_url'] == null
+                    ? Icon(
+                        Icons.person,
+                        size: 40,
+                        color: Colors.grey[400],
+                      )
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _userData?['name'] ?? 'Utilisateur',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                _userData?['email'] ?? 'Email non renseigné',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              
+              _buildInfoRow(Icons.email, 'Email', _userData?['email'] ?? 'Non renseigné'),
+              _buildInfoRow(Icons.phone, 'Téléphone', _userData?['phone'] ?? 'Non renseigné'),
+              _buildInfoRow(Icons.person, 'Rôle', _userData?['role'] ?? 'Client'),
+              
+              const SizedBox(height: 16),
+              
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.grey[700],
+                        side: BorderSide(color: Colors.grey[300]!),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: const Text('Fermer'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _logout,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: const Text('Déconnexion'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _logout() async {
+    await _storage.delete(key: 'auth_token');
+    await _storage.delete(key: 'user_data');
+    if (mounted) {
+      Navigator.pushReplacementNamed(context, '/login');
+    }
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: Colors.grey[600]),
+          const SizedBox(width: 8),
+          Text(
+            '$label: ',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+              fontSize: 13,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 13),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final userName = _userData?['name'] ?? 'Utilisateur';
+    final userPhoto = _userData?['profile_photo_url'] ?? '';
+
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
@@ -64,6 +280,8 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
           controller: _tabController,
           indicatorColor: Colors.white,
           indicatorWeight: 3,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
           tabs: [
             Tab(
               child: Consumer<MessageProvider>(
@@ -74,7 +292,7 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                       const Text('Messages'),
                       if (provider.totalUnreadCount > 0)
                         Positioned(
-                          right: -15,
+                          right: -12,
                           top: -8,
                           child: Container(
                             padding: const EdgeInsets.all(4),
@@ -113,6 +331,178 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
           _buildCallsTab(),
         ],
       ),
+      
+      // BOTTOM NAVIGATION BAR
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, -5),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildNavItem(Icons.home, 'Accueil', 0, size),
+                _buildNavItem(Icons.message, 'Messages', 1, size),
+                _buildNavItem(Icons.calendar_today, 'Rendez-vous', 2, size),
+                _buildNavItem(
+                  _hasEntreprise ? Icons.business : Icons.add_business,
+                  _hasEntreprise ? 'Entreprise' : 'Créer',
+                  3,
+                  size,
+                ),
+                _buildProfileNavItem(userName, userPhoto, 4, size),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem(IconData icon, String label, int index, Size size) {
+    final isSelected = _currentIndex == index;
+    
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() => _currentIndex = index);
+          
+          if (index == 0) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+            );
+          } else if (index == 1) {
+            // Déjà sur Messages
+          } else if (index == 2) {
+            _showComingSoon('Rendez-vous');
+          } else if (index == 3) {
+            _handleEntrepriseTap();
+          } else if (index == 4) {
+            _showProfileDialog();
+          }
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    icon,
+                    color: isSelected ? AppConstants.primaryRed : Colors.grey,
+                    size: 22,
+                  ),
+                  if (index == 1)
+                    Consumer<MessageProvider>(
+                      builder: (context, provider, child) {
+                        if (provider.totalUnreadCount > 0) {
+                          return Positioned(
+                            right: -6,
+                            top: -2,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: Colors.amber,
+                                shape: BoxShape.circle,
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 12,
+                                minHeight: 12,
+                              ),
+                              child: Text(
+                                '${provider.totalUnreadCount}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isSelected ? AppConstants.primaryRed : Colors.grey,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileNavItem(String userName, String userPhoto, int index, Size size) {
+    final isSelected = _currentIndex == index;
+    
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() => _currentIndex = index);
+          _showProfileDialog();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 11,
+                backgroundImage: userPhoto.isNotEmpty
+                    ? NetworkImage(userPhoto)
+                    : null,
+                backgroundColor: Colors.grey[200],
+                child: userPhoto.isEmpty
+                    ? Icon(
+                        Icons.person,
+                        size: 12,
+                        color: Colors.grey[600],
+                      )
+                    : null,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Profil',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isSelected ? AppConstants.primaryRed : Colors.grey,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -120,7 +510,9 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
     return Consumer<MessageProvider>(
       builder: (context, provider, child) {
         if (provider.isLoading && provider.conversations.isEmpty) {
-          return _buildShimmerLoading();
+          return const Center(
+            child: CircularProgressIndicator(color: AppConstants.primaryRed),
+          );
         }
 
         if (provider.error != null) {
@@ -187,7 +579,12 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton.icon(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const HomeScreen()),
+                    );
+                  },
                   icon: const Icon(Icons.explore),
                   label: const Text('Découvrir des services'),
                   style: ElevatedButton.styleFrom(
@@ -242,11 +639,14 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => ChatScreen(
-                  conversationId: conversation.id,
-                  otherUser: conversation.otherUser,
-                  serviceName: conversation.serviceName,
-                  entrepriseName: conversation.entrepriseName,
+                builder: (context) => ChangeNotifierProvider.value(
+                  value: provider,
+                  child: ChatScreen(
+                    conversationId: conversation.id,
+                    otherUser: conversation.otherUser,
+                    serviceName: conversation.serviceName,
+                    entrepriseName: conversation.entrepriseName,
+                  ),
                 ),
               ),
             ).then((_) => provider.loadConversations());
@@ -393,29 +793,6 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildShimmerLoading() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: 5,
-      itemBuilder: (context, index) {
-        return Shimmer.fromColors(
-          baseColor: Colors.grey[300]!,
-          highlightColor: Colors.grey[100]!,
-          child: Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: Container(
-              height: 80,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }

@@ -1,9 +1,7 @@
-// lib/screens/chat_screen.dart - Version sans record
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/message_provider.dart';
@@ -11,6 +9,9 @@ import '../models/user_model.dart';
 import '../models/message_model.dart';
 import '../utils/constants.dart';
 import 'dart:async';
+import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:convert';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -35,10 +36,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
   final ImagePicker _imagePicker = ImagePicker();
+  final _storage = const FlutterSecureStorage();
   
   bool _isTyping = false;
   Timer? _typingDebounce;
   bool _otherUserTyping = false;
+  bool _isSending = false;
 
   @override
   void initState() {
@@ -90,6 +93,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _checkTypingStatus() {
+    if (!mounted) return;
     final isTyping = context.read<MessageProvider>().isUserTyping(
       widget.conversationId,
       widget.otherUser.id,
@@ -101,10 +105,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _sendTypingStatus(bool isTyping) async {
-    await context.read<MessageProvider>().sendTypingIndicator(
-      widget.conversationId,
-      isTyping,
-    );
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/${widget.conversationId}/typing'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'is_typing': isTyping}),
+      );
+    } catch (e) {
+      print('Erreur envoi statut typing: $e');
+    }
   }
 
   void _scrollToBottom() {
@@ -121,18 +134,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _sendMessage({String? content, String? filePath, String? type}) async {
     if ((content == null || content.isEmpty) && filePath == null) return;
+    if (_isSending) return;
 
-    final messageType = type ?? (filePath != null ? _getFileType(filePath) : 'text');
+    setState(() => _isSending = true);
 
-    await context.read<MessageProvider>().sendMessage(
-      widget.conversationId,
-      type: messageType,
-      content: content,
-      filePath: filePath,
-    );
+    try {
+      final messageType = type ?? (filePath != null ? _getFileType(filePath) : 'text');
 
-    _messageController.clear();
-    _scrollToBottom();
+      await context.read<MessageProvider>().sendMessage(
+        widget.conversationId,
+        type: messageType,
+        content: content,
+        filePath: filePath,
+      );
+
+      _messageController.clear();
+      _scrollToBottom();
+    } catch (e) {
+      _showError('Erreur lors de l\'envoi du message');
+    } finally {
+      setState(() => _isSending = false);
+    }
   }
 
   String _getFileType(String path) {
@@ -168,30 +190,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pickFile() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.single.path != null) {
-        await _sendMessage(
-          filePath: result.files.single.path!,
-          type: 'document',
-        );
-      }
-    } catch (e) {
-      _showError('Erreur lors de la sélection du fichier');
-    }
-  }
-
   void _showError(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
       ),
     );
   }
@@ -331,7 +339,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 final messages = provider.getMessages(widget.conversationId);
                 
                 if (provider.isLoading && messages.isEmpty) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const Center(
+                    child: CircularProgressIndicator(color: AppConstants.primaryRed),
+                  );
                 }
 
                 if (messages.isEmpty) {
@@ -560,33 +570,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
         );
       
-      case 'location':
-        return GestureDetector(
-          onTap: () => _launchURL(message.fileUrl ?? message.content),
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.blue[50],
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.location_on, color: Colors.blue[700]),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Voir sur Google Maps',
-                    style: TextStyle(
-                      color: Colors.blue[700],
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      
       case 'document':
         return Container(
           padding: const EdgeInsets.all(8),
@@ -604,6 +587,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   style: TextStyle(
                     color: Colors.grey[700],
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -612,17 +596,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       
       default:
         return const SizedBox.shrink();
-    }
-  }
-
-  Future<void> _launchURL(String url) async {
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      _showError('Impossible d\'ouvrir le lien');
     }
   }
 
@@ -672,9 +645,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 case 'image':
                   _pickImage();
                   break;
-                case 'file':
-                  _pickFile();
-                  break;
               }
             },
             itemBuilder: (context) => [
@@ -685,16 +655,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     Icon(Icons.image, color: Colors.blue),
                     SizedBox(width: 8),
                     Text('Image'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'file',
-                child: Row(
-                  children: [
-                    Icon(Icons.insert_drive_file, color: Colors.orange),
-                    SizedBox(width: 8),
-                    Text('Document'),
                   ],
                 ),
               ),
@@ -723,6 +683,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 maxLines: null,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (value) => _sendMessage(content: value),
+                enabled: !_isSending,
               ),
             ),
           ),
@@ -735,10 +696,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 color: AppConstants.primaryRed,
                 shape: BoxShape.circle,
               ),
-              child: IconButton(
-                icon: const Icon(Icons.send, color: Colors.white),
-                onPressed: () => _sendMessage(content: _messageController.text),
-              ),
+              child: _isSending
+                  ? const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.send, color: Colors.white),
+                      onPressed: () => _sendMessage(content: _messageController.text),
+                    ),
             ),
         ],
       ),
