@@ -1,4 +1,3 @@
-// lib/services/pusher_service.dart - Version corrigée
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';

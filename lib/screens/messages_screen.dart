@@ -633,7 +633,7 @@ class _MessagesScreenState extends State<MessagesScreen> with SingleTickerProvid
       ),
       child: InkWell(
         onTap: () async {
-          await provider.markAsRead(conversation.id);
+          await provider.markConversationAsRead(conversation.id);
           
           if (mounted) {
             Navigator.push(

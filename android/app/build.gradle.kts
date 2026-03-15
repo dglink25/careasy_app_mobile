@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.careasy.careasy_app_mobile"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -22,20 +22,16 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.careasy.careasy_app_mobile"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        minSdk = flutter.minSdkVersion  // Remplacer flutter.minSdkVersion par 23 (minimum pour pusher)
+        targetSdk = 34  // Remplacer flutter.targetSdkVersion par une valeur fixe
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -44,6 +40,20 @@ android {
 flutter {
     source = "../.."
 }
+
 dependencies {
+    // Core
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    implementation("androidx.core:core-ktx:1.9.0")
+    implementation("com.google.android.material:material:1.8.0")
+    implementation("androidx.multidex:multidex:2.0.1")
+    
+    // Pusher - avec la bonne syntaxe Kotlin DSL
+    implementation("com.pusher:pusher-java-client:2.4.4")
+    
+    // Pour les notifications locales
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+    
+    // Pour l'enregistrement audio
+    implementation("androidx.media:media:1.6.0")
 }

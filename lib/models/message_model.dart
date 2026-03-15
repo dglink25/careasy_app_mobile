@@ -1,4 +1,3 @@
-// models/message_model.dart
 class MessageModel {
   final String id;
   final String conversationId;
@@ -10,6 +9,9 @@ class MessageModel {
   final DateTime createdAt;
   final DateTime? readAt;
   final bool isMe;
+  final String? status;
+  final double? latitude;
+  final double? longitude;
 
   MessageModel({
     required this.id,
@@ -22,6 +24,9 @@ class MessageModel {
     required this.createdAt,
     this.readAt,
     required this.isMe,
+    this.status,
+    this.latitude,
+    this.longitude,
   });
 
   factory MessageModel.fromJson(Map<String, dynamic> json, String currentUserId) {
@@ -43,19 +48,5 @@ class MessageModel {
           : null,
       isMe: senderId == currentUserId,
     );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'conversation_id': conversationId,
-      'sender_id': senderId,
-      'content': content,
-      'type': type,
-      'file_url': fileUrl,
-      'file_path': filePath,
-      'created_at': createdAt.toIso8601String(),
-      'read_at': readAt?.toIso8601String(),
-    };
   }
 }
