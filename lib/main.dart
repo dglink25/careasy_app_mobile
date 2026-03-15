@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -17,30 +19,36 @@ import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/messages_screen.dart';
+import 'screens/chat_screen.dart';
 
 // Utils
 import 'theme/app_theme.dart';
 
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = 
+// Clé globale de navigation pour la navigation depuis les notifications
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // ── Firebase (DOIT être initialisé avant tout handler FCM) ──────────────
   try {
-    // Initialiser Firebase
     await Firebase.initializeApp();
-  } catch (e) {
-    print('Firebase initialization error: $e');
+    // Enregistrer le handler background FCM ICI, avant runApp()
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } 
+  catch (e) {
+    debugPrint('Firebase initialization error: $e');
   }
-  
+
   try {
-    // Initialiser les notifications
     await NotificationService().initialize();
   } catch (e) {
-    print('Notification initialization error: $e');
+    debugPrint('Notification initialization error: $e');
   }
-  
+
   runApp(const CarEasyApp());
 }
 
@@ -59,6 +67,7 @@ class CarEasyApp extends StatelessWidget {
         title: 'CarEasy',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,
+        navigatorKey: navigatorKey,
         initialRoute: '/',
         routes: {
           '/': (context) => const WelcomeScreen(),
@@ -67,7 +76,33 @@ class CarEasyApp extends StatelessWidget {
           '/home': (context) => const HomeScreen(),
           '/messages': (context) => const MessagesScreen(),
         },
+        onGenerateRoute: (settings) {
+          // Route dynamique pour ouvrir directement une conversation
+          if (settings.name?.startsWith('/chat/') == true) {
+            final conversationId =
+                settings.name!.replaceFirst('/chat/', '');
+            final args = settings.arguments as Map<String, dynamic>?;
+            // La navigation vers ChatScreen nécessite otherUser
+            // On navigue vers MessagesScreen qui va charger la conv
+            return MaterialPageRoute(
+              builder: (_) => const MessagesScreen(),
+            );
+          }
+          return null;
+        },
       ),
     );
   }
+}
+
+/// Configurer le callback de navigation pour les notifications
+/// À appeler depuis un widget qui a accès au contexte après l'init
+void setupNotificationNavigation(BuildContext context) {
+  NotificationService().onNotificationTap = (conversationId) {
+    // Naviguer vers la liste des messages
+    navigatorKey.currentState?.pushNamedAndRemoveUntil(
+      '/messages',
+      (route) => route.isFirst,
+    );
+  };
 }
