@@ -15,6 +15,8 @@ import 'package:careasy_app_mobile/screens/all_services_screen.dart';
 import 'package:careasy_app_mobile/screens/all_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import '../models/user_model.dart';
+import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
+import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart';
 import 'chat_screen.dart';
 
 
@@ -2330,14 +2332,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _handleEntrepriseTap() {
-    final hasEntreprise = _userData?['has_entreprise'] ?? false;
-    if (hasEntreprise) {
-      _showComingSoon('Mon entreprise');
-    } else {
-      _showCreateEntrepriseDialog();
-    }
-  }
+void _handleEntrepriseTap() {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const MesEntreprisesScreen(),
+    ),
+  );
+}
 
   void _showComingSoon(String feature) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -2371,7 +2373,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              _showComingSoon('Création entreprise');
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const CreateEntrepriseScreen(),
+                ),
+              );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppConstants.primaryRed,
@@ -2438,37 +2445,68 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               
               const SizedBox(height: 16),
               
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.grey[700],
-                        side: BorderSide(color: Colors.grey[300]!),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: const Text('Fermer'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _logout,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: const Text('Déconnexion'),
-                    ),
-                  ),
-                ],
+              Column(
+  children: [
+    // Bouton Mes entreprises
+    SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: () {
+          Navigator.pop(context); // ferme le dialog
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const MesEntreprisesScreen(),
+            ),
+          );
+        },
+        icon: const Icon(Icons.business, size: 16),
+        label: const Text('Mes entreprises'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.grey[100],
+          foregroundColor: Colors.black87,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      ),
+    ),
+    const SizedBox(height: 8),
+    // Fermer + Déconnexion
+    Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () => Navigator.pop(context),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.grey[700],
+              side: BorderSide(color: Colors.grey[300]!),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
               ),
+            ),
+            child: const Text('Fermer'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ElevatedButton(
+            onPressed: _logout,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('Déconnexion'),
+          ),
+        ),
+      ],
+    ),
+  ],
+),
             ],
           ),
         ),

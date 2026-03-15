@@ -47,5 +47,11 @@
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<true/>
-</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Pour localiser votre entreprise</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Pour prendre une photo de votre logo</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pour choisir une image depuis la galerie</string>
+	</dict>
 </plist>
