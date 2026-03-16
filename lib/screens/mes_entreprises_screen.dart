@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
+import 'package:careasy_app_mobile/screens/mes_services_screen.dart';
 
 class MesEntreprisesScreen extends StatefulWidget {
   const MesEntreprisesScreen({super.key});
@@ -151,8 +152,12 @@ class _MesEntreprisesScreenState extends State<MesEntreprisesScreen>
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // TODO: Remplacer par la navigation vers CreateServiceScreen quand disponible
-          onTap: () => _showComingSoon(),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MesServicesScreen(entreprise: entreprise),
+            ),
+          ),
           borderRadius: BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),

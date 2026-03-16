@@ -4,6 +4,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'screens/create_service_screen.dart';
+import 'screens/edit_service_screen.dart';
 
 // Providers
 import 'providers/auth_provider.dart';
@@ -75,6 +77,18 @@ class CarEasyApp extends StatelessWidget {
           '/register': (context) => const RegisterScreen(),
           '/home': (context) => const HomeScreen(),
           '/messages': (context) => const MessagesScreen(),
+
+           '/create-service': (ctx) {
+            final e = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
+            return CreateServiceScreen(entreprise: e);
+          },
+          '/edit-service': (ctx) {
+            final args = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
+            return EditServiceScreen(
+              service: args['service'],
+              entreprise: args['entreprise'],
+            );
+          },
         },
         onGenerateRoute: (settings) {
           // Route dynamique pour ouvrir directement une conversation
