@@ -1,14 +1,12 @@
 // lib/screens/chat_screen.dart
 // ═══════════════════════════════════════════════════════════════════════
-// CORRECTIONS DÉFINITIVES:
-// 1. VOCAL: glisser le bouton micro VERS LE HAUT pour démarrer
-//    (DragGesture vertical, pas longPress)
-//    → Pendant le glisser: le micro s'ouvre, l'enregistrement commence
-//    → On relâche en haut: enregistrement verrouillé (continu)
-//    → On relâche en bas (< seuil): arrêt + aperçu
-// 2. LOCATION: détection automatique via MessageModel (lat/lng présents)
-// 3. STATUT: fetchOnlineStatus() appelé à l'ouverture du chat
-// 4. HEURE: DateTime.now() = heure locale, pas UTC
+// VERSION CORRIGÉE — Réception temps réel parfaite comme WhatsApp
+// CORRECTIONS:
+// 1. Scroll automatique vers le bas quand nouveau message reçu
+// 2. Affichage "En train d'écrire…" et "En train d'enregistrer…"
+// 3. Gestion correcte du recording indicator Pusher
+// 4. Annulation notification au clic sur le chat
+// 5. Reload messages au resume lifecycle
 // ═══════════════════════════════════════════════════════════════════════
 import 'dart:io';
 import 'dart:async';
@@ -64,18 +62,19 @@ class _ChatScreenState extends State<ChatScreen>
 
   bool   _typing      = false;
   Timer? _typingTmr;
-  bool   _otherTyping = false;
+  bool   _otherTyping    = false;
+  bool   _otherRecording = false; // indicateur d'enregistrement vocal
   bool   _sending     = false;
   bool   _hasText     = false;
   bool   _sendingLoc  = false;
 
+  // Nombre de messages affiché précédemment (pour détecter nouveaux)
+  int _previousMsgCount = 0;
+
   // ── État enregistrement vocal ──────────────────────────────────────
-  // Machine à états:
-  //   idle → (glisser haut depuis bouton mic) → recording
-  //   recording + glisser assez haut → locked (verrouillé, relâcher OK)
-  //   recording + relâcher bas → stopPreview
-  //   locked → (bouton stop) → stopPreview
-  //   stopPreview → hasPreview (écoute + envoi)
+  static const double _kStartThreshold = 60.0;
+  static const double _kLockThreshold  = 120.0;
+
   bool     _recording  = false;
   bool     _locked     = false;
   bool     _hasPreview = false;
@@ -94,6 +93,11 @@ class _ChatScreenState extends State<ChatScreen>
   // ── Animation pulse ────────────────────────────────────────────────
   late AnimationController _pulse;
 
+  // ── Drag mic ──────────────────────────────────────────────────────
+  double? _dragStartY;
+  double  _dragDeltaY = 0.0;
+  bool    _recStartedByDrag = false;
+
   @override
   void initState() {
     super.initState();
@@ -106,11 +110,19 @@ class _ChatScreenState extends State<ChatScreen>
     _setupListeners();
     _markRead();
 
-    // ⭐ Récupérer le statut en ligne dès l'ouverture du chat
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Récupérer le statut en ligne
       context.read<MessageProvider>().fetchOnlineStatus(widget.otherUser.id);
-      NotificationService().onNotificationTap = (id) {
-        if (id != widget.conversationId && mounted) Navigator.pop(context);
+      
+      // Annuler les notifications pour cette conversation
+      NotificationService().cancelNotification(widget.conversationId);
+      
+      // Configurer la navigation des notifications
+      NotificationService().onNotificationTap = (data) {
+        final convId = data['conversation_id']?.toString() ?? '';
+        if (convId != widget.conversationId && mounted) {
+          Navigator.pop(context);
+        }
       };
     });
   }
@@ -121,11 +133,14 @@ class _ChatScreenState extends State<ChatScreen>
       context.read<MessageProvider>().loadMessages(widget.conversationId);
       context.read<MessageProvider>().fetchOnlineStatus(widget.otherUser.id);
       _markRead();
+      NotificationService().cancelNotification(widget.conversationId);
     }
   }
 
   void _loadMsgs() async {
     await context.read<MessageProvider>().loadMessages(widget.conversationId);
+    final msgs = context.read<MessageProvider>().getMessages(widget.conversationId);
+    _previousMsgCount = msgs.length;
     _toBottom(animated: false);
   }
 
@@ -143,14 +158,39 @@ class _ChatScreenState extends State<ChatScreen>
         if (_typing) { _typing = false; _sendTyping(false); }
       });
     });
-    context.read<MessageProvider>().addListener(_checkTyping);
+
+    // Écouter les changements du MessageProvider
+    context.read<MessageProvider>().addListener(_onProviderUpdate);
   }
 
-  void _checkTyping() {
+  void _onProviderUpdate() {
     if (!mounted) return;
-    final t = context.read<MessageProvider>()
-        .isUserTyping(widget.conversationId, widget.otherUser.id);
-    if (_otherTyping != t) setState(() => _otherTyping = t);
+    
+    final provider = context.read<MessageProvider>();
+    final msgs = provider.getMessages(widget.conversationId);
+    final newCount = msgs.length;
+    
+    // Nouveau message arrivé → scroll vers le bas
+    if (newCount > _previousMsgCount) {
+      debugPrint('[ChatScreen] ${newCount - _previousMsgCount} nouveau(x) message(s)');
+      _previousMsgCount = newCount;
+      _toBottom(animated: true);
+      // Marquer comme lu si le chat est ouvert
+      _markRead();
+      // Annuler la notification correspondante
+      NotificationService().cancelNotification(widget.conversationId);
+    }
+    
+    // Mettre à jour les indicateurs typing/recording
+    final typing    = provider.isUserTyping(widget.conversationId, widget.otherUser.id);
+    final recording = provider.isUserRecording(widget.conversationId, widget.otherUser.id);
+    
+    if (_otherTyping != typing || _otherRecording != recording) {
+      setState(() {
+        _otherTyping    = typing;
+        _otherRecording = recording;
+      });
+    }
   }
 
   Future<void> _sendTyping(bool v) =>
@@ -231,80 +271,45 @@ class _ChatScreenState extends State<ChatScreen>
           if (pts.isNotEmpty) address = pts.join(', ');
         }
       } catch (_) {}
-      // content = adresse, type = location, lat/lng obligatoires
       await _send(content: address, type: 'location', lat: pos.latitude, lng: pos.longitude);
     } catch (e) { _err('Erreur localisation'); }
     finally { if (mounted) setState(() => _sendingLoc = false); }
   }
 
-  // ════════════════════════════════════════════════════════════════════
+  // ─────────────────────────────────────────────────────────────────────────────
   //  ENREGISTREMENT VOCAL — GLISSER VERS LE HAUT
-  //
-  //  Comportement exact demandé:
-  //  1. L'utilisateur TIRE l'icône micro VERS LE HAUT
-  //  2. Dès qu'il dépasse le seuil (60px vers le haut) → enregistrement démarre
-  //  3. En relâchant:
-  //     - Si déplacé > 120px vers le haut → enregistrement verrouillé
-  //     - Sinon → arrêt + aperçu
-  //  4. En mode verrouillé: bouton stop → aperçu, corbeille → annuler
-  //  5. Mode aperçu: écouter → envoyer ou annuler
-  // ════════════════════════════════════════════════════════════════════
-
-  // Seuil de déclenchement de l'enregistrement (px vers le haut)
-  static const double _kStartThreshold = 60.0;
-  // Seuil de verrouillage (px vers le haut)
-  static const double _kLockThreshold  = 120.0;
-
-  // Position Y initiale du doigt au moment où il touche le bouton
-  double? _dragStartY;
-  // Déplacement vertical actuel (négatif = vers le haut)
-  double  _dragDeltaY = 0.0;
-  // Enregistrement démarré par le drag
-  bool    _recStartedByDrag = false;
-
-  // ─── Drag démarre (doigt pose sur le bouton) ──────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   void _onMicDragStart(DragStartDetails d) {
-    _dragStartY        = d.globalPosition.dy;
-    _dragDeltaY        = 0.0;
-    _recStartedByDrag  = false;
+    _dragStartY       = d.globalPosition.dy;
+    _dragDeltaY       = 0.0;
+    _recStartedByDrag = false;
   }
 
-  // ─── Drag en cours ────────────────────────────────────────────────
   void _onMicDragUpdate(DragUpdateDetails d) {
     if (_dragStartY == null) return;
-    _dragDeltaY = d.globalPosition.dy - _dragStartY!; // négatif = vers le haut
-
-    // Démarrer l'enregistrement dès que le seuil est atteint
+    _dragDeltaY = d.globalPosition.dy - _dragStartY!;
     if (_dragDeltaY < -_kStartThreshold && !_recStartedByDrag && !_recording) {
       _recStartedByDrag = true;
       _startRec();
     }
-
-    // Mettre à jour l'UI (verrouillage visuel)
     if (_recording && mounted) setState(() {});
   }
 
-  // ─── Doigt relâché ────────────────────────────────────────────────
   void _onMicDragEnd(DragEndDetails d) {
     if (!_recording) { _dragStartY = null; return; }
-
     if (_dragDeltaY < -_kLockThreshold) {
-      // Déplacé assez haut → verrouiller l'enregistrement
       setState(() => _locked = true);
     } else {
-      // Relâché avant le seuil de lock → arrêter + aperçu
       _stopPreview();
     }
     _dragStartY = null;
   }
 
-  // ─── Doigt relâché annulairement (geste interrompu) ──────────────
   void _onMicDragCancel() {
     if (_recording) _cancelRec();
     _dragStartY = null;
   }
 
-  // ── Démarrer l'enregistrement ─────────────────────────────────────
   Future<void> _startRec() async {
     if (_recording || _hasPreview) return;
     final hasPerm = await _rec.hasPermission();
@@ -320,14 +325,17 @@ class _ChatScreenState extends State<ChatScreen>
       _recTmr = Timer.periodic(const Duration(seconds: 1), (_) {
         if (_recording && mounted) setState(() => _recDur = Duration(seconds: _recDur.inSeconds + 1));
       });
+      // Envoyer indicateur recording aux autres
+      context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, true);
     } catch (e) { _err("Impossible de démarrer l'enregistrement"); }
   }
 
-  // ── Arrêt + mode aperçu ───────────────────────────────────────────
   Future<void> _stopPreview() async {
     if (!_recording) return;
     _recTmr?.cancel();
-    final capturedDur = _recDur; // capturer AVANT reset
+    // Annuler l'indicateur recording
+    context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, false);
+    final capturedDur = _recDur;
     try {
       final path = await _rec.stop();
       if (!mounted) return;
@@ -350,14 +358,13 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  // ── Annuler l'enregistrement ──────────────────────────────────────
   Future<void> _cancelRec() async {
     _recTmr?.cancel();
+    context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, false);
     try { final p = await _rec.stop(); if (p != null) try { File(p).deleteSync(); } catch (_) {} } catch (_) {}
     if (mounted) setState(() { _recording = false; _locked = false; _recDur = Duration.zero; _dragDeltaY = 0; });
   }
 
-  // ── Annuler l'aperçu ──────────────────────────────────────────────
   void _cancelPreview() {
     _prePosStream?.cancel(); _preStateStream?.cancel();
     _prePl?.stop(); _prePl?.dispose(); _prePl = null;
@@ -365,7 +372,6 @@ class _ChatScreenState extends State<ChatScreen>
     setState(() { _hasPreview = false; _previewPath = null; _prePlaying = false; _prePos = Duration.zero; _preDur = Duration.zero; });
   }
 
-  // ── Envoyer depuis l'aperçu ───────────────────────────────────────
   Future<void> _sendPreview() async {
     if (_previewPath == null) return;
     final path = _previewPath!;
@@ -375,7 +381,6 @@ class _ChatScreenState extends State<ChatScreen>
     await _send(filePath: path, type: 'audio');
   }
 
-  // ── Init lecteur aperçu ───────────────────────────────────────────
   Future<void> _initPre(String path) async {
     await _prePl?.dispose();
     _prePl = AudioPlayer();
@@ -396,7 +401,6 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  // ── Lecture audio (messages) ──────────────────────────────────────
   Future<void> _playAudio(String id, String url) async {
     try {
       for (final e in _players.entries) { if (e.key != id && e.value.playing) await e.value.stop(); }
@@ -445,16 +449,78 @@ class _ChatScreenState extends State<ChatScreen>
       ),
       body: Column(children: [
         if (widget.serviceName != null) _svcBanner(),
-        Expanded(child: Consumer<MessageProvider>(builder: (ctx, pv, _) {
-          final msgs = pv.getMessages(widget.conversationId);
-          if (pv.isLoading && msgs.isEmpty)
-            return const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed));
-          if (msgs.isEmpty) return _empty();
-          WidgetsBinding.instance.addPostFrameCallback((_) => _toBottom(animated: false));
-          return _msgList(msgs);
-        })),
+        Expanded(
+          child: Consumer<MessageProvider>(
+            builder: (ctx, pv, _) {
+              final msgs = pv.getMessages(widget.conversationId);
+              if (pv.isLoading && msgs.isEmpty)
+                return const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed));
+              if (msgs.isEmpty) return _empty();
+              return _msgList(msgs);
+            },
+          ),
+        ),
+        // Indicateur typing / recording
+        _buildOtherIndicator(),
         _inputBar(),
       ]),
+    );
+  }
+
+  /// Bandeau "En train d'écrire…" ou "En train d'enregistrer…"
+  Widget _buildOtherIndicator() {
+    if (_otherRecording) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        color: Colors.white,
+        child: Row(children: [
+          AnimatedBuilder(
+            animation: _pulse,
+            builder: (_, __) => Icon(
+              Icons.mic,
+              size: 16,
+              color: Colors.red.withOpacity(0.5 + 0.5 * _pulse.value),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${widget.otherUser.name} enregistre un message vocal…',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
+          ),
+        ]),
+      );
+    }
+    if (_otherTyping) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        color: Colors.white,
+        child: Row(children: [
+          _buildTypingDots(),
+          const SizedBox(width: 8),
+          Text(
+            '${widget.otherUser.name} écrit…',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
+          ),
+        ]),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildTypingDots() {
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (_, __) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) => Container(
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          width: 6, height: 6,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.grey.withOpacity(0.3 + 0.7 * (((_pulse.value + i * 0.33) % 1.0))),
+          ),
+        )),
+      ),
     );
   }
 
@@ -483,7 +549,14 @@ class _ChatScreenState extends State<ChatScreen>
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(widget.otherUser.name,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-        if (_otherTyping)
+        if (_otherRecording)
+          Row(children: [
+            Icon(Icons.mic, size: 10, color: Colors.red.withOpacity(0.8)),
+            const SizedBox(width: 3),
+            const Text('enregistre un vocal…',
+                style: TextStyle(fontSize: 11, color: Colors.white70)),
+          ])
+        else if (_otherTyping)
           const Text('En train d\'écrire…',
               style: TextStyle(fontSize: 11, color: Colors.white70))
         else if (isOnline)
@@ -565,7 +638,6 @@ class _ChatScreenState extends State<ChatScreen>
                         color: isMe ? Colors.white : Colors.black87, fontSize: 14))),
                 const SizedBox(height: 3),
                 Row(mainAxisSize: MainAxisSize.min, children: [
-                  // ⭐ Heure en heure locale GMT+1 (déjà en local grâce au model)
                   Text(DateFormat('HH:mm').format(m.createdAt),
                       style: TextStyle(
                           color: isErr ? Colors.red : isMe ? Colors.white60 : Colors.grey[500],
@@ -619,7 +691,6 @@ class _ChatScreenState extends State<ChatScreen>
         if (!_cCtrl.containsKey(m.id)) { _initVideo(m.id, m.fileUrl!); return Container(height: 180, color: Colors.black, child: const Center(child: CircularProgressIndicator())); }
         return SizedBox(height: 180, child: Chewie(controller: _cCtrl[m.id]!));
 
-      // ⭐ LOCALISATION — détectée automatiquement dans MessageModel.fromJson
       case 'location':
         return GestureDetector(
           onTap: () => _openLoc(m.latitude ?? 0, m.longitude ?? 0),
@@ -640,7 +711,6 @@ class _ChatScreenState extends State<ChatScreen>
               ]),
               if (m.latitude != null && m.longitude != null) ...[
                 const SizedBox(height: 8),
-                // Miniature de carte
                 ClipRRect(borderRadius: BorderRadius.circular(6),
                   child: Image.network(
                     'https://staticmap.openstreetmap.de/staticmap.php?'
@@ -733,18 +803,14 @@ class _ChatScreenState extends State<ChatScreen>
     decoration: BoxDecoration(color: Colors.white, boxShadow: [
       BoxShadow(color: Colors.grey.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, -3))]),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
-      // Mode aperçu audio
       if (_hasPreview) _previewBar(),
-      // Mode enregistrement verrouillé
       if (_recording && _locked && !_hasPreview) _lockedBar(),
-      // Mode normal
       if (!_hasPreview) Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
         _attachBtn(),
         Expanded(child: _textField()),
         const SizedBox(width: 6),
         _sendOrMicArea(),
       ]),
-      // Indicateur enregistrement non-verrouillé
       if (_recording && !_locked && !_hasPreview) _recIndicator(),
     ]),
   );
@@ -763,9 +829,7 @@ class _ChatScreenState extends State<ChatScreen>
     ),
   );
 
-  // ── ZONE ENVOI / MIC ──────────────────────────────────────────────────────────
   Widget _sendOrMicArea() {
-    // Bouton envoi texte
     if (_hasText || _sending) {
       return GestureDetector(
         onTap: _sending ? null : () => _send(content: _msgCtrl.text),
@@ -777,7 +841,6 @@ class _ChatScreenState extends State<ChatScreen>
               : const Icon(Icons.send, color: Colors.white, size: 22)));
     }
 
-    // Enregistrement verrouillé → bouton stop vert
     if (_recording && _locked) {
       return GestureDetector(
         onTap: _stopPreview,
@@ -786,43 +849,34 @@ class _ChatScreenState extends State<ChatScreen>
           child: const Icon(Icons.stop, color: Colors.white, size: 22)));
     }
 
-    // ⭐ BOUTON MICRO — glisser vers le haut pour enregistrer
-    // GestureDetector vertical drag pour détecter le glisser
-    final isActive   = _recording || (_dragStartY != null && _dragDeltaY < -10);
-    final isLocking  = _dragDeltaY < -_kLockThreshold;
-    final progress   = _dragStartY != null
+    final isActive  = _recording || (_dragStartY != null && _dragDeltaY < -10);
+    final isLocking = _dragDeltaY < -_kLockThreshold;
+    final progress  = _dragStartY != null
         ? ((-_dragDeltaY - _kStartThreshold) / (_kLockThreshold - _kStartThreshold)).clamp(0.0, 1.0)
         : 0.0;
 
     return Stack(clipBehavior: Clip.none, children: [
-      // Indicateur de progression (arc) quand on glisse
       if (_dragStartY != null && _dragDeltaY < -_kStartThreshold)
         Positioned(
           bottom: 50, left: -8,
-          child: Container(
-            width: 60, height: 60,
+          child: SizedBox(width: 60, height: 60,
             child: CircularProgressIndicator(
               value: progress, strokeWidth: 3,
               color: isLocking ? Colors.green : AppConstants.primaryRed,
-              backgroundColor: Colors.grey[200],
-            ),
+              backgroundColor: Colors.grey[200]),
           ),
         ),
-      // Hint "Glisser ↑" quand on ne glisse pas
       if (!_recording && _dragStartY == null)
         Positioned(
-          bottom: 48,
-          left: -30,
+          bottom: 48, left: -30,
           child: IgnorePointer(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
               child: const Text('↑ Glisser', style: TextStyle(color: Colors.white, fontSize: 10)),
             ),
           ),
         ),
-      // LE BOUTON
       GestureDetector(
         onVerticalDragStart:  _onMicDragStart,
         onVerticalDragUpdate: _onMicDragUpdate,
@@ -853,7 +907,6 @@ class _ChatScreenState extends State<ChatScreen>
     ]);
   }
 
-  // Indicateur enregistrement non-verrouillé
   Widget _recIndicator() => Container(
     margin: const EdgeInsets.only(top: 4),
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -874,7 +927,6 @@ class _ChatScreenState extends State<ChatScreen>
     ]),
   );
 
-  // Barre enregistrement verrouillé
   Widget _lockedBar() => Container(
     margin: const EdgeInsets.only(bottom: 8),
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -894,7 +946,6 @@ class _ChatScreenState extends State<ChatScreen>
     ]),
   );
 
-  // Barre aperçu audio avant envoi
   Widget _previewBar() => Container(
     margin: const EdgeInsets.only(bottom: 8),
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1027,7 +1078,7 @@ class _ChatScreenState extends State<ChatScreen>
     for (final p in _players.values) p.dispose();
     for (final c in _vCtrl.values) c.dispose();
     for (final c in _cCtrl.values) c.dispose();
-    try { context.read<MessageProvider>().removeListener(_checkTyping); } catch (_) {}
+    try { context.read<MessageProvider>().removeListener(_onProviderUpdate); } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

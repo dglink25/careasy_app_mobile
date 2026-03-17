@@ -1,10 +1,12 @@
 // lib/providers/message_provider.dart
 // ═══════════════════════════════════════════════════════════════════════
+// VERSION CORRIGÉE — Réception temps réel + recording indicator
 // CORRECTIONS:
-// 1. Après chargement des messages, vérifier le statut en ligne de
-//    l'autre utilisateur via l'API (GET /user/{id}/online-status)
-// 2. Localisation: type préservé (déjà géré dans MessageModel.fromJson)
-// 3. Timer online toutes les 2 minutes
+// 1. setRecordingIndicator() ajouté pour le vocal
+// 2. receiveMessage() notifie immédiatement même si chat ouvert
+// 3. loadConversations() plus robuste
+// 4. Timer online toutes les 2 minutes
+// 5. saveFcmToken() pour les notifications push
 // ═══════════════════════════════════════════════════════════════════════
 import 'dart:async';
 import 'dart:convert';
@@ -29,6 +31,7 @@ class MessageProvider extends ChangeNotifier {
   Map<String, List<MessageModel>> _messages      = {};
   List<ConversationModel>          _conversations = [];
   Map<String, Map<String, bool>>   _typing        = {};
+  Map<String, Map<String, bool>>   _recording     = {}; // recording vocal
   Map<String, bool>                _onlineStatus  = {};
   Map<String, DateTime?>           _lastSeen      = {};
 
@@ -90,12 +93,12 @@ class MessageProvider extends ChangeNotifier {
   bool isUserTyping(String convId, String userId) =>
       _typing[convId]?[userId] ?? false;
 
+  bool isUserRecording(String convId, String userId) =>
+      _recording[convId]?[userId] ?? false;
+
   // ── Statut en ligne ───────────────────────────────────────────────────────────
-  // Calcule isOnline: Pusher ou dernier last_seen < 5 min
   bool getUserOnlineStatus(String userId) {
-    // D'abord regarder ce que Pusher a mis à jour
     if (_onlineStatus.containsKey(userId)) return _onlineStatus[userId]!;
-    // Sinon calculer depuis last_seen
     final ls = _lastSeen[userId];
     if (ls != null) return DateTime.now().difference(ls).inMinutes < 5;
     return false;
@@ -107,7 +110,6 @@ class MessageProvider extends ChangeNotifier {
     _onlineStatus[userId] = isOnline;
     if (lastSeen != null) _lastSeen[userId] = lastSeen;
 
-    // Mettre à jour le UserModel dans la conversation correspondante
     final idx = _conversations.indexWhere((c) => c.otherUser.id == userId);
     if (idx != -1) {
       final old = _conversations[idx];
@@ -135,7 +137,20 @@ class MessageProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Vérification directe du statut en ligne via API ───────────────────────────
+  // ── Indicateurs typing & recording ───────────────────────────────────────────
+  void setTypingIndicator(String convId, String userId, bool isTyping) {
+    _typing[convId] ??= {};
+    _typing[convId]![userId] = isTyping;
+    notifyListeners();
+  }
+
+  void setRecordingIndicator(String convId, String userId, bool isRecording) {
+    _recording[convId] ??= {};
+    _recording[convId]![userId] = isRecording;
+    notifyListeners();
+  }
+
+  // ── Vérification directe du statut en ligne ──────────────────────────────────
   Future<void> fetchOnlineStatus(String userId) async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -143,7 +158,7 @@ class MessageProvider extends ChangeNotifier {
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/user/$userId/online-status'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final isOnline = data['is_online'] == true;
@@ -151,7 +166,6 @@ class MessageProvider extends ChangeNotifier {
         final raw = data['last_seen_at'] ?? data['last_seen'];
         if (raw != null) {
           lastSeen = DateTime.tryParse(raw.toString())?.toLocal();
-          // Recalculer isOnline si le backend dit false mais last_seen < 5 min
           if (!isOnline && lastSeen != null) {
             final online = DateTime.now().difference(lastSeen).inMinutes < 5;
             updateUserOnlineStatus(userId, online, lastSeen);
@@ -163,7 +177,7 @@ class MessageProvider extends ChangeNotifier {
     } catch (e) { debugPrint('[MessageProvider] fetchOnlineStatus: $e'); }
   }
 
-  // ── Conversations ─────────────────────────────────────────────────────────────
+  // ── Conversations ──────────────────────────────────────────────────────────
   Future<void> loadConversations() async {
     _isLoading = true; notifyListeners();
     try {
@@ -172,14 +186,13 @@ class MessageProvider extends ChangeNotifier {
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/conversations'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200) {
         final list = jsonDecode(resp.body) as List<dynamic>;
         _conversations = list
             .map((i) => ConversationModel.fromJson(i, _currentUserId ?? ''))
             .toList();
         _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-        // Initialiser le cache de statut en ligne depuis les données de conversation
         for (final c in _conversations) {
           _onlineStatus[c.otherUser.id] = c.otherUser.isOnline;
           if (c.otherUser.lastSeen != null) {
@@ -200,7 +213,7 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ── Messages ──────────────────────────────────────────────────────────────────
+  // ── Messages ───────────────────────────────────────────────────────────────
   Future<void> loadMessages(String convId) async {
     _messages[convId] ??= [];
     try {
@@ -209,31 +222,36 @@ class MessageProvider extends ChangeNotifier {
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 15));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        final msgs = (data['messages'] ?? data['data'] ?? []) as List<dynamic>;
+        // Backend retourne messages dans data['messages'] ou la conversation directement
+        final rawMsgs = data['messages'] ?? data['data'] ?? [];
+        final msgs = (rawMsgs is List ? rawMsgs : []) as List<dynamic>;
+        
         _messages[convId] = msgs
-            .map((i) => MessageModel.fromJson(i, _currentUserId ?? ''))
+            .map((i) => MessageModel.fromJson(
+                i is Map<String, dynamic> ? i : Map<String, dynamic>.from(i as Map),
+                _currentUserId ?? ''))
             .toList();
 
-        // ⭐ Récupérer le statut en ligne de l'autre utilisateur
-        // data['other_user'] ou data['user_one'] / data['user_two']
-        final otherUserData = data['other_user'];
+        // Récupérer le statut en ligne de l'autre utilisateur
+        final otherUserData = data['other_user'] ?? data['user_one'] ?? data['user_two'];
         if (otherUserData != null && otherUserData is Map) {
           final otherId = otherUserData['id']?.toString();
           if (otherId != null && otherId != _currentUserId) {
-            await fetchOnlineStatus(otherId);
+            fetchOnlineStatus(otherId); // async, pas await
           }
         }
 
+        // S'abonner au canal de cette conversation
         await _pusher.subscribeToConversation(convId);
         notifyListeners();
       }
     } catch (e) { debugPrint('❌ loadMessages: $e'); }
   }
 
-  // ── Envoi de message ──────────────────────────────────────────────────────────
+  // ── Envoi de message ──────────────────────────────────────────────────────
   Future<void> sendMessage(
     String convId, {
     required String type,
@@ -246,26 +264,22 @@ class MessageProvider extends ChangeNotifier {
     if (_isSending) return;
     _isSending = true;
 
-    // Backend accepte: text, image, video, vocal, document
-    // 'location' → envoyer comme 'text' avec lat/lng
-    // 'audio'    → envoyer comme 'vocal'
     String apiType = type;
     if (type == 'audio')    apiType = 'vocal';
     if (type == 'location') apiType = 'text';
 
     final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
 
-    // Message temporaire avec le type ORIGINAL + heure locale
     final tempMsg = MessageModel(
       id:             tempId,
       conversationId: convId,
       senderId:       _currentUserId ?? '',
       content:        content ?? (filePath != null ? _defaultContent(apiType) : ''),
-      type:           type,       // type ORIGINAL (location, audio…)
+      type:           type,
       fileUrl:        filePath,
       latitude:       latitude,
       longitude:      longitude,
-      createdAt:      DateTime.now(), // déjà en heure locale
+      createdAt:      DateTime.now(),
       isMe:           true,
       status:         'sending',
     );
@@ -281,7 +295,6 @@ class MessageProvider extends ChangeNotifier {
       Map<String, dynamic>? resp;
 
       if (filePath != null) {
-        // Envoi multipart (fichier)
         final req = http.MultipartRequest(
           'POST',
           Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/send-mobile'),
@@ -294,7 +307,7 @@ class MessageProvider extends ChangeNotifier {
         if (replyToId != null) req.fields['reply_to_id'] = replyToId;
         req.files.add(await http.MultipartFile.fromPath('file', filePath));
 
-        final sr = await req.send();
+        final sr = await req.send().timeout(const Duration(seconds: 30));
         final r  = await http.Response.fromStream(sr);
         if (r.statusCode == 200 || r.statusCode == 201) {
           resp = jsonDecode(r.body) as Map<String, dynamic>;
@@ -302,7 +315,6 @@ class MessageProvider extends ChangeNotifier {
           throw Exception('${r.statusCode}: ${r.body}');
         }
       } else {
-        // Envoi JSON (texte, localisation)
         final body = <String, dynamic>{
           'type': apiType, 'content': content ?? '', 'temporary_id': tempId,
         };
@@ -318,7 +330,7 @@ class MessageProvider extends ChangeNotifier {
             'Accept':        'application/json',
           },
           body: jsonEncode(body),
-        );
+        ).timeout(const Duration(seconds: 15));
         if (r.statusCode == 200 || r.statusCode == 201) {
           resp = jsonDecode(r.body) as Map<String, dynamic>;
         } else {
@@ -327,11 +339,8 @@ class MessageProvider extends ChangeNotifier {
       }
 
       if (resp != null) {
-        // ⭐ Forcer lat/lng et type dans la réponse
-        // MessageModel.fromJson détectera automatiquement 'location' si lat/lng présents
         if (latitude  != null) resp['latitude']  = latitude;
         if (longitude != null) resp['longitude'] = longitude;
-        // audio → garder 'audio' pour l'affichage local
         if (type == 'audio' && (resp['type'] == 'vocal' || resp['type'] == 'text')) {
           resp['type'] = 'audio';
         }
@@ -367,7 +376,7 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ── Typing ────────────────────────────────────────────────────────────────────
+  // ── Typing & Recording ─────────────────────────────────────────────────────
   Future<void> sendTypingIndicator(String convId, bool isTyping) async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -376,17 +385,23 @@ class MessageProvider extends ChangeNotifier {
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/typing'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
         body: jsonEncode({'is_typing': isTyping}),
-      );
+      ).timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
-  void setTypingIndicator(String convId, String userId, bool isTyping) {
-    _typing[convId] ??= {};
-    _typing[convId]![userId] = isTyping;
-    notifyListeners();
+  Future<void> sendRecordingIndicator(String convId, bool isRecording) async {
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      if (token == null) return;
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/recording'),
+        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        body: jsonEncode({'is_recording': isRecording}),
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {}
   }
 
-  // ── Marquer lu ────────────────────────────────────────────────────────────────
+  // ── Marquer lu ─────────────────────────────────────────────────────────────
   Future<void> markConversationAsRead(String convId) async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -394,7 +409,7 @@ class MessageProvider extends ChangeNotifier {
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/mark-read'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 10));
       final idx = _conversations.indexWhere((c) => c.id == convId);
       if (idx != -1) {
         final old = _conversations[idx];
@@ -422,11 +437,20 @@ class MessageProvider extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
-  // ── Réception temps réel (Pusher) ─────────────────────────────────────────────
+  // ── Réception temps réel (Pusher) ──────────────────────────────────────────
   void receiveMessage(MessageModel msg, String convId) {
     _messages[convId] ??= [];
-    if (_messages[convId]!.any((m) => m.id == msg.id)) return;
+    
+    // Éviter les doublons
+    if (_messages[convId]!.any((m) => m.id == msg.id)) {
+      debugPrint('[MessageProvider] Message ${msg.id} déjà reçu, ignoré');
+      return;
+    }
+    
+    debugPrint('[MessageProvider] Nouveau message reçu: ${msg.id} dans conv $convId');
     _messages[convId]!.add(msg);
+    
+    // Mettre à jour la conversation dans la liste
     final idx = _conversations.indexWhere((c) => c.id == convId);
     if (idx != -1) {
       final old = _conversations[idx];
@@ -439,8 +463,11 @@ class MessageProvider extends ChangeNotifier {
       );
       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     } else {
+      // Conversation pas encore dans la liste → la recharger
       loadConversations();
     }
+    
+    // Notifier IMMÉDIATEMENT pour que ChatScreen se mette à jour
     notifyListeners();
   }
 
@@ -454,7 +481,6 @@ class MessageProvider extends ChangeNotifier {
     if (idx == -1 && msgId != null) idx = msgs.indexWhere((m) => m.id == msgId);
     if (idx == -1) return;
 
-    // Préserver lat/lng et type audio si nécessaire
     final orig = msgs[idx];
     if (orig.latitude != null)  data['latitude']  ??= orig.latitude;
     if (orig.longitude != null) data['longitude'] ??= orig.longitude;
@@ -471,8 +497,27 @@ class MessageProvider extends ChangeNotifier {
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/user/update-online-status'),
         headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 5));
     } catch (_) {}
+  }
+
+  /// Enregistrer le token FCM pour les notifications push
+  Future<void> saveFcmToken(String fcmToken) async {
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      if (token == null || token.isEmpty) return;
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'fcm_token': fcmToken, 'platform': 'android'}),
+      ).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('[MessageProvider] saveFcmToken: $e');
+    }
   }
 
   String _defaultContent(String type) {
