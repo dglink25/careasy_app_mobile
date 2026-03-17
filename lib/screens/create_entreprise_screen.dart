@@ -29,7 +29,8 @@ class DomaineModel {
 //    3. Si rejected ou aucune → affiche le vrai formulaire _CreateEntrepriseForm
 // ─────────────────────────────────────────────────────────────────────────────
 class CreateEntrepriseScreen extends StatefulWidget {
-  const CreateEntrepriseScreen({super.key});
+  final String? rejectionNote; // ← AJOUT
+  const CreateEntrepriseScreen({super.key, this.rejectionNote}); // ← MODIFIÉ
 
   @override
   State<CreateEntrepriseScreen> createState() =>
