@@ -10,14 +10,17 @@ import 'package:careasy_app_mobile/screens/messages_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
 import 'package:careasy_app_mobile/screens/all_services_screen.dart';
 import 'package:careasy_app_mobile/screens/all_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import '../models/user_model.dart';
+import './settings_screen.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
+import 'welcome_screen.dart';
 import 'chat_screen.dart';
 
 
@@ -29,7 +32,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
   int _currentIndex = 0;
@@ -62,6 +70,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    // ⭐ Guard: vérifier que la session est encore valide au chargement
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAuth());
     _loadUserData();
     _fetchData();
     _searchController.addListener(_onSearchChanged);
@@ -248,11 +258,61 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
   }
 
+  // ⭐ Guard d'authentification — redirige vers Welcome si pas de token
+  Future<void> _checkAuth() async {
+    final token = await _storage.read(key: 'auth_token');
+    if ((token == null || token.isEmpty) && mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+        (_) => false,
+      );
+    }
+  }
+
+  // ⭐ Déconnexion complète:
+  //  1. Révoque le token côté serveur (Laravel Sanctum)
+  //  2. Nettoie tout le storage local
+  //  3. Réinitialise les providers
+  //  4. Redirige vers WelcomeScreen (pas login, pour laisser le choix)
   Future<void> _logout() async {
+    // Fermer le dialog de profil si ouvert
+    if (mounted) Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst || r.settings.name == null);
+
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      // Révoquer le token sur le serveur
+      if (token != null && token.isNotEmpty) {
+        try {
+          await http.post(
+            Uri.parse('${AppConstants.apiBaseUrl}/logout'),
+            headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+          ).timeout(const Duration(seconds: 5));
+        } catch (_) {
+          // Ignorer si pas de réseau — on déconnecte quand même localement
+        }
+      }
+    } catch (_) {}
+
+    // Nettoyer tout le storage local
     await _storage.delete(key: 'auth_token');
     await _storage.delete(key: 'user_data');
+    await _storage.delete(key: 'fcm_token_pending');
+    await _storage.delete(key: 'remember_me');
+    await _storage.delete(key: 'login_time');
+
+    // Réinitialiser les providers
     if (mounted) {
-      Navigator.pushReplacementNamed(context, '/login');
+      try { context.read<AuthProvider>().clearError(); } catch (_) {}
+      try { context.read<MessageProvider>().stopOnlineTimer(); } catch (_) {}
+    }
+
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+        (_) => false,
+      );
     }
   }
 
@@ -1343,7 +1403,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: Colors.white),
-            onPressed: () => _showComingSoon('Paramètres'),
+            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                            ),
           ),
         ],
       ),
