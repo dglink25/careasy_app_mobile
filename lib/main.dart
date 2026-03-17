@@ -6,6 +6,7 @@ import 'providers/auth_provider.dart';
 import 'providers/message_provider.dart';
 import 'providers/service_provider.dart';
 import 'services/notification_service.dart';
+import 'screens/splash_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
@@ -33,11 +34,16 @@ void main() async {
     debugPrint('Firebase init: $e');
   }
 
+
   try {
     await NotificationService().initialize();
   } catch (e) {
     debugPrint('NotificationService init: $e');
   }
+
+  try { await NotificationService().initialize(); }
+  catch (e) { debugPrint('NotificationService init: $e'); }
+
 
   runApp(const CarEasyApp());
 }
@@ -58,8 +64,10 @@ class CarEasyApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,
         navigatorKey: navigatorKey,
-        initialRoute: '/',
+        // ⭐ SplashScreen vérifie la session et redirige automatiquement
+        home: const SplashScreen(),
         routes: {
+
           '/': (context) => const WelcomeScreen(),
           '/login': (context) => const LoginScreen(),
           '/register': (context) => const RegisterScreen(),
@@ -76,6 +84,13 @@ class CarEasyApp extends StatelessWidget {
     final args = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
     return EditServiceScreen(service: args['service'], entreprise: args['entreprise']);
   },
+
+          '/welcome':  (_) => const WelcomeScreen(),
+          '/login':    (_) => const LoginScreen(),
+          '/register': (_) => const RegisterScreen(),
+          '/home':     (_) => const HomeScreen(),
+          '/messages': (_) => const MessagesScreen(),
+
         },
         onGenerateRoute: (settings) {
           if (settings.name?.startsWith('/messages') == true) {
@@ -91,7 +106,12 @@ class CarEasyApp extends StatelessWidget {
 
 void setupNotificationNavigation(BuildContext context) {
   NotificationService().onNotificationTap = (String conversationId) {
+
     navigatorKey.currentState
         ?.pushNamedAndRemoveUntil('/messages', (r) => r.isFirst);
+
+    navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        '/messages', (r) => r.isFirst);
+
   };
 }
