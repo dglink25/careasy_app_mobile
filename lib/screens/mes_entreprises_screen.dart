@@ -31,19 +31,47 @@ class _MesEntreprisesScreenState extends State<MesEntreprisesScreen>
   void dispose() { _animCtrl.dispose(); super.dispose(); }
 
   Future<void> _fetchMesEntreprises() async {
-    setState(() => _isLoading = true);
-    try {
-      final token = await _storage.read(key: 'auth_token');
-      final res = await http.get(Uri.parse('${AppConstants.apiBaseUrl}/entreprises/mine'),
-          headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'});
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        setState(() { _entreprises = data is List ? data : (data['data'] ?? []); });
-        _animCtrl.forward(from: 0);
-      }
-    } catch (_) { _showError('Erreur de connexion. Vérifiez votre réseau.'); }
-    finally { if (mounted) setState(() => _isLoading = false); }
+  setState(() => _isLoading = true);
+  try {
+    final token = await _storage.read(key: 'auth_token');
+    
+    debugPrint('=== DEBUG MES ENTREPRISES ===');
+    debugPrint('TOKEN: $token');
+    debugPrint('URL: ${AppConstants.apiBaseUrl}/entreprises/mine');
+    
+    final res = await http.get(
+    Uri.parse('${AppConstants.apiBaseUrl}/mes-entreprises'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+      },
+    );
+
+    debugPrint('STATUS CODE: ${res.statusCode}');
+    debugPrint('BODY: ${res.body}');
+
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+      debugPrint('DATA TYPE: ${data.runtimeType}');
+      
+      final list = data is List ? data : (data['data'] ?? []);
+      debugPrint('NOMBRE ENTREPRISES: ${list.length}');
+      
+      setState(() { _entreprises = list; });
+      _animCtrl.forward(from: 0);
+    } else {
+      debugPrint('ERREUR HTTP: ${res.statusCode}');
+      debugPrint('ERREUR BODY: ${res.body}');
+      _showError('Erreur ${res.statusCode}');
+    }
+  } catch (e, stack) {
+    debugPrint('EXCEPTION: $e');
+    debugPrint('STACK: $stack');
+    _showError('Erreur de connexion. Vérifiez votre réseau.');
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   void _showError(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red[700], behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
 
@@ -228,21 +256,132 @@ class _MesEntreprisesScreenState extends State<MesEntreprisesScreen>
   Widget _detailRow({required IconData icon, required String label, required String value, int maxLines = 1}) => Row(crossAxisAlignment: maxLines > 1 ? CrossAxisAlignment.start : CrossAxisAlignment.center, children: [Icon(icon, size: 16, color: Colors.grey[600]), const SizedBox(width: 8), SizedBox(width: 72, child: Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[500], fontWeight: FontWeight.w500))), Expanded(child: Text(value, maxLines: maxLines, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87)))]);
 
   Widget _buildActions(Map<String, dynamic> e, String status) {
-    if (status == 'validated') return OutlinedButton.icon(
-      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => EntrepriseDetailScreen(entreprise: e))),
-      icon: const Icon(Icons.visibility_outlined, size: 16),
-      label: const Text('Voir la page publique'),
-      style: OutlinedButton.styleFrom(foregroundColor: Colors.green[700], side: BorderSide(color: Colors.green[300]!), minimumSize: const Size(double.infinity, 44), padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-    );
-    if (status == 'rejected') return ElevatedButton.icon(
-      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateEntrepriseScreen())).then((_) => _fetchMesEntreprises()),
+  if (status == 'validated') {
+    // Afficher le décompte essai si applicable
+    final bool isInTrial = e['is_in_trial_period'] == true ||
+        (e['trial_status'] is Map && e['trial_status']['status'] == 'active');
+    final int joursRestants = e['trial_days_remaining'] != null
+        ? (int.tryParse(e['trial_days_remaining'].toString()) ?? 0)
+        : (e['trial_status'] is Map
+            ? (int.tryParse(
+                    e['trial_status']['days_remaining']?.toString() ?? '0') ??
+                0)
+            : 0);
+
+    return Column(children: [
+      // Badge essai gratuit si en cours
+      if (isInTrial) ...[
+        _buildTrialBadge(joursRestants),
+        const SizedBox(height: 10),
+      ],
+      OutlinedButton.icon(
+        onPressed: () => Navigator.push(context,
+            MaterialPageRoute(
+                builder: (_) => EntrepriseDetailScreen(entreprise: e))),
+        icon: const Icon(Icons.visibility_outlined, size: 16),
+        label: const Text('Voir la page publique'),
+        style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.green[700],
+            side: BorderSide(color: Colors.green[300]!),
+            minimumSize: const Size(double.infinity, 44),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+      ),
+    ]);
+  }
+
+  if (status == 'rejected') {
+    final adminNote = e['admin_note']?.toString() ?? '';
+    return ElevatedButton.icon(
+      onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) =>
+                      CreateEntrepriseScreen(rejectionNote: adminNote)))
+          .then((_) => _fetchMesEntreprises()),
       icon: const Icon(Icons.refresh, size: 16),
       label: const Text('Resoumettre une demande'),
-      style: ElevatedButton.styleFrom(backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white, elevation: 0, minimumSize: const Size(double.infinity, 44), padding: const EdgeInsets.symmetric(vertical: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+      style: ElevatedButton.styleFrom(
+          backgroundColor: AppConstants.primaryRed,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          minimumSize: const Size(double.infinity, 44),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
     );
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10), decoration: BoxDecoration(color: Colors.orange[50], borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.orange[200]!)),
-      child: Row(children: [Icon(Icons.info_outline, size: 16, color: Colors.orange[700]), const SizedBox(width: 8), Expanded(child: Text('Vous serez notifié dès que votre dossier sera traité.', style: TextStyle(fontSize: 12, color: Colors.orange[800])))]));
   }
+
+  return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+          color: Colors.orange[50],
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.orange[200]!)),
+      child: Row(children: [
+        Icon(Icons.info_outline, size: 16, color: Colors.orange[700]),
+        const SizedBox(width: 8),
+        Expanded(
+            child: Text('Vous serez notifié dès que votre dossier sera traité.',
+                style: TextStyle(fontSize: 12, color: Colors.orange[800])))
+      ]));
+}
+
+// Nouveau widget : badge décompte essai
+Widget _buildTrialBadge(int joursRestants) {
+  final isUrgent = joursRestants <= 5;
+  return Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+        color: isUrgent ? Colors.red[50] : Colors.blue[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isUrgent
+                ? Colors.red.withOpacity(0.3)
+                : Colors.blue.withOpacity(0.3))),
+    child: Column(children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Row(children: [
+          Icon(Icons.science_outlined,
+              size: 14,
+              color: isUrgent ? Colors.red[700] : Colors.blue[700]),
+          const SizedBox(width: 6),
+          Text('Essai gratuit — 30 jours',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: isUrgent ? Colors.red[700] : Colors.blue[700])),
+        ]),
+        Text(
+            joursRestants > 0
+                ? '$joursRestants j restant${joursRestants > 1 ? 's' : ''}'
+                : 'Expiré',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: isUrgent ? Colors.red[600] : Colors.blue[600])),
+      ]),
+      const SizedBox(height: 8),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: LinearProgressIndicator(
+          value: (joursRestants / 30.0).clamp(0.0, 1.0),
+          backgroundColor: (isUrgent ? Colors.red : Colors.blue).withOpacity(0.15),
+          valueColor: AlwaysStoppedAnimation<Color>(
+              isUrgent ? Colors.red : Colors.blue),
+          minHeight: 6,
+        ),
+      ),
+      if (isUrgent) ...[
+        const SizedBox(height: 8),
+        Text(
+            'Souscrivez avant expiration pour ne pas perdre vos services !',
+            style: TextStyle(fontSize: 11, color: Colors.red[700])),
+      ]
+    ]),
+  );
+}
 
   Widget _buildEmpty() => Center(child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
     Container(width: 100, height: 100, decoration: BoxDecoration(color: AppConstants.primaryRed.withOpacity(0.08), shape: BoxShape.circle), child: const Icon(Icons.business_outlined, size: 50, color: AppConstants.primaryRed)),
