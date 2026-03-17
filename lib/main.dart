@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'providers/auth_provider.dart';
 import 'providers/message_provider.dart';
@@ -53,11 +54,11 @@ class CarEasyApp extends StatelessWidget {
         navigatorKey: navigatorKey,
         initialRoute: '/',
         routes: {
-          '/':         (_) => const WelcomeScreen(),
-          '/login':    (_) => const LoginScreen(),
-          '/register': (_) => const RegisterScreen(),
-          '/home':     (_) => const HomeScreen(),
-          '/messages': (_) => const MessagesScreen(),
+          '/': (context) => const WelcomeScreen(),
+          '/login': (context) => const LoginScreen(),
+          '/register': (context) => const RegisterScreen(),
+          '/home': (context) => const HomeScreen(),
+          '/messages': (context) => const MessagesScreen(),
         },
         onGenerateRoute: (settings) {
           if (settings.name?.startsWith('/messages') == true) {

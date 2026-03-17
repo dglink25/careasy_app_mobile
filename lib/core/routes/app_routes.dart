@@ -4,7 +4,8 @@ import '../../screens/login_screen.dart';
 import '../../screens/register_screen.dart';
 import '../../screens/google_auth_screen.dart';
 import '../../screens/home_screen.dart';
-
+import '../../screens/create_service_screen.dart';
+import '../../screens/edit_service_screen.dart';
 
 class AppRoutes {
   static const String welcome = '/';
@@ -47,6 +48,15 @@ class AppRoutes {
     register: (context) => const RegisterScreen(),
     googleAuth: (context) => const GoogleAuthScreen(),
     home: (context) => const HomeScreen(),
+    
+    '/create-service': (ctx) {
+    final e = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
+    return CreateServiceScreen(entreprise: e);
+  },
+  '/edit-service': (ctx) {
+    final args = ModalRoute.of(ctx)!.settings.arguments as Map<String, dynamic>;
+    return EditServiceScreen(service: args['service'], entreprise: args['entreprise']);
+  },
     
     // Other routes will be defined here as needed
   };

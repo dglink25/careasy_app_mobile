@@ -17,6 +17,7 @@ import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import '../models/user_model.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart';
+import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 import 'chat_screen.dart';
 
 
@@ -2447,6 +2448,26 @@ void _handleEntrepriseTap() {
               
               Column(
   children: [
+
+    SizedBox(
+  width: double.infinity,
+  child: ElevatedButton.icon(
+    onPressed: () {
+      Navigator.pop(context);
+      Navigator.push(context,
+        MaterialPageRoute(builder: (_) => const PlansAbonnementScreen()));
+    },
+    icon: const Icon(Icons.subscriptions_outlined, size: 16),
+    label: const Text('Plans & Abonnements'),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: Colors.grey[100],
+      foregroundColor: Colors.black87,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ),
+  ),
+),
+
     // Bouton Mes entreprises
     SizedBox(
       width: double.infinity,
