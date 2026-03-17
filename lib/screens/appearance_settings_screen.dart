@@ -15,7 +15,12 @@ class AppearanceSettingsScreen extends StatefulWidget {
 }
 
 class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
   
   bool _isLoading = true;
   String _selectedTheme = 'light'; // light, dark, system

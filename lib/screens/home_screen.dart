@@ -2458,144 +2458,15 @@ void _handleEntrepriseTap() {
     );
   }
 
+  // ⭐ Bouton Profil → ouvre SettingsScreen (profil complet + bottom nav)
   void _showProfileDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 40,
-                backgroundImage: _userData?['profile_photo_url'] != null
-                    ? NetworkImage(_userData!['profile_photo_url'])
-                    : null,
-                backgroundColor: Colors.grey[200],
-                child: _userData?['profile_photo_url'] == null
-                    ? Icon(
-                        Icons.person,
-                        size: 40,
-                        color: Colors.grey[400],
-                      )
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _userData?['name'] ?? 'Utilisateur',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                _userData?['email'] ?? 'Email non renseigné',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
-              
-              _buildInfoRow(Icons.email, 'Email', _userData?['email'] ?? 'Non renseigné'),
-              _buildInfoRow(Icons.phone, 'Téléphone', _userData?['phone'] ?? 'Non renseigné'),
-              _buildInfoRow(Icons.person, 'Rôle', _userData?['role'] ?? 'Client'),
-              
-              const SizedBox(height: 16),
-              
-              Column(
-  children: [
-
-    SizedBox(
-  width: double.infinity,
-  child: ElevatedButton.icon(
-    onPressed: () {
-      Navigator.pop(context);
-      Navigator.push(context,
-        MaterialPageRoute(builder: (_) => const PlansAbonnementScreen()));
-    },
-    icon: const Icon(Icons.subscriptions_outlined, size: 16),
-    label: const Text('Plans & Abonnements'),
-    style: ElevatedButton.styleFrom(
-      backgroundColor: Colors.grey[100],
-      foregroundColor: Colors.black87,
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    ),
-  ),
-),
-
-    // Bouton Mes entreprises
-    SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: () {
-          Navigator.pop(context); // ferme le dialog
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const MesEntreprisesScreen(),
-            ),
-          );
-        },
-        icon: const Icon(Icons.business, size: 16),
-        label: const Text('Mes entreprises'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.grey[100],
-          foregroundColor: Colors.black87,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-        ),
-      ),
-    ),
-    const SizedBox(height: 8),
-    // Fermer + Déconnexion
-    Row(
-      children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () => Navigator.pop(context),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.grey[700],
-              side: BorderSide(color: Colors.grey[300]!),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Fermer'),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: ElevatedButton(
-            onPressed: _logout,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Déconnexion'),
-          ),
-        ),
-      ],
-    ),
-  ],
-),
-            ],
-          ),
-        ),
-      ),
-    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    ).then((_) {
+      // Recharger les données utilisateur au retour (photo, nom peuvent avoir changé)
+      _loadUserData();
+    });
   }
 
   Widget _buildInfoRow(IconData icon, String label, String value) {

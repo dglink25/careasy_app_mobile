@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
 import '../providers/message_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/conversation_model.dart';
 import '../utils/constants.dart';
 import 'chat_screen.dart';
 import 'home_screen.dart';
+import 'settings_screen.dart';
+import 'welcome_screen.dart';
 import 'all_services_screen.dart';
 import 'all_entreprises_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -25,7 +28,12 @@ class _MessagesScreenState extends State<MessagesScreen>
   late TabController _tabController;
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
 
   int _currentIndex = 1;
   Map<String, dynamic>? _userData;
@@ -115,77 +123,38 @@ class _MessagesScreenState extends State<MessagesScreen>
     );
   }
 
+  // ⭐ Bouton Profil → ouvre SettingsScreen (profil complet + bottom nav)
   void _showProfileDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 40,
-              backgroundImage: _userData?['profile_photo_url'] != null
-                  ? NetworkImage(_userData!['profile_photo_url']) : null,
-              backgroundColor: Colors.grey[200],
-              child: _userData?['profile_photo_url'] == null
-                  ? Icon(Icons.person, size: 40, color: Colors.grey[400]) : null,
-            ),
-            const SizedBox(height: 12),
-            Text(_userData?['name'] ?? 'Utilisateur',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            Text(_userData?['email'] ?? '',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 8),
-            _infoRow(Icons.email, 'Email', _userData?['email'] ?? 'Non renseigné'),
-            _infoRow(Icons.phone, 'Téléphone', _userData?['phone'] ?? 'Non renseigné'),
-            _infoRow(Icons.person, 'Rôle', _userData?['role'] ?? 'Client'),
-            const SizedBox(height: 16),
-            Row(children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.grey[700],
-                      side: BorderSide(color: Colors.grey[300]!),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                  child: const Text('Fermer'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _logout,
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red, foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                  child: const Text('Déconnexion'),
-                ),
-              ),
-            ]),
-          ]),
-        ),
-      ),
-    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    ).then((_) => _loadUserData()); // Recharger photo/nom au retour
   }
 
-  Widget _infoRow(IconData icon, String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(children: [
-      Icon(icon, size: 16, color: Colors.grey[600]),
-      const SizedBox(width: 8),
-      Text('$label: ', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700], fontSize: 13)),
-      Expanded(child: Text(value, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis)),
-    ]),
-  );
-
   Future<void> _logout() async {
-    Navigator.pop(context);
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      if (token != null && token.isNotEmpty) {
+        try {
+          await http.post(
+            Uri.parse('${AppConstants.apiBaseUrl}/logout'),
+            headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+          ).timeout(const Duration(seconds: 5));
+        } catch (_) {}
+      }
+    } catch (_) {}
     await _storage.delete(key: 'auth_token');
     await _storage.delete(key: 'user_data');
-    if (mounted) Navigator.pushReplacementNamed(context, '/login');
+    await _storage.delete(key: 'fcm_token_pending');
+    await _storage.delete(key: 'remember_me');
+    await _storage.delete(key: 'login_time');
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+        (_) => false,
+      );
+    }
   }
 
   // ── BUILD ────────────────────────────────────────────────────────────────────

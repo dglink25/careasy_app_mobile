@@ -15,7 +15,12 @@ class NotificationsSettingsScreen extends StatefulWidget {
 }
 
 class _NotificationsSettingsScreenState extends State<NotificationsSettingsScreen> {
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
   
   bool _isLoading = true;
   bool _emailNotifications = true;

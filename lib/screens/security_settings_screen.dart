@@ -15,7 +15,12 @@ class SecuritySettingsScreen extends StatefulWidget {
 }
 
 class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
   final _formKey = GlobalKey<FormState>();
   
   bool _isLoading = false;

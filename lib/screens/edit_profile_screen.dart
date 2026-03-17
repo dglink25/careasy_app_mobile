@@ -18,7 +18,12 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions, iOptions: _iOSOptions,
+  );
 
   late TextEditingController _nameController;
   late TextEditingController _emailController;
@@ -359,15 +364,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   }
 
   Future<void> _saveProfile() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
 
     try {
       final token = await _storage.read(key: 'auth_token');
-      
+
       final response = await http.put(
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
         headers: {
@@ -376,40 +379,48 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           'Accept': 'application/json',
         },
         body: jsonEncode({
-          'name': _nameController.text,
-          'phone': _phoneController.text.isEmpty ? null : _phoneController.text,
+          'name': _nameController.text.trim(),
+          'phone': _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
         }),
       );
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        // Mettre à jour les données utilisateur
-        _userData!['name'] = _nameController.text;
-        _userData!['phone'] = _phoneController.text;
-        
-        await _storage.write(
-          key: 'user_data',
-          value: jsonEncode(_userData),
-        );
-        
+        // Mettre à jour le cache local avec les données retournées par le serveur
+        _userData ??= {};
+        // Priorité aux données renvoyées par le serveur
+        if (data['user'] != null) {
+          final serverUser = data['user'] as Map<String, dynamic>;
+          serverUser.forEach((k, v) { _userData![k] = v; });
+        } else {
+          _userData!['name']  = _nameController.text.trim();
+          _userData!['phone'] = _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim();
+        }
+
+        await _storage.write(key: 'user_data', value: jsonEncode(_userData));
+
         if (mounted) {
           _showSuccess('Profil mis à jour avec succès');
           Navigator.pop(context, true);
         }
       } else {
         if (mounted) {
-          _showError(data['message'] ?? 'Erreur lors de la mise à jour');
+          // Afficher le premier message d'erreur disponible
+          String msg = 'Erreur lors de la mise à jour';
+          if (data['errors'] != null) {
+            final errors = data['errors'] as Map<String, dynamic>;
+            msg = errors.values.first[0]?.toString() ?? msg;
+          } else if (data['message'] != null) {
+            msg = data['message'];
+          }
+          _showError(msg);
         }
       }
     } catch (e) {
-      if (mounted) {
-        _showError('Erreur de connexion');
-      }
+      if (mounted) _showError('Erreur de connexion');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
