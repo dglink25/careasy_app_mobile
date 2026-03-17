@@ -72,7 +72,7 @@ dependencies:
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
   flutter_map_location_marker: ^8.1.0
-  firebase_messaging: ^16.1.2
+  firebase_messaging: ^16.1.2 
 
   # ── Google Maps (MIS EN COMMENTAIRE - PEUT DEVENIR PAYANT) ──
   # google_maps_flutter: ^2.9.0
