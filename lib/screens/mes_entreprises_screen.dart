@@ -15,7 +15,11 @@ class MesEntreprisesScreen extends StatefulWidget {
 
 class _MesEntreprisesScreenState extends State<MesEntreprisesScreen>
     with SingleTickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  // APRÈS
+final _storage = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
   List<dynamic> _entreprises = [];
   bool _isLoading = true;
   late AnimationController _animCtrl;

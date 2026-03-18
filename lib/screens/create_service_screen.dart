@@ -8,13 +8,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 
-// ─────────────────────────────────────────────
-//  CreateServiceScreen
-//  Formulaire en 3 étapes :
-//  1. Infos de base (nom, domaine, prix)
-//  2. Horaires
-//  3. Médias + récap
-// ─────────────────────────────────────────────
+
 class CreateServiceScreen extends StatefulWidget {
   final Map<String, dynamic> entreprise;
   const CreateServiceScreen({super.key, required this.entreprise});
@@ -25,7 +19,11 @@ class CreateServiceScreen extends StatefulWidget {
 
 class _CreateServiceScreenState extends State<CreateServiceScreen>
     with TickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  // APRÈS
+final _storage = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
   final _pageController = PageController();
   int _currentStep = 0;
   bool _isSubmitting = false;
@@ -54,7 +52,6 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     'sunday': 'Dimanche',
   };
 
-  // ── Step 3 : Médias ──────────────────────────
   final List<File> _mediaFiles = [];
   final List<String> _mediaPreviews = [];
 
@@ -67,7 +64,6 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     }
     _fetchDomaines();
 
-    // ✅ Vérifier les limites dès l'ouverture de l'écran
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkTrialLimitsOnOpen();
     });
@@ -83,10 +79,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     super.dispose();
   }
 
-  // ── Vérification des limites à l'ouverture ────
-  /// Vérifie si l'entreprise est en période d'essai et si elle
-  /// a déjà atteint sa limite de services avant même d'ouvrir le formulaire.
-  void _checkTrialLimitsOnOpen() {
+    void _checkTrialLimitsOnOpen() {
     final entreprise = widget.entreprise;
 
     // Récupérer les infos de l'entreprise passées en paramètre
@@ -318,10 +311,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     }
   }
 
-  // ✅ Dialog bloquant pour la limite de l'essai gratuit
-  /// Affiché quand l'utilisateur atteint sa limite de services pendant l'essai.
-  /// Propose un bouton pour aller souscrire à un plan payant.
-  void _showTrialLimitBlockingDialog({
+    void _showTrialLimitBlockingDialog({
     required int maxServices,
     required int currentServices,
     required bool isTrialExpired,
@@ -490,10 +480,8 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
               fontWeight: FontWeight.w500)),
     ],
   );
-
-  /// Navigation vers la page Plans & Abonnements
-  /// Route définie dans AppRoutes.myAbonnements = '/profile/abonnements'
-  void _navigateToAbonnements() {
+  
+ void _navigateToAbonnements() {
     Navigator.of(context).pushNamedAndRemoveUntil(
       '/profile/abonnements',
       (route) => route.isFirst,

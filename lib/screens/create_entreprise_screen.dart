@@ -39,7 +39,11 @@ class CreateEntrepriseScreen extends StatefulWidget {
 
 class _CreateEntrepriseScreenState
     extends State<CreateEntrepriseScreen> {
-  final _storage = const FlutterSecureStorage();
+  // APRÈS
+final _storage = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
 
   /// null = vérification en cours | true = autorisé | false = bloqué
   bool? _canCreate;
@@ -502,7 +506,11 @@ class _CreateEntrepriseForm extends StatefulWidget {
 class _CreateEntrepriseFormState
     extends State<_CreateEntrepriseForm>
     with TickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  // APRÈS
+final _storage = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
   final _pageController = PageController();
 
   int _currentStep = 0;

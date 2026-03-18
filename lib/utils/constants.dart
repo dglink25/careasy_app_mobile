@@ -5,7 +5,7 @@ class AppConstants {
   static const String welcomeSubtitle = 'Votre partenaire mobilité premium';
   
   // Pour émulateur Android
-  static const String apiBaseUrl = 'http://10.239.211.115:8000/api';
+  static const String apiBaseUrl = 'http://10.82.119.159:8000/api';
   
   static const Color primaryRed = Color(0xFFE63946);
   static const Color darkGrey = Color(0xFF2C3E50);

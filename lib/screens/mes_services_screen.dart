@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:careasy_app_mobile/utils/constants.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:careasy_app_mobile/screens/create_service_screen.dart';
+import 'package:careasy_app_mobile/screens/edit_service_screen.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
@@ -20,7 +22,11 @@ class MesServicesScreen extends StatefulWidget {
 
 class _MesServicesScreenState extends State<MesServicesScreen>
     with SingleTickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  // APRÈS
+final _storage = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
   List<dynamic> _services = [];
   bool _isLoading = true;
   late AnimationController _animCtrl;
@@ -200,12 +206,14 @@ class _MesServicesScreenState extends State<MesServicesScreen>
                     },
                   ),
                 ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.pushNamed(
-          context,
-          '/create-service',
-          arguments: widget.entreprise,
-        ).then((_) => _fetchServices()),
+        // APRÈS
+    floatingActionButton: FloatingActionButton.extended(
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CreateServiceScreen(entreprise: widget.entreprise),
+        ),
+      ).then((_) => _fetchServices()),
         backgroundColor: AppConstants.primaryRed,
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text('Nouveau service',
@@ -346,13 +354,15 @@ class _MesServicesScreenState extends State<MesServicesScreen>
 
                 // Bouton Modifier
                 OutlinedButton.icon(
-                  onPressed: () => Navigator.pushNamed(
+                  // APRÈS
+                  onPressed: () => Navigator.push(
                     context,
-                    '/edit-service',
-                    arguments: {
-                      'service': service,
-                      'entreprise': widget.entreprise,
-                    },
+                    MaterialPageRoute(
+                      builder: (_) => EditServiceScreen(
+                        service: service,
+                        entreprise: widget.entreprise,
+                      ),
+                    ),
                   ).then((_) => _fetchServices()),
                   icon: const Icon(Icons.edit_outlined, size: 14),
                   label: const Text('Modifier'),
