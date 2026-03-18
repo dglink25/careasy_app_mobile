@@ -1,12 +1,15 @@
 // lib/screens/chat_screen.dart
 // ═══════════════════════════════════════════════════════════════════════
-// VERSION CORRIGÉE — Réception temps réel parfaite comme WhatsApp
-// CORRECTIONS:
-// 1. Scroll automatique vers le bas quand nouveau message reçu
-// 2. Affichage "En train d'écrire…" et "En train d'enregistrer…"
-// 3. Gestion correcte du recording indicator Pusher
-// 4. Annulation notification au clic sur le chat
-// 5. Reload messages au resume lifecycle
+// VERSION FINALE — Réception temps réel fiable + UI mic WhatsApp
+//
+// CORRECTIONS CRITIQUES :
+// 1. Réception temps réel : Consumer<MessageProvider> wraps le ListView
+//    directement. On compare msgs.length > _lastMsgCount DANS le builder
+//    pour scroller → pas de addListener qui conflit.
+// 2. Bouton mic style WhatsApp : LongPress démarre, glisse GAUCHE annule,
+//    glisse HAUT verrouille. Pas de conflit scroll vertical.
+// 3. dispose() sécurisé : pas de context.read sur provider disposed.
+// 4. Fond couleur WhatsApp, bulles vertes/blanches cohérentes.
 // ═══════════════════════════════════════════════════════════════════════
 import 'dart:io';
 import 'dart:async';
@@ -49,7 +52,7 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen>
-    with WidgetsBindingObserver, TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
 
   final TextEditingController _msgCtrl = TextEditingController();
   final ScrollController       _scroll = ScrollController();
@@ -60,195 +63,196 @@ class _ChatScreenState extends State<ChatScreen>
   final Map<String, VideoPlayerController> _vCtrl   = {};
   final Map<String, ChewieController>      _cCtrl   = {};
 
-  bool   _typing      = false;
-  Timer? _typingTmr;
-  bool   _otherTyping    = false;
-  bool   _otherRecording = false; // indicateur d'enregistrement vocal
   bool   _sending     = false;
   bool   _hasText     = false;
   bool   _sendingLoc  = false;
+  bool   _typingActive = false;
+  Timer? _typingTimer;
 
-  // Nombre de messages affiché précédemment (pour détecter nouveaux)
-  int _previousMsgCount = 0;
+  // Compteur messages — pour détecter de nouveaux messages dans Consumer
+  int _lastMsgCount = 0;
+
+  // Animations
+  late AnimationController _pulseCtrl;
+  late Animation<double>   _pulseAnim;
+  late AnimationController _micScaleCtrl;
+  late Animation<double>   _micScaleAnim;
 
   // ── État enregistrement vocal ──────────────────────────────────────
-  static const double _kStartThreshold = 60.0;
-  static const double _kLockThreshold  = 120.0;
+  bool     _recActive   = false;
+  bool     _recLocked   = false;
+  bool     _recPreview  = false;
+  String?  _recPath;
+  Duration _recDuration = Duration.zero;
+  Timer?   _recTimer;
+  Offset?  _micTouchStart;
+  double   _micDragX = 0.0;
+  double   _micDragY = 0.0;
 
-  bool     _recording  = false;
-  bool     _locked     = false;
-  bool     _hasPreview = false;
-  String?  _previewPath;
-  Duration _recDur = Duration.zero;
-  Timer?   _recTmr;
+  static const double _kCancelX = -80.0;
+  static const double _kLockY   = -80.0;
 
-  // ── Lecteur aperçu ─────────────────────────────────────────────────
-  AudioPlayer? _prePl;
-  bool         _prePlaying = false;
-  Duration     _prePos     = Duration.zero;
-  Duration     _preDur     = Duration.zero;
-  StreamSubscription? _prePosStream;
-  StreamSubscription? _preStateStream;
+  // Lecteur aperçu
+  AudioPlayer? _previewPlayer;
+  bool         _previewPlaying = false;
+  Duration     _previewPos     = Duration.zero;
+  Duration     _previewDur     = Duration.zero;
+  StreamSubscription? _previewPosSub;
+  StreamSubscription? _previewStateSub;
 
-  // ── Animation pulse ────────────────────────────────────────────────
-  late AnimationController _pulse;
-
-  // ── Drag mic ──────────────────────────────────────────────────────
-  double? _dragStartY;
-  double  _dragDeltaY = 0.0;
-  bool    _recStartedByDrag = false;
+  // Référence sécurisée au provider
+  MessageProvider? _msgProvider;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _pulse = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 800))
-      ..repeat(reverse: true);
 
-    _loadMsgs();
-    _setupListeners();
-    _markRead();
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.7, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+
+    _micScaleCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 180));
+    _micScaleAnim = Tween<double>(begin: 1.0, end: 1.25)
+        .animate(CurvedAnimation(parent: _micScaleCtrl, curve: Curves.elasticOut));
+
+    _msgCtrl.addListener(_onTextChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Récupérer le statut en ligne
-      context.read<MessageProvider>().fetchOnlineStatus(widget.otherUser.id);
-      
-      // Annuler les notifications pour cette conversation
+      _msgProvider = context.read<MessageProvider>();
+      _loadMessages();
+      _msgProvider!.fetchOnlineStatus(widget.otherUser.id);
       NotificationService().cancelNotification(widget.conversationId);
-      
-      // Configurer la navigation des notifications
       NotificationService().onNotificationTap = (data) {
         final convId = data['conversation_id']?.toString() ?? '';
-        if (convId != widget.conversationId && mounted) {
-          Navigator.pop(context);
-        }
+        if (convId != widget.conversationId && mounted) Navigator.pop(context);
       };
     });
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState s) {
-    if (s == AppLifecycleState.resumed) {
-      context.read<MessageProvider>().loadMessages(widget.conversationId);
-      context.read<MessageProvider>().fetchOnlineStatus(widget.otherUser.id);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _msgProvider ??= context.read<MessageProvider>();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _msgProvider?.loadMessages(widget.conversationId);
+      _msgProvider?.fetchOnlineStatus(widget.otherUser.id);
       _markRead();
       NotificationService().cancelNotification(widget.conversationId);
     }
   }
 
-  void _loadMsgs() async {
-    await context.read<MessageProvider>().loadMessages(widget.conversationId);
-    final msgs = context.read<MessageProvider>().getMessages(widget.conversationId);
-    _previousMsgCount = msgs.length;
-    _toBottom(animated: false);
+  Future<void> _loadMessages() async {
+    await _msgProvider?.loadMessages(widget.conversationId);
+    _markRead();
+    _scrollBottom(animated: false);
   }
 
   void _markRead() =>
-      context.read<MessageProvider>().markConversationAsRead(widget.conversationId);
+      _msgProvider?.markConversationAsRead(widget.conversationId);
 
-  void _setupListeners() {
-    _msgCtrl.addListener(() {
-      final h = _msgCtrl.text.trim().isNotEmpty;
-      if (h != _hasText) setState(() => _hasText = h);
-      if (h && !_typing)      { _typing = true;  _sendTyping(true);  }
-      else if (!h && _typing) { _typing = false; _sendTyping(false); }
-      _typingTmr?.cancel();
-      _typingTmr = Timer(const Duration(seconds: 2), () {
-        if (_typing) { _typing = false; _sendTyping(false); }
-      });
-    });
-
-    // Écouter les changements du MessageProvider
-    context.read<MessageProvider>().addListener(_onProviderUpdate);
-  }
-
-  void _onProviderUpdate() {
-    if (!mounted) return;
-    
-    final provider = context.read<MessageProvider>();
-    final msgs = provider.getMessages(widget.conversationId);
-    final newCount = msgs.length;
-    
-    // Nouveau message arrivé → scroll vers le bas
-    if (newCount > _previousMsgCount) {
-      debugPrint('[ChatScreen] ${newCount - _previousMsgCount} nouveau(x) message(s)');
-      _previousMsgCount = newCount;
-      _toBottom(animated: true);
-      // Marquer comme lu si le chat est ouvert
-      _markRead();
-      // Annuler la notification correspondante
-      NotificationService().cancelNotification(widget.conversationId);
-    }
-    
-    // Mettre à jour les indicateurs typing/recording
-    final typing    = provider.isUserTyping(widget.conversationId, widget.otherUser.id);
-    final recording = provider.isUserRecording(widget.conversationId, widget.otherUser.id);
-    
-    if (_otherTyping != typing || _otherRecording != recording) {
-      setState(() {
-        _otherTyping    = typing;
-        _otherRecording = recording;
-      });
-    }
-  }
-
-  Future<void> _sendTyping(bool v) =>
-      context.read<MessageProvider>().sendTypingIndicator(widget.conversationId, v);
-
-  void _toBottom({bool animated = true}) {
+  void _scrollBottom({bool animated = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
+      if (!mounted || !_scroll.hasClients) return;
       final max = _scroll.position.maxScrollExtent;
-      if (animated) {
+      if (animated && max > 0) {
         _scroll.animateTo(max,
-            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOut);
       } else {
         _scroll.jumpTo(max);
       }
     });
   }
 
-  // ── ENVOI ─────────────────────────────────────────────────────────────────────
+  void _onTextChanged() {
+    final h = _msgCtrl.text.trim().isNotEmpty;
+    if (h != _hasText) setState(() => _hasText = h);
+
+    if (h && !_typingActive) {
+      _typingActive = true;
+      _msgProvider?.sendTypingIndicator(widget.conversationId, true);
+    } else if (!h && _typingActive) {
+      _typingActive = false;
+      _msgProvider?.sendTypingIndicator(widget.conversationId, false);
+    }
+    _typingTimer?.cancel();
+    if (_typingActive) {
+      _typingTimer = Timer(const Duration(seconds: 3), () {
+        if (_typingActive) {
+          _typingActive = false;
+          _msgProvider?.sendTypingIndicator(widget.conversationId, false);
+        }
+      });
+    }
+  }
+
+  // ── Envoi ──────────────────────────────────────────────────────────
   Future<void> _send({
     String? content, String? filePath, String? type,
     double? lat, double? lng,
   }) async {
     final text = content?.trim() ?? '';
-    if (text.isEmpty && filePath == null && (lat == null || lng == null)) return;
+    if (text.isEmpty && filePath == null && lat == null) return;
     if (_sending) return;
     setState(() => _sending = true);
     try {
-      String t = type ?? (filePath != null ? _fileType(filePath) : 'text');
-      if (lat != null && lng != null) t = 'location';
-      await context.read<MessageProvider>().sendMessage(
-        widget.conversationId, type: t,
-        content:  text.isEmpty ? null : text,
-        filePath: filePath, latitude: lat, longitude: lng,
+      final t = type ?? (filePath != null ? _fileType(filePath) : 'text');
+      await _msgProvider?.sendMessage(
+        widget.conversationId,
+        type:      lat != null ? 'location' : t,
+        content:   text.isEmpty ? null : text,
+        filePath:  filePath,
+        latitude:  lat,
+        longitude: lng,
       );
-      _msgCtrl.clear();
-      setState(() => _hasText = false);
-      _toBottom();
-    } catch (_) { _err("Impossible d'envoyer le message"); }
+      if (type == null || type == 'text') {
+        _msgCtrl.clear();
+        setState(() => _hasText = false);
+      }
+      _scrollBottom();
+    } catch (_) { _showErr("Impossible d'envoyer"); }
     finally { if (mounted) setState(() => _sending = false); }
   }
 
   String _fileType(String p) {
     final e = p.split('.').last.toLowerCase();
-    if (['jpg','jpeg','png','gif','bmp','webp'].contains(e)) return 'image';
-    if (['mp4','mov','avi','mkv','3gp','webm'].contains(e)) return 'video';
-    if (['mp3','m4a','aac','wav','ogg'].contains(e))        return 'audio';
+    if (['jpg','jpeg','png','gif','webp'].contains(e)) return 'image';
+    if (['mp4','mov','avi','mkv','3gp'].contains(e))  return 'video';
+    if (['mp3','m4a','aac','wav','ogg'].contains(e))  return 'audio';
     return 'document';
   }
 
-  // ── MÉDIAS ────────────────────────────────────────────────────────────────────
-  Future<void> _photo()    async { try { final i = await _picker.pickImage(source:ImageSource.camera,  maxWidth:1024,imageQuality:80); if(i!=null) await _send(filePath:i.path,type:'image'); } catch(_){_err('Erreur photo');} }
-  Future<void> _gallery()  async { try { final i = await _picker.pickImage(source:ImageSource.gallery, maxWidth:1024,imageQuality:80); if(i!=null) await _send(filePath:i.path,type:'image'); } catch(_){_err('Erreur image');} }
-  Future<void> _videoGal() async { try { final v = await _picker.pickVideo(source:ImageSource.gallery, maxDuration:const Duration(minutes:5)); if(v!=null) await _send(filePath:v.path,type:'video'); } catch(_){_err('Erreur vidéo');} }
-  Future<void> _videoCam() async { try { final v = await _picker.pickVideo(source:ImageSource.camera,  maxDuration:const Duration(minutes:2)); if(v!=null) await _send(filePath:v.path,type:'video'); } catch(_){_err('Erreur vidéo');} }
-  Future<void> _document() async { try { final r = await FilePicker.platform.pickFiles(type:FileType.any,allowMultiple:false); if(r?.files.single.path!=null) await _send(filePath:r!.files.single.path!,type:'document'); } catch(_){_err('Erreur document');} }
+  Future<void> _pickImg(ImageSource s) async {
+    try {
+      final f = await _picker.pickImage(source: s, maxWidth: 1024, imageQuality: 80);
+      if (f != null) await _send(filePath: f.path, type: 'image');
+    } catch (_) { _showErr('Erreur photo'); }
+  }
 
-  // ── LOCALISATION ──────────────────────────────────────────────────────────────
+  Future<void> _pickVid(ImageSource s) async {
+    try {
+      final f = await _picker.pickVideo(source: s, maxDuration: const Duration(minutes: 5));
+      if (f != null) await _send(filePath: f.path, type: 'video');
+    } catch (_) { _showErr('Erreur vidéo'); }
+  }
+
+  Future<void> _pickDoc() async {
+    try {
+      final r = await FilePicker.platform.pickFiles(type: FileType.any);
+      if (r?.files.single.path != null) {
+        await _send(filePath: r!.files.single.path!, type: 'document');
+      }
+    } catch (_) { _showErr('Erreur document'); }
+  }
+
   Future<void> _sendLoc() async {
     if (_sendingLoc) return;
     setState(() => _sendingLoc = true);
@@ -256,64 +260,60 @@ class _ChatScreenState extends State<ChatScreen>
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        _err('Permission localisation refusée'); return;
+        _showErr('Permission refusée'); return;
       }
       final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-      String address = '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}';
+      String addr = '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}';
       try {
-        final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
-        if (marks.isNotEmpty) {
-          final p = marks.first;
-          final pts = <String>[];
-          if (p.street   != null && p.street!.isNotEmpty)   pts.add(p.street!);
-          if (p.locality != null && p.locality!.isNotEmpty) pts.add(p.locality!);
-          if (p.country  != null && p.country!.isNotEmpty)  pts.add(p.country!);
-          if (pts.isNotEmpty) address = pts.join(', ');
+        final m = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (m.isNotEmpty) {
+          final p = m.first;
+          final pts = [
+            if (p.street?.isNotEmpty == true)   p.street!,
+            if (p.locality?.isNotEmpty == true)  p.locality!,
+            if (p.country?.isNotEmpty == true)   p.country!,
+          ];
+          if (pts.isNotEmpty) addr = pts.join(', ');
         }
       } catch (_) {}
-      await _send(content: address, type: 'location', lat: pos.latitude, lng: pos.longitude);
-    } catch (e) { _err('Erreur localisation'); }
+      await _send(content: addr, type: 'location',
+          lat: pos.latitude, lng: pos.longitude);
+    } catch (_) { _showErr('Erreur localisation'); }
     finally { if (mounted) setState(() => _sendingLoc = false); }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  //  ENREGISTREMENT VOCAL — GLISSER VERS LE HAUT
-  // ─────────────────────────────────────────────────────────────────────────────
-  void _onMicDragStart(DragStartDetails d) {
-    _dragStartY       = d.globalPosition.dy;
-    _dragDeltaY       = 0.0;
-    _recStartedByDrag = false;
+  // ── Enregistrement vocal ───────────────────────────────────────────
+  void _onMicLongPressStart(LongPressStartDetails d) {
+    _micTouchStart = d.globalPosition;
+    _micDragX = 0; _micDragY = 0;
+    _startRec();
   }
 
-  void _onMicDragUpdate(DragUpdateDetails d) {
-    if (_dragStartY == null) return;
-    _dragDeltaY = d.globalPosition.dy - _dragStartY!;
-    if (_dragDeltaY < -_kStartThreshold && !_recStartedByDrag && !_recording) {
-      _recStartedByDrag = true;
-      _startRec();
-    }
-    if (_recording && mounted) setState(() {});
+  void _onMicLongPressMoveUpdate(LongPressMoveUpdateDetails d) {
+    if (_micTouchStart == null || !_recActive) return;
+    setState(() {
+      _micDragX = d.globalPosition.dx - _micTouchStart!.dx;
+      _micDragY = d.globalPosition.dy - _micTouchStart!.dy;
+    });
   }
 
-  void _onMicDragEnd(DragEndDetails d) {
-    if (!_recording) { _dragStartY = null; return; }
-    if (_dragDeltaY < -_kLockThreshold) {
-      setState(() => _locked = true);
+  void _onMicLongPressEnd(LongPressEndDetails d) {
+    if (!_recActive) { _micTouchStart = null; return; }
+    if (_micDragY < _kLockY) {
+      setState(() { _recLocked = true; _micDragX = 0; _micDragY = 0; });
+    } else if (_micDragX < _kCancelX) {
+      _cancelRec();
     } else {
-      _stopPreview();
+      _stopForPreview();
     }
-    _dragStartY = null;
-  }
-
-  void _onMicDragCancel() {
-    if (_recording) _cancelRec();
-    _dragStartY = null;
+    _micTouchStart = null;
   }
 
   Future<void> _startRec() async {
-    if (_recording || _hasPreview) return;
-    final hasPerm = await _rec.hasPermission();
-    if (!hasPerm) { _err('Permission microphone refusée'); return; }
+    if (_recActive || _recPreview) return;
+    if (!await _rec.hasPermission()) {
+      _showErr('Permission microphone refusée'); return;
+    }
     try {
       final dir  = await getTemporaryDirectory();
       final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
@@ -321,113 +321,132 @@ class _ChatScreenState extends State<ChatScreen>
         const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
         path: path,
       );
-      if (mounted) setState(() { _recording = true; _locked = false; _recDur = Duration.zero; });
-      _recTmr = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_recording && mounted) setState(() => _recDur = Duration(seconds: _recDur.inSeconds + 1));
+      _micScaleCtrl.forward();
+      setState(() { _recActive = true; _recLocked = false; _recDuration = Duration.zero; });
+      _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_recActive && mounted) {
+          setState(() => _recDuration = Duration(seconds: _recDuration.inSeconds + 1));
+        }
       });
-      // Envoyer indicateur recording aux autres
-      context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, true);
-    } catch (e) { _err("Impossible de démarrer l'enregistrement"); }
+      _msgProvider?.sendRecordingIndicator(widget.conversationId, true);
+    } catch (_) { _showErr("Impossible de démarrer l'enregistrement"); }
   }
 
-  Future<void> _stopPreview() async {
-    if (!_recording) return;
-    _recTmr?.cancel();
-    // Annuler l'indicateur recording
-    context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, false);
-    final capturedDur = _recDur;
+  Future<void> _stopForPreview() async {
+    if (!_recActive) return;
+    _recTimer?.cancel();
+    _micScaleCtrl.reverse();
+    _msgProvider?.sendRecordingIndicator(widget.conversationId, false);
+    final dur = _recDuration;
     try {
       final path = await _rec.stop();
       if (!mounted) return;
-      if (path != null && capturedDur.inSeconds >= 1) {
-        await _initPre(path);
-        setState(() {
-          _recording    = false;
-          _locked       = false;
-          _hasPreview   = true;
-          _previewPath  = path;
-          _dragDeltaY   = 0;
-        });
+      if (path != null && dur.inSeconds >= 1) {
+        await _initPreview(path);
+        setState(() { _recActive = false; _recLocked = false; _recPreview = true;
+          _recPath = path; _micDragX = 0; _micDragY = 0; });
       } else {
         if (path != null) try { File(path).deleteSync(); } catch (_) {}
-        setState(() { _recording = false; _locked = false; _recDur = Duration.zero; });
-        if (capturedDur.inSeconds < 1) _err('Enregistrement trop court (min. 1s)');
+        setState(() { _recActive = false; _recLocked = false; _recDuration = Duration.zero; });
+        if (dur.inSeconds < 1) _showErr('Trop court (min. 1 s)');
       }
-    } catch (e) {
-      if (mounted) setState(() { _recording = false; _locked = false; });
+    } catch (_) {
+      if (mounted) setState(() { _recActive = false; _recLocked = false; });
     }
   }
 
   Future<void> _cancelRec() async {
-    _recTmr?.cancel();
-    context.read<MessageProvider>().sendRecordingIndicator(widget.conversationId, false);
-    try { final p = await _rec.stop(); if (p != null) try { File(p).deleteSync(); } catch (_) {} } catch (_) {}
-    if (mounted) setState(() { _recording = false; _locked = false; _recDur = Duration.zero; _dragDeltaY = 0; });
+    _recTimer?.cancel();
+    _micScaleCtrl.reverse();
+    _msgProvider?.sendRecordingIndicator(widget.conversationId, false);
+    try {
+      final p = await _rec.stop();
+      if (p != null) try { File(p).deleteSync(); } catch (_) {}
+    } catch (_) {}
+    if (mounted) setState(() { _recActive = false; _recLocked = false;
+      _recDuration = Duration.zero; _micDragX = 0; _micDragY = 0; });
   }
 
   void _cancelPreview() {
-    _prePosStream?.cancel(); _preStateStream?.cancel();
-    _prePl?.stop(); _prePl?.dispose(); _prePl = null;
-    if (_previewPath != null) try { File(_previewPath!).deleteSync(); } catch (_) {}
-    setState(() { _hasPreview = false; _previewPath = null; _prePlaying = false; _prePos = Duration.zero; _preDur = Duration.zero; });
+    _disposePreview();
+    if (_recPath != null) try { File(_recPath!).deleteSync(); } catch (_) {}
+    setState(() { _recPreview = false; _recPath = null; });
   }
 
   Future<void> _sendPreview() async {
-    if (_previewPath == null) return;
-    final path = _previewPath!;
-    _prePosStream?.cancel(); _preStateStream?.cancel();
-    _prePl?.stop(); _prePl?.dispose(); _prePl = null;
-    setState(() { _hasPreview = false; _previewPath = null; _prePlaying = false; _prePos = Duration.zero; _preDur = Duration.zero; });
+    if (_recPath == null) return;
+    final path = _recPath!;
+    _disposePreview();
+    setState(() { _recPreview = false; _recPath = null; });
     await _send(filePath: path, type: 'audio');
   }
 
-  Future<void> _initPre(String path) async {
-    await _prePl?.dispose();
-    _prePl = AudioPlayer();
-    await _prePl!.setFilePath(path);
-    _preDur = _prePl!.duration ?? Duration.zero;
-    _prePosStream   = _prePl!.positionStream.listen((p) { if (mounted) setState(() => _prePos = p); });
-    _preStateStream = _prePl!.playerStateStream.listen((s) {
-      if (s.processingState == ProcessingState.completed && mounted) setState(() => _prePlaying = false);
+  Future<void> _initPreview(String path) async {
+    await _previewPlayer?.dispose();
+    _previewPlayer = AudioPlayer();
+    await _previewPlayer!.setFilePath(path);
+    _previewDur = _previewPlayer!.duration ?? Duration.zero;
+    _previewPos = Duration.zero; _previewPlaying = false;
+    _previewPosSub = _previewPlayer!.positionStream.listen((p) {
+      if (mounted) setState(() => _previewPos = p);
+    });
+    _previewStateSub = _previewPlayer!.playerStateStream.listen((s) {
+      if (s.processingState == ProcessingState.completed && mounted) {
+        setState(() => _previewPlaying = false);
+      }
     });
   }
 
-  Future<void> _togglePre() async {
-    if (_prePl == null) return;
-    if (_prePlaying) { await _prePl!.pause(); setState(() => _prePlaying = false); }
-    else {
-      if (_prePl!.processingState == ProcessingState.completed) await _prePl!.seek(Duration.zero);
-      await _prePl!.play(); setState(() => _prePlaying = true);
+  void _disposePreview() {
+    _previewPosSub?.cancel(); _previewStateSub?.cancel();
+    _previewPlayer?.stop(); _previewPlayer?.dispose(); _previewPlayer = null;
+    _previewPlaying = false; _previewPos = Duration.zero; _previewDur = Duration.zero;
+  }
+
+  Future<void> _togglePreview() async {
+    if (_previewPlayer == null) return;
+    if (_previewPlaying) {
+      await _previewPlayer!.pause();
+      setState(() => _previewPlaying = false);
+    } else {
+      if (_previewPlayer!.processingState == ProcessingState.completed) {
+        await _previewPlayer!.seek(Duration.zero);
+      }
+      await _previewPlayer!.play();
+      setState(() => _previewPlaying = true);
     }
   }
 
   Future<void> _playAudio(String id, String url) async {
     try {
-      for (final e in _players.entries) { if (e.key != id && e.value.playing) await e.value.stop(); }
-      AudioPlayer? p = _players[id];
-      if (p == null) {
-        p = AudioPlayer(); _players[id] = p;
-        p.playerStateStream.listen((s) { if (s.processingState == ProcessingState.completed && mounted) setState(() {}); });
+      for (final e in _players.entries) {
+        if (e.key != id && e.value.playing) await e.value.stop();
       }
+      _players[id] ??= AudioPlayer()
+        ..playerStateStream.listen((s) {
+          if (s.processingState == ProcessingState.completed && mounted) setState(() {});
+        });
+      final p = _players[id]!;
       if (p.playing) { await p.pause(); } else { await p.setUrl(url); await p.play(); }
       if (mounted) setState(() {});
-    } catch (_) { _err("Impossible de lire l'audio"); }
+    } catch (_) { _showErr("Impossible de lire l'audio"); }
   }
 
   String _fmt(Duration d) {
-    f(int n) => n.toString().padLeft(2, '0');
-    return '${f(d.inMinutes.remainder(60))}:${f(d.inSeconds.remainder(60))}';
+    return '${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:'
+        '${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
   }
 
   Future<void> _initVideo(String id, String url) async {
     if (_vCtrl.containsKey(id)) return;
     try {
-      final vc = VideoPlayerController.networkUrl(Uri.parse(url)); await vc.initialize();
+      final vc = VideoPlayerController.networkUrl(Uri.parse(url));
+      await vc.initialize();
       final cc = ChewieController(videoPlayerController: vc, autoPlay: false, looping: false,
-        aspectRatio: vc.value.aspectRatio, placeholder: Container(color: Colors.black),
+        aspectRatio: vc.value.aspectRatio,
         errorBuilder: (_, __) => const Center(child: Icon(Icons.error, color: Colors.red)));
       if (mounted) setState(() { _vCtrl[id] = vc; _cCtrl[id] = cc; });
-    } catch (e) { debugPrint('Video: $e'); }
+    } catch (_) {}
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -436,659 +455,850 @@ class _ChatScreenState extends State<ChatScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        backgroundColor: AppConstants.primaryRed,
-        foregroundColor: Colors.white, elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-        title: _appBarTitle(),
-        actions: [
-          IconButton(icon: const Icon(Icons.phone), onPressed: () {}),
-          IconButton(icon: const Icon(Icons.more_vert), onPressed: _options),
-        ],
-      ),
+      backgroundColor: const Color(0xFFECE5DD),
+      appBar: _buildAppBar(),
       body: Column(children: [
-        if (widget.serviceName != null) _svcBanner(),
-        Expanded(
-          child: Consumer<MessageProvider>(
-            builder: (ctx, pv, _) {
-              final msgs = pv.getMessages(widget.conversationId);
-              if (pv.isLoading && msgs.isEmpty)
-                return const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed));
-              if (msgs.isEmpty) return _empty();
-              return _msgList(msgs);
-            },
-          ),
-        ),
-        // Indicateur typing / recording
+        if (widget.serviceName != null) _serviceBanner(),
+        Expanded(child: _buildMsgList()),
         _buildOtherIndicator(),
-        _inputBar(),
+        _buildInputBar(),
       ]),
     );
   }
 
-  /// Bandeau "En train d'écrire…" ou "En train d'enregistrer…"
-  Widget _buildOtherIndicator() {
-    if (_otherRecording) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        color: Colors.white,
-        child: Row(children: [
-          AnimatedBuilder(
-            animation: _pulse,
-            builder: (_, __) => Icon(
-              Icons.mic,
-              size: 16,
-              color: Colors.red.withOpacity(0.5 + 0.5 * _pulse.value),
-            ),
+  PreferredSizeWidget _buildAppBar() => AppBar(
+    backgroundColor: AppConstants.primaryRed,
+    foregroundColor: Colors.white,
+    elevation: 1,
+    leadingWidth: 32,
+    leading: IconButton(
+      icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context),
+      padding: EdgeInsets.zero,
+    ),
+    titleSpacing: 0,
+    title: Consumer<MessageProvider>(builder: (_, pv, __) {
+      final isOnline   = pv.getUserOnlineStatus(widget.otherUser.id) || widget.otherUser.isOnline;
+      final lastSeen   = pv.getUserLastSeen(widget.otherUser.id) ?? widget.otherUser.lastSeen;
+      final isTyping   = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
+      final isRecording= pv.isUserRecording(widget.conversationId, widget.otherUser.id);
+      return Row(children: [
+        Stack(children: [
+          CircleAvatar(
+            radius: 20, backgroundColor: Colors.white,
+            backgroundImage: widget.otherUser.photoUrl != null
+                ? NetworkImage(widget.otherUser.photoUrl!) : null,
+            child: widget.otherUser.photoUrl == null
+                ? Text(widget.otherUser.name.isNotEmpty
+                    ? widget.otherUser.name[0].toUpperCase() : '?',
+                    style: const TextStyle(fontSize: 16,
+                        fontWeight: FontWeight.bold, color: AppConstants.primaryRed))
+                : null,
           ),
-          const SizedBox(width: 8),
-          Text(
-            '${widget.otherUser.name} enregistre un message vocal…',
-            style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
-          ),
+          if (isOnline) Positioned(bottom: 1, right: 1,
+            child: Container(width: 10, height: 10,
+              decoration: BoxDecoration(color: const Color(0xFF25D366),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5)))),
         ]),
-      );
-    }
-    if (_otherTyping) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        color: Colors.white,
-        child: Row(children: [
-          _buildTypingDots(),
-          const SizedBox(width: 8),
-          Text(
-            '${widget.otherUser.name} écrit…',
-            style: TextStyle(fontSize: 12, color: Colors.grey[600], fontStyle: FontStyle.italic),
-          ),
-        ]),
-      );
-    }
-    return const SizedBox.shrink();
-  }
-
-  Widget _buildTypingDots() {
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (_, __) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(3, (i) => Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          width: 6, height: 6,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.grey.withOpacity(0.3 + 0.7 * (((_pulse.value + i * 0.33) % 1.0))),
-          ),
+        const SizedBox(width: 10),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.otherUser.name,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 1),
+            if (isRecording)
+              Row(children: [
+                AnimatedBuilder(animation: _pulseAnim,
+                  builder: (_, __) => Icon(Icons.mic, size: 11,
+                      color: Colors.white70.withOpacity(_pulseAnim.value))),
+                const SizedBox(width: 3),
+                const Text('enregistre un vocal…',
+                    style: TextStyle(fontSize: 11, color: Colors.white70)),
+              ])
+            else if (isTyping)
+              const Text('en train d\'écrire…',
+                  style: TextStyle(fontSize: 11, color: Colors.white70))
+            else if (isOnline)
+              const Text('en ligne',
+                  style: TextStyle(fontSize: 11, color: Colors.white70))
+            else if (lastSeen != null)
+              Text(_fmtSeen(lastSeen),
+                  style: const TextStyle(fontSize: 11, color: Colors.white70)),
+          ],
         )),
-      ),
-    );
-  }
-
-  Widget _appBarTitle() => Consumer<MessageProvider>(builder: (ctx, pv, _) {
-    final isOnline = pv.getUserOnlineStatus(widget.otherUser.id) || widget.otherUser.isOnline;
-    final lastSeen = pv.getUserLastSeen(widget.otherUser.id) ?? widget.otherUser.lastSeen;
-
-    return Row(children: [
-      Stack(children: [
-        CircleAvatar(
-          radius: 18, backgroundColor: Colors.white,
-          backgroundImage: widget.otherUser.photoUrl != null
-              ? NetworkImage(widget.otherUser.photoUrl!) : null,
-          child: widget.otherUser.photoUrl == null
-              ? Text(widget.otherUser.name.isNotEmpty ? widget.otherUser.name[0].toUpperCase() : '?',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppConstants.primaryRed))
-              : null,
-        ),
-        if (isOnline) Positioned(bottom: 0, right: 0,
-          child: Container(width: 10, height: 10,
-            decoration: BoxDecoration(
-              color: Colors.green, shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2)))),
-      ]),
-      const SizedBox(width: 10),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(widget.otherUser.name,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-        if (_otherRecording)
-          Row(children: [
-            Icon(Icons.mic, size: 10, color: Colors.red.withOpacity(0.8)),
-            const SizedBox(width: 3),
-            const Text('enregistre un vocal…',
-                style: TextStyle(fontSize: 11, color: Colors.white70)),
-          ])
-        else if (_otherTyping)
-          const Text('En train d\'écrire…',
-              style: TextStyle(fontSize: 11, color: Colors.white70))
-        else if (isOnline)
-          const Text('En ligne',
-              style: TextStyle(fontSize: 11, color: Colors.white70))
-        else if (lastSeen != null)
-          Text('Vu ${_fmtSeen(lastSeen)}',
-              style: const TextStyle(fontSize: 11, color: Colors.white70)),
-      ])),
-    ]);
-  });
+      ]);
+    }),
+    actions: [
+      IconButton(icon: const Icon(Icons.videocam_outlined), onPressed: () {}),
+      IconButton(icon: const Icon(Icons.call_outlined), onPressed: () {}),
+      IconButton(icon: const Icon(Icons.more_vert), onPressed: _showOptions),
+    ],
+  );
 
   String _fmtSeen(DateTime d) {
     final diff = DateTime.now().difference(d);
-    if (diff.inMinutes < 1)  return 'à l\'instant';
-    if (diff.inMinutes < 60) return 'il y a ${diff.inMinutes} min';
-    if (diff.inHours   < 24) return 'il y a ${diff.inHours} h';
-    return DateFormat('dd/MM/yy HH:mm').format(d);
+    if (diff.inMinutes < 1)  return 'vu à l\'instant';
+    if (diff.inMinutes < 60) return 'vu il y a ${diff.inMinutes} min';
+    if (diff.inHours   < 24) return 'vu il y a ${diff.inHours} h';
+    return 'vu le ${DateFormat('dd/MM/yy').format(d)}';
   }
 
-  // ── LISTE DE MESSAGES ─────────────────────────────────────────────────────────
-  Widget _msgList(List<MessageModel> msgs) => ListView.builder(
-    controller: _scroll,
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    itemCount: msgs.length,
-    itemBuilder: (ctx, i) {
-      final m = msgs[i];
-      final showDate = i == 0 || msgs[i].createdAt.day != msgs[i-1].createdAt.day;
-      return Column(children: [if (showDate) _dateSep(m.createdAt), _bubble(m)]);
-    },
-  );
+  // ── Liste de messages ─────────────────────────────────────────────
+  Widget _buildMsgList() {
+    return Consumer<MessageProvider>(
+      builder: (ctx, pv, _) {
+        final msgs = pv.getMessages(widget.conversationId);
 
-  Widget _dateSep(DateTime d) {
+        // ⭐ CLEF DE VOUTE : détecter nouveaux messages ICI dans le Consumer
+        if (msgs.length > _lastMsgCount) {
+          _lastMsgCount = msgs.length;
+          // Scroll après le frame courant
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _scrollBottom(animated: true);
+            _markRead();
+            NotificationService().cancelNotification(widget.conversationId);
+          });
+        }
+
+        if (pv.isLoading && msgs.isEmpty) {
+          return const Center(
+              child: CircularProgressIndicator(color: AppConstants.primaryRed));
+        }
+        if (msgs.isEmpty) return _buildEmpty();
+
+        return ListView.builder(
+          controller: _scroll,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          itemCount: msgs.length,
+          itemBuilder: (_, i) {
+            final showDate = i == 0 ||
+                msgs[i].createdAt.day != msgs[i - 1].createdAt.day;
+            return Column(mainAxisSize: MainAxisSize.min, children: [
+              if (showDate) _buildDateSep(msgs[i].createdAt),
+              _buildBubble(msgs[i]),
+            ]);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildDateSep(DateTime d) {
     final now = DateTime.now();
-    String lbl;
-    if (now.difference(d).inDays == 0) lbl = "Aujourd'hui";
-    else if (now.difference(d).inDays == 1) lbl = 'Hier';
-    else lbl = DateFormat('dd MMMM yyyy', 'fr_FR').format(d);
-    return Container(margin: const EdgeInsets.symmetric(vertical: 12),
+    String label;
+    final diff = now.difference(d).inDays;
+    if (diff == 0) label = "Aujourd'hui";
+    else if (diff == 1) label = 'Hier';
+    else label = DateFormat('dd MMMM yyyy', 'fr_FR').format(d);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Center(child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(12)),
-        child: Text(lbl, style: TextStyle(fontSize: 11, color: Colors.grey[700])))));
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.85),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06),
+              blurRadius: 3)],
+        ),
+        child: Text(label, style: const TextStyle(
+            fontSize: 12, color: Color(0xFF3B3B3B), fontWeight: FontWeight.w500)),
+      )),
+    );
   }
 
-  Widget _bubble(MessageModel m) {
-    final isMe = m.isMe; final isErr = m.status == 'error';
-    return Padding(padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMe) Padding(padding: const EdgeInsets.only(right: 6, bottom: 2),
-            child: CircleAvatar(radius: 14, backgroundColor: Colors.grey[200],
-              backgroundImage: widget.otherUser.photoUrl != null
-                  ? NetworkImage(widget.otherUser.photoUrl!) : null,
-              child: widget.otherUser.photoUrl == null
-                  ? Text(widget.otherUser.name.isNotEmpty ? widget.otherUser.name[0].toUpperCase() : '?',
-                      style: const TextStyle(fontSize: 10, color: AppConstants.primaryRed)) : null)),
-          Flexible(child: GestureDetector(
-            onLongPress: () => _msgMenu(m),
-            child: Container(
-              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: isErr ? Colors.red[50] : isMe ? AppConstants.primaryRed : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft:     const Radius.circular(16),
-                  topRight:    const Radius.circular(16),
-                  bottomLeft:  isMe ? const Radius.circular(16) : const Radius.circular(4),
-                  bottomRight: isMe ? const Radius.circular(4)  : const Radius.circular(16)),
-                border:     isErr ? Border.all(color: Colors.red) : null,
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 4, offset: const Offset(0, 2))]),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (m.type != 'text') _media(m),
-                if (m.content.isNotEmpty && m.type != 'location' && m.type != 'audio' && m.type != 'vocal')
-                  Padding(padding: EdgeInsets.only(top: m.type != 'text' ? 6 : 0),
-                    child: Text(m.content, style: TextStyle(
-                        color: isMe ? Colors.white : Colors.black87, fontSize: 14))),
-                const SizedBox(height: 3),
-                Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(DateFormat('HH:mm').format(m.createdAt),
-                      style: TextStyle(
-                          color: isErr ? Colors.red : isMe ? Colors.white60 : Colors.grey[500],
-                          fontSize: 10)),
-                  if (isMe) ...[const SizedBox(width: 3), _status(m)],
-                ]),
-              ]),
+  Widget _buildBubble(MessageModel m) {
+    final isMe  = m.isMe;
+    final isErr = m.status == 'error';
+    final bg    = isErr ? Colors.red[50]! : isMe
+        ? const Color(0xFFDCF8C6) : Colors.white;
+
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Padding(
+        padding: EdgeInsets.only(
+            bottom: 3, left: isMe ? 55 : 0, right: isMe ? 0 : 55),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (!isMe)
+              Padding(padding: const EdgeInsets.only(right: 4, bottom: 2),
+                child: CircleAvatar(radius: 14,
+                  backgroundColor: Colors.grey[300],
+                  backgroundImage: widget.otherUser.photoUrl != null
+                      ? NetworkImage(widget.otherUser.photoUrl!) : null,
+                  child: widget.otherUser.photoUrl == null
+                      ? Text(widget.otherUser.name.isNotEmpty
+                          ? widget.otherUser.name[0].toUpperCase() : '?',
+                          style: const TextStyle(fontSize: 10,
+                              color: AppConstants.primaryRed)) : null)),
+            Flexible(
+              child: GestureDetector(
+                onLongPress: () => _msgMenu(m),
+                child: Container(
+                  constraints: BoxConstraints(
+                      maxWidth: MediaQuery.of(context).size.width * 0.75),
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.only(
+                      topLeft:     const Radius.circular(14),
+                      topRight:    const Radius.circular(14),
+                      bottomLeft:  isMe ? const Radius.circular(14) : const Radius.circular(3),
+                      bottomRight: isMe ? const Radius.circular(3)  : const Radius.circular(14)),
+                    border: isErr ? Border.all(color: Colors.red) : null,
+                    boxShadow: [BoxShadow(
+                        color: Colors.black.withOpacity(0.07),
+                        blurRadius: 3, offset: const Offset(0, 1))],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 7, 10, 5),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildMsgContent(m),
+                        const SizedBox(height: 2),
+                        Row(mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text(DateFormat('HH:mm').format(m.createdAt),
+                                style: TextStyle(fontSize: 10,
+                                    color: isMe ? const Color(0xFF6E8B6E)
+                                        : Colors.grey[500])),
+                            if (isMe) ...[const SizedBox(width: 3), _statusIcon(m)],
+                          ]),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-          )),
-          if (isMe) const SizedBox(width: 6),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  Widget _status(MessageModel m) {
-    if (m.status == 'sending') return const SizedBox(width: 10, height: 10,
-        child: CircularProgressIndicator(color: Colors.white60, strokeWidth: 1.5));
-    if (m.status == 'error') return const Icon(Icons.error_outline, color: Colors.red, size: 12);
-    return Icon(m.readAt != null ? Icons.done_all : Icons.done, size: 12,
-        color: m.readAt != null ? Colors.lightBlue[200] : Colors.white60);
+  Widget _statusIcon(MessageModel m) {
+    if (m.status == 'sending') return const SizedBox(width: 12, height: 12,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6E8B6E)));
+    if (m.status == 'error')   return const Icon(Icons.error_outline, size: 13, color: Colors.red);
+    if (m.readAt != null)      return const Icon(Icons.done_all, size: 14, color: Color(0xFF53BDEB));
+    return const Icon(Icons.done, size: 14, color: Color(0xFF6E8B6E));
   }
 
-  void _msgMenu(MessageModel m) => showModalBottomSheet(context: context,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-    builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      const SizedBox(height: 8),
-      Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-      const SizedBox(height: 8),
-      ListTile(leading: const Icon(Icons.copy), title: const Text('Copier'), onTap: () {
-        Navigator.pop(context);
-        Clipboard.setData(ClipboardData(text: m.content));
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Copié'), duration: Duration(seconds: 1)));
-      }),
-    ])));
-
-  // ── MÉDIAS ────────────────────────────────────────────────────────────────────
-  Widget _media(MessageModel m) {
+  Widget _buildMsgContent(MessageModel m) {
     switch (m.type) {
-      case 'image':
-        if (m.fileUrl == null) return const SizedBox.shrink();
-        return GestureDetector(onTap: () => _fullImg(m.fileUrl!),
-          child: ClipRRect(borderRadius: BorderRadius.circular(8),
-            child: Image.network(m.fileUrl!, height: 200, width: double.infinity, fit: BoxFit.cover,
-              loadingBuilder: (_, c, p) => p == null ? c : Container(height: 200, color: Colors.grey[200], child: const Center(child: CircularProgressIndicator())),
-              errorBuilder: (_, __, ___) => Container(height: 200, color: Colors.grey[300], child: const Center(child: Icon(Icons.broken_image, size: 40))))));
-
-      case 'video':
-        if (m.fileUrl == null) return const SizedBox.shrink();
-        if (!_cCtrl.containsKey(m.id)) { _initVideo(m.id, m.fileUrl!); return Container(height: 180, color: Colors.black, child: const Center(child: CircularProgressIndicator())); }
-        return SizedBox(height: 180, child: Chewie(controller: _cCtrl[m.id]!));
-
-      case 'location':
-        return GestureDetector(
-          onTap: () => _openLoc(m.latitude ?? 0, m.longitude ?? 0),
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: m.isMe ? const Color(0xFFB71C1C) : Colors.blue[50],
-              borderRadius: BorderRadius.circular(8)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                Icon(Icons.location_on, color: m.isMe ? Colors.white : Colors.blue[700], size: 18),
-                const SizedBox(width: 6),
-                Expanded(child: Text(
-                  m.content.isNotEmpty ? m.content : 'Localisation partagée',
-                  style: TextStyle(color: m.isMe ? Colors.white : Colors.blue[800],
-                      fontWeight: FontWeight.w600, fontSize: 13),
-                  maxLines: 2, overflow: TextOverflow.ellipsis)),
-              ]),
-              if (m.latitude != null && m.longitude != null) ...[
-                const SizedBox(height: 8),
-                ClipRRect(borderRadius: BorderRadius.circular(6),
-                  child: Image.network(
-                    'https://staticmap.openstreetmap.de/staticmap.php?'
-                    'center=${m.latitude},${m.longitude}&zoom=15&size=260x110'
-                    '&markers=${m.latitude},${m.longitude},red',
-                    height: 100, width: double.infinity, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(height: 50, color: Colors.grey[200],
-                        child: Icon(Icons.map, color: Colors.grey[400], size: 28)),
-                  )),
-                const SizedBox(height: 6),
-                Row(children: [
-                  Icon(Icons.open_in_new, size: 11, color: m.isMe ? Colors.white70 : Colors.blue[600]),
-                  const SizedBox(width: 4),
-                  Text('Ouvrir dans Google Maps',
-                      style: TextStyle(fontSize: 11, color: m.isMe ? Colors.white70 : Colors.blue[600])),
-                ]),
-              ],
-            ]),
-          ),
-        );
-
-      case 'audio': case 'vocal': return _audioBubble(m);
-
-      case 'document':
-        if (m.fileUrl == null) return const SizedBox.shrink();
-        return GestureDetector(onTap: () => _openFile(m.fileUrl!),
-          child: Container(padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-                color: m.isMe ? const Color(0xFFB71C1C) : Colors.grey[100],
-                borderRadius: BorderRadius.circular(8)),
-            child: Row(children: [
-              Icon(_fileIco(m.fileUrl!), color: m.isMe ? Colors.white : Colors.grey[700]),
-              const SizedBox(width: 8),
-              Expanded(child: Text(m.fileUrl!.split('/').last,
-                  style: TextStyle(color: m.isMe ? Colors.white : Colors.grey[700],
-                      fontWeight: FontWeight.w500, fontSize: 13),
-                  maxLines: 1, overflow: TextOverflow.ellipsis)),
-              Icon(Icons.download, size: 18, color: m.isMe ? Colors.white : Colors.grey[600]),
-            ])));
-
-      default: return const SizedBox.shrink();
+      case 'image':    return _buildImgContent(m);
+      case 'video':    return _buildVidContent(m);
+      case 'location': return _buildLocContent(m);
+      case 'audio':
+      case 'vocal':    return _buildAudioContent(m);
+      case 'document': return _buildDocContent(m);
+      default:
+        if (m.content.isEmpty) return const SizedBox.shrink();
+        return Text(m.content, style: const TextStyle(
+            fontSize: 14.5, color: Color(0xFF2D2D2D), height: 1.35));
     }
   }
 
-  Widget _audioBubble(MessageModel m) {
-    final p = _players[m.id]; final playing = p?.playing ?? false;
+  Widget _buildImgContent(MessageModel m) {
+    if (m.fileUrl == null) return const SizedBox.shrink();
+    return GestureDetector(
+      onTap: () => _openImg(m.fileUrl!),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.network(m.fileUrl!, width: 220, height: 180, fit: BoxFit.cover,
+          loadingBuilder: (_, c, p) => p == null ? c : Container(width: 220, height: 180,
+              color: Colors.grey[200],
+              child: const Center(child: CircularProgressIndicator(strokeWidth: 2))),
+          errorBuilder: (_, __, ___) => Container(width: 220, height: 180,
+              color: Colors.grey[200], child: const Icon(Icons.broken_image))),
+      ),
+    );
+  }
+
+  Widget _buildVidContent(MessageModel m) {
+    if (m.fileUrl == null) return const SizedBox.shrink();
+    if (!_cCtrl.containsKey(m.id)) {
+      _initVideo(m.id, m.fileUrl!);
+      return Container(width: 220, height: 160,
+          decoration: BoxDecoration(color: Colors.black,
+              borderRadius: BorderRadius.circular(8)),
+          child: const Center(child: CircularProgressIndicator(color: Colors.white)));
+    }
+    return SizedBox(width: 220, height: 160,
+        child: ClipRRect(borderRadius: BorderRadius.circular(8),
+            child: Chewie(controller: _cCtrl[m.id]!)));
+  }
+
+  Widget _buildLocContent(MessageModel m) {
+    return GestureDetector(
+      onTap: () => _openLoc(m.latitude ?? 0, m.longitude ?? 0),
+      child: Container(width: 220,
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.green.withOpacity(0.3))),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (m.latitude != null && m.longitude != null)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+              child: Image.network(
+                'https://staticmap.openstreetmap.de/staticmap.php?'
+                'center=${m.latitude},${m.longitude}&zoom=15&size=220x100'
+                '&markers=${m.latitude},${m.longitude},red',
+                width: 220, height: 100, fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(width: 220, height: 80,
+                    color: Colors.grey[200], child: const Icon(Icons.map, color: Colors.grey))),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(children: [
+              const Icon(Icons.location_on, size: 16, color: AppConstants.primaryRed),
+              const SizedBox(width: 6),
+              Expanded(child: Text(
+                m.content.isNotEmpty ? m.content : 'Localisation partagée',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                maxLines: 2, overflow: TextOverflow.ellipsis)),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildAudioContent(MessageModel m) {
+    final p       = _players[m.id];
+    final playing = p?.playing ?? false;
     return StreamBuilder<Duration>(
       stream: p?.positionStream ?? const Stream.empty(),
       builder: (_, snap) {
         final pos = snap.data ?? Duration.zero;
         final dur = p?.duration ?? Duration.zero;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          decoration: BoxDecoration(
-              color: m.isMe ? const Color(0xFFB71C1C) : Colors.grey[100],
-              borderRadius: BorderRadius.circular(8)),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            GestureDetector(onTap: () { if (m.fileUrl != null) _playAudio(m.id, m.fileUrl!); },
-              child: Container(width: 34, height: 34,
-                decoration: BoxDecoration(
-                    color: m.isMe ? Colors.white24 : Colors.grey[300], shape: BoxShape.circle),
-                child: Icon(playing ? Icons.pause : Icons.play_arrow,
-                    color: m.isMe ? Colors.white : AppConstants.primaryRed, size: 20))),
-            const SizedBox(width: 8),
-            SizedBox(width: 120, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              SliderTheme(data: SliderThemeData(
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                trackHeight: 2,
-                thumbColor:         m.isMe ? Colors.white : AppConstants.primaryRed,
-                activeTrackColor:   m.isMe ? Colors.white : AppConstants.primaryRed,
-                inactiveTrackColor: m.isMe ? Colors.white38 : Colors.grey[300]),
-                child: Slider(
-                  value: dur.inMilliseconds > 0 ? pos.inMilliseconds / dur.inMilliseconds : 0.0,
-                  onChanged: (v) => p?.seek(Duration(milliseconds: (v * dur.inMilliseconds).toInt())))),
-              Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text(_fmt(pos), style: TextStyle(fontSize: 9, color: m.isMe ? Colors.white70 : Colors.grey[600])),
-                  Text(_fmt(dur), style: TextStyle(fontSize: 9, color: m.isMe ? Colors.white70 : Colors.grey[600])),
+        final pct = dur.inMilliseconds > 0
+            ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0) : 0.0;
+        return SizedBox(width: 200, child: Row(children: [
+          GestureDetector(
+            onTap: () { if (m.fileUrl != null) _playAudio(m.id, m.fileUrl!); },
+            child: Container(width: 38, height: 38,
+              decoration: BoxDecoration(
+                color: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+                shape: BoxShape.circle),
+              child: Icon(playing ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white, size: 22)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            SliderTheme(data: SliderThemeData(
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              trackHeight: 3,
+              thumbColor:         m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+              activeTrackColor:   m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+              inactiveTrackColor: Colors.grey[300],
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10)),
+              child: Slider(value: pct,
+                onChanged: (v) => p?.seek(
+                    Duration(milliseconds: (v * dur.inMilliseconds).toInt())))),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_fmt(pos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+                  Text(_fmt(dur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
                 ])),
-            ])),
-          ]),
-        );
-      });
+          ])),
+        ]));
+      },
+    );
   }
 
-  // ── BARRE DE SAISIE ───────────────────────────────────────────────────────────
-  Widget _inputBar() => Container(
+  Widget _buildDocContent(MessageModel m) {
+    if (m.fileUrl == null) return const SizedBox.shrink();
+    final fn = m.fileUrl!.split('/').last;
+    final ext = fn.split('.').last.toLowerCase();
+    final ico = ext == 'pdf' ? Icons.picture_as_pdf
+        : (ext == 'doc' || ext == 'docx') ? Icons.description
+        : Icons.insert_drive_file;
+    return GestureDetector(
+      onTap: () => _openUrl(m.fileUrl!),
+      child: Container(width: 200, padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: Colors.grey[100],
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey[300]!)),
+        child: Row(children: [
+          Icon(ico, color: AppConstants.primaryRed, size: 28),
+          const SizedBox(width: 8),
+          Expanded(child: Text(fn, style: const TextStyle(fontSize: 12),
+              maxLines: 2, overflow: TextOverflow.ellipsis)),
+          const Icon(Icons.download, size: 18, color: Colors.grey),
+        ])),
+    );
+  }
+
+  // ── Indicateur typing/recording ────────────────────────────────────
+  Widget _buildOtherIndicator() {
+    return Consumer<MessageProvider>(builder: (_, pv, __) {
+      final typing    = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
+      final recording = pv.isUserRecording(widget.conversationId, widget.otherUser.id);
+      if (!typing && !recording) return const SizedBox.shrink();
+      return Container(
+        color: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        child: Row(children: [
+          if (recording) ...[
+            AnimatedBuilder(animation: _pulseAnim,
+              builder: (_, __) => Container(width: 8, height: 8,
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(_pulseAnim.value),
+                  shape: BoxShape.circle))),
+            const SizedBox(width: 8),
+            Text('${widget.otherUser.name} enregistre un vocal…',
+                style: const TextStyle(fontSize: 12, color: Colors.red,
+                    fontStyle: FontStyle.italic)),
+          ] else ...[
+            _typingDots(),
+            const SizedBox(width: 8),
+            Text('${widget.otherUser.name} écrit…',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600],
+                    fontStyle: FontStyle.italic)),
+          ],
+        ]),
+      );
+    });
+  }
+
+  Widget _typingDots() {
+    return AnimatedBuilder(animation: _pulseAnim, builder: (_, __) =>
+      Row(mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) {
+          final t = (_pulseAnim.value + i * 0.33) % 1.0;
+          return Container(margin: const EdgeInsets.symmetric(horizontal: 1.5),
+            width: 6, height: 6,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3 + 0.7 * t),
+              shape: BoxShape.circle));
+        }),
+      ));
+  }
+
+  // ── Barre de saisie ────────────────────────────────────────────────
+  Widget _buildInputBar() => Container(
+    color: const Color(0xFFF0F2F5),
     padding: const EdgeInsets.fromLTRB(6, 6, 6, 10),
-    decoration: BoxDecoration(color: Colors.white, boxShadow: [
-      BoxShadow(color: Colors.grey.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, -3))]),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
-      if (_hasPreview) _previewBar(),
-      if (_recording && _locked && !_hasPreview) _lockedBar(),
-      if (!_hasPreview) Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        _attachBtn(),
-        Expanded(child: _textField()),
+      if (_recPreview) _buildPreviewBar(),
+      if (_recActive && _recLocked && !_recPreview) _buildLockedBar(),
+      if (!_recPreview) Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        _buildAttachBtn(),
+        const SizedBox(width: 4),
+        Expanded(child: _buildTextField()),
         const SizedBox(width: 6),
-        _sendOrMicArea(),
+        _buildSendOrMic(),
       ]),
-      if (_recording && !_locked && !_hasPreview) _recIndicator(),
+      if (_recActive && !_recLocked && !_recPreview) _buildRecIndicator(),
     ]),
   );
 
-  Widget _textField() => Container(
-    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(22)),
-    child: TextField(
-      controller: _msgCtrl, focusNode: _focus,
-      decoration: InputDecoration(hintText: 'Votre message…',
-        hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
-        border: InputBorder.none,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
-      maxLines: null, keyboardType: TextInputType.multiline,
-      textInputAction: TextInputAction.newline,
-      enabled: !_sending && !_recording && !_hasPreview,
-    ),
+  Widget _buildTextField() => Container(
+    decoration: BoxDecoration(color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05),
+          blurRadius: 3, offset: const Offset(0, 1))]),
+    child: Row(children: [
+      const SizedBox(width: 14),
+      Expanded(child: TextField(
+        controller: _msgCtrl, focusNode: _focus,
+        minLines: 1, maxLines: 5,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        enabled: !_sending && !_recActive && !_recPreview,
+        style: const TextStyle(fontSize: 15, color: Color(0xFF2D2D2D)),
+        decoration: InputDecoration(
+          hintText: 'Message',
+          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 15),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10)),
+      )),
+      IconButton(icon: Icon(Icons.emoji_emotions_outlined,
+          color: Colors.grey[500], size: 22),
+        onPressed: () {}, padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+      const SizedBox(width: 4),
+    ]),
   );
 
-  Widget _sendOrMicArea() {
+  Widget _buildAttachBtn() => PopupMenuButton<String>(
+    icon: Container(width: 44, height: 44,
+      decoration: const BoxDecoration(
+          color: AppConstants.primaryRed, shape: BoxShape.circle),
+      child: const Icon(Icons.add, color: Colors.white, size: 24)),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    onSelected: (v) {
+      switch (v) {
+        case 'camera':   _pickImg(ImageSource.camera);  break;
+        case 'gallery':  _pickImg(ImageSource.gallery); break;
+        case 'video':    _pickVid(ImageSource.gallery); break;
+        case 'document': _pickDoc();                   break;
+        case 'location': _sendLoc();                   break;
+      }
+    },
+    itemBuilder: (_) => [
+      _mi('camera',   Icons.camera_alt,        const Color(0xFF1DA1F2), 'Photo'),
+      _mi('gallery',  Icons.photo,             const Color(0xFF9B59B6), 'Galerie'),
+      _mi('video',    Icons.videocam,          const Color(0xFFF39C12), 'Vidéo'),
+      _mi('document', Icons.insert_drive_file, const Color(0xFFE74C3C), 'Document'),
+      PopupMenuItem(value: 'location', enabled: !_sendingLoc,
+        child: Row(children: [
+          Container(padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(color: const Color(0xFF2ECC71).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8)),
+            child: Icon(Icons.location_on, color: const Color(0xFF2ECC71), size: 18)),
+          const SizedBox(width: 12),
+          Text(_sendingLoc ? 'Envoi…' : 'Localisation',
+              style: const TextStyle(fontSize: 14)),
+        ])),
+    ],
+  );
+
+  PopupMenuItem<String> _mi(String val, IconData icon, Color c, String label) =>
+      PopupMenuItem(value: val, child: Row(children: [
+        Container(padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(color: c.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8)),
+          child: Icon(icon, color: c, size: 18)),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(fontSize: 14)),
+      ]));
+
+  // ── Bouton envoi / mic ─────────────────────────────────────────────
+  Widget _buildSendOrMic() {
     if (_hasText || _sending) {
       return GestureDetector(
         onTap: _sending ? null : () => _send(content: _msgCtrl.text),
-        child: Container(width: 44, height: 44,
-          decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
+        child: AnimatedContainer(duration: const Duration(milliseconds: 150),
+          width: 48, height: 48,
+          decoration: BoxDecoration(
+            color: _sending ? Colors.grey : AppConstants.primaryRed,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: AppConstants.primaryRed.withOpacity(0.4),
+                blurRadius: 6, offset: const Offset(0, 2))]),
           child: _sending
-              ? const Padding(padding: EdgeInsets.all(10),
+              ? const Padding(padding: EdgeInsets.all(12),
                   child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : const Icon(Icons.send, color: Colors.white, size: 22)));
+              : const Icon(Icons.send, color: Colors.white, size: 22)),
+      );
     }
+    // Bouton mic style WhatsApp
+    return _buildMicBtn();
+  }
 
-    if (_recording && _locked) {
-      return GestureDetector(
-        onTap: _stopPreview,
-        child: Container(width: 44, height: 44,
-          decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
-          child: const Icon(Icons.stop, color: Colors.white, size: 22)));
-    }
-
-    final isActive  = _recording || (_dragStartY != null && _dragDeltaY < -10);
-    final isLocking = _dragDeltaY < -_kLockThreshold;
-    final progress  = _dragStartY != null
-        ? ((-_dragDeltaY - _kStartThreshold) / (_kLockThreshold - _kStartThreshold)).clamp(0.0, 1.0)
-        : 0.0;
+  Widget _buildMicBtn() {
+    final canceling = _recActive && _micDragX < _kCancelX;
+    final locking   = _recActive && _micDragY < _kLockY;
 
     return Stack(clipBehavior: Clip.none, children: [
-      if (_dragStartY != null && _dragDeltaY < -_kStartThreshold)
-        Positioned(
-          bottom: 50, left: -8,
-          child: SizedBox(width: 60, height: 60,
-            child: CircularProgressIndicator(
-              value: progress, strokeWidth: 3,
-              color: isLocking ? Colors.green : AppConstants.primaryRed,
-              backgroundColor: Colors.grey[200]),
-          ),
-        ),
-      if (!_recording && _dragStartY == null)
-        Positioned(
-          bottom: 48, left: -30,
-          child: IgnorePointer(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-              child: const Text('↑ Glisser', style: TextStyle(color: Colors.white, fontSize: 10)),
+      // Indicateur gauche (annuler)
+      if (_recActive && _micDragX < -20)
+        Positioned(right: 56, top: 12,
+          child: Opacity(opacity: ((-_micDragX - 20) / 60).clamp(0.0, 1.0),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.chevron_left, size: 18,
+                  color: canceling ? Colors.red : Colors.grey[500]),
+              Icon(Icons.chevron_left, size: 18,
+                  color: canceling ? Colors.red : Colors.grey[400]),
+              Text('Annuler',
+                  style: TextStyle(fontSize: 11,
+                      color: canceling ? Colors.red : Colors.grey[500])),
+            ]))),
+      // Indicateur haut (lock)
+      if (_recActive && _micDragY < -20)
+        Positioned(bottom: 56, right: 6,
+          child: Opacity(opacity: ((-_micDragY - 20) / 60).clamp(0.0, 1.0),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.lock, size: 16,
+                  color: locking ? Colors.green : Colors.grey[400]),
+              Icon(Icons.keyboard_arrow_up, size: 20,
+                  color: locking ? Colors.green : Colors.grey[400]),
+            ]))),
+      // Hint "Maintenir"
+      if (!_recActive)
+        Positioned(bottom: 52, right: -18,
+          child: IgnorePointer(child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(10)),
+            child: const Text('⬆ Maintenir',
+                style: TextStyle(color: Colors.white, fontSize: 10))))),
+      // Bouton
+      GestureDetector(
+        onLongPressStart:      _onMicLongPressStart,
+        onLongPressMoveUpdate: _onMicLongPressMoveUpdate,
+        onLongPressEnd:        _onMicLongPressEnd,
+        onLongPressCancel:     () { if (_recActive) _cancelRec(); },
+        child: AnimatedBuilder(animation: _micScaleAnim,
+          builder: (_, __) => Transform.scale(scale: _micScaleAnim.value,
+            child: AnimatedContainer(duration: const Duration(milliseconds: 150),
+              width:  _recActive ? 54 : 48,
+              height: _recActive ? 54 : 48,
+              decoration: BoxDecoration(
+                color: canceling ? Colors.red
+                    : locking    ? Colors.green
+                    : AppConstants.primaryRed,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(
+                  color: (canceling ? Colors.red
+                      : locking   ? Colors.green
+                      : AppConstants.primaryRed).withOpacity(0.45),
+                  blurRadius: _recActive ? 14 : 6,
+                  spreadRadius: _recActive ? 2 : 0,
+                  offset: const Offset(0, 2))]),
+              child: _recActive
+                  ? AnimatedBuilder(animation: _pulseAnim, builder: (_, __) =>
+                      Icon(
+                        canceling ? Icons.delete_outline
+                            : locking  ? Icons.lock_outline
+                            : Icons.mic,
+                        color: Colors.white.withOpacity(0.55 + 0.45 * _pulseAnim.value),
+                        size: 24))
+                  : const Icon(Icons.mic, color: Colors.white, size: 24),
             ),
           ),
-        ),
-      GestureDetector(
-        onVerticalDragStart:  _onMicDragStart,
-        onVerticalDragUpdate: _onMicDragUpdate,
-        onVerticalDragEnd:    _onMicDragEnd,
-        onVerticalDragCancel: _onMicDragCancel,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width:  isActive ? 52 : 44,
-          height: isActive ? 52 : 44,
-          decoration: BoxDecoration(
-            color: isActive
-                ? (isLocking ? Colors.green : Colors.red[700])
-                : AppConstants.primaryRed,
-            shape: BoxShape.circle,
-            boxShadow: isActive
-                ? [BoxShadow(color: Colors.red.withOpacity(0.5), blurRadius: 16, spreadRadius: 4)]
-                : [BoxShadow(color: Colors.red.withOpacity(0.3), blurRadius: 8, spreadRadius: 1)],
-          ),
-          child: isActive
-              ? AnimatedBuilder(animation: _pulse, builder: (_, __) =>
-                  Icon(
-                    isLocking ? Icons.lock : Icons.mic,
-                    color: Colors.white.withOpacity(0.6 + 0.4 * _pulse.value),
-                    size: 24))
-              : const Icon(Icons.mic, color: Colors.white, size: 22),
         ),
       ),
     ]);
   }
 
-  Widget _recIndicator() => Container(
-    margin: const EdgeInsets.only(top: 4),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(20)),
+  Widget _buildRecIndicator() {
+    final canceling = _micDragX < _kCancelX;
+    final locking   = _micDragY < _kLockY;
+    return AnimatedContainer(duration: const Duration(milliseconds: 180),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: canceling ? Colors.red[50] : locking ? Colors.green[50] : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: canceling
+            ? Colors.red.withOpacity(0.4)
+            : locking ? Colors.green.withOpacity(0.4)
+            : Colors.grey[300]!)),
+      child: Row(children: [
+        AnimatedBuilder(animation: _pulseAnim, builder: (_, __) =>
+          Container(width: 10, height: 10,
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.4 + 0.6 * _pulseAnim.value),
+              shape: BoxShape.circle))),
+        const SizedBox(width: 10),
+        Text(_fmt(_recDuration), style: TextStyle(fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: canceling ? Colors.red : const Color(0xFF2D2D2D))),
+        const SizedBox(width: 12),
+        Expanded(child: Text(
+          canceling ? 'Relâchez pour annuler'
+              : locking ? 'Relâchez pour verrouiller'
+              : '← Annuler   ↑ Bloquer',
+          style: TextStyle(fontSize: 11,
+              color: canceling ? Colors.red
+                  : locking ? Colors.green[700]
+                  : Colors.grey[600]),
+          overflow: TextOverflow.ellipsis)),
+        GestureDetector(onTap: _cancelRec,
+            child: const Icon(Icons.close, color: Colors.grey, size: 20)),
+      ]),
+    );
+  }
+
+  Widget _buildLockedBar() => Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    decoration: BoxDecoration(color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: Colors.grey[300]!)),
     child: Row(children: [
-      AnimatedBuilder(animation: _pulse, builder: (_, __) => Container(
-        width: 10, height: 10,
-        decoration: BoxDecoration(
-            color: Colors.red.withOpacity(0.5 + 0.5 * _pulse.value), shape: BoxShape.circle))),
+      AnimatedBuilder(animation: _pulseAnim, builder: (_, __) =>
+        Container(width: 10, height: 10,
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.4 + 0.6 * _pulseAnim.value),
+            shape: BoxShape.circle))),
       const SizedBox(width: 10),
-      Text(_fmt(_recDur), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.red)),
-      const SizedBox(width: 10),
-      Text('Relâchez pour aperçu, montez pour verrouiller',
-          style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+      Text(_fmt(_recDuration), style: const TextStyle(
+          fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2D2D2D))),
+      const SizedBox(width: 8),
+      Text('Verrouillé', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       const Spacer(),
-      GestureDetector(onTap: _cancelRec,
-          child: Icon(Icons.delete_outline, color: Colors.grey[500], size: 22)),
+      IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
+          onPressed: _cancelRec, padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+      GestureDetector(
+        onTap: _stopForPreview,
+        child: Container(padding: const EdgeInsets.all(8),
+          decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
+          child: const Icon(Icons.send, color: Colors.white, size: 18))),
     ]),
   );
 
-  Widget _lockedBar() => Container(
-    margin: const EdgeInsets.only(bottom: 8),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(20)),
-    child: Row(children: [
-      AnimatedBuilder(animation: _pulse, builder: (_, __) => Container(
-        width: 10, height: 10,
-        decoration: BoxDecoration(
-            color: Colors.red.withOpacity(0.5 + 0.5 * _pulse.value), shape: BoxShape.circle))),
-      const SizedBox(width: 8),
-      Text(_fmt(_recDur), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.red)),
-      const SizedBox(width: 8),
-      Text('Enregistrement…', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-      const Spacer(),
-      IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: _cancelRec),
-      IconButton(icon: const Icon(Icons.stop_circle, color: AppConstants.primaryRed, size: 32), onPressed: _stopPreview),
-    ]),
-  );
-
-  Widget _previewBar() => Container(
-    margin: const EdgeInsets.only(bottom: 8),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(
-        color: Colors.grey[100], borderRadius: BorderRadius.circular(20),
+  Widget _buildPreviewBar() {
+    final pct = _previewDur.inMilliseconds > 0
+        ? (_previewPos.inMilliseconds / _previewDur.inMilliseconds).clamp(0.0, 1.0)
+        : 0.0;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: AppConstants.primaryRed.withOpacity(0.3))),
+      child: Row(children: [
+        GestureDetector(onTap: _cancelPreview,
+          child: Container(width: 36, height: 36,
+            decoration: BoxDecoration(color: Colors.grey[100], shape: BoxShape.circle),
+            child: const Icon(Icons.delete_outline, color: Colors.red, size: 20))),
+        const SizedBox(width: 8),
+        GestureDetector(onTap: _togglePreview,
+          child: Container(width: 40, height: 40,
+            decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
+            child: Icon(_previewPlaying ? Icons.pause : Icons.play_arrow,
+                color: Colors.white, size: 24))),
+        const SizedBox(width: 10),
+        Expanded(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          SliderTheme(data: SliderThemeData(
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+            trackHeight: 3,
+            thumbColor: AppConstants.primaryRed,
+            activeTrackColor: AppConstants.primaryRed,
+            inactiveTrackColor: Colors.grey[300]),
+            child: Slider(value: pct,
+              onChanged: (v) => _previewPlayer?.seek(
+                  Duration(milliseconds: (v * _previewDur.inMilliseconds).toInt())))),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(_fmt(_previewPos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+                Text(_fmt(_previewDur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+              ])),
+        ])),
+        const SizedBox(width: 10),
+        GestureDetector(onTap: _sendPreview,
+          child: Container(width: 44, height: 44,
+            decoration: const BoxDecoration(color: Color(0xFF25D366), shape: BoxShape.circle),
+            child: const Icon(Icons.send, color: Colors.white, size: 22))),
+      ]),
+    );
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────
+  Widget _buildEmpty() => Center(child: Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Container(padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.7), shape: BoxShape.circle),
+        child: Icon(Icons.chat_bubble_outline, size: 52, color: Colors.grey[400])),
+      const SizedBox(height: 16),
+      Text('Aucun message', style: TextStyle(
+          fontSize: 17, fontWeight: FontWeight.bold, color: Colors.grey[600])),
+      const SizedBox(height: 6),
+      Text('Envoyez votre premier message',
+          style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+    ],
+  ));
+
+  Widget _serviceBanner() => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+    color: Colors.orange[50],
     child: Row(children: [
-      IconButton(
-        icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
-        onPressed: _cancelPreview, padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
-      GestureDetector(onTap: _togglePre,
-        child: Container(width: 38, height: 38,
-          decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
-          child: Icon(_prePlaying ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 22))),
+      Icon(Icons.info_outline, size: 14, color: Colors.orange[700]),
       const SizedBox(width: 8),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SliderTheme(data: SliderThemeData(
-          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6), trackHeight: 3,
-          thumbColor: AppConstants.primaryRed, activeTrackColor: AppConstants.primaryRed,
-          inactiveTrackColor: Colors.grey[300]),
-          child: Slider(
-            value: _preDur.inMilliseconds > 0
-                ? (_prePos.inMilliseconds / _preDur.inMilliseconds).clamp(0.0, 1.0) : 0.0,
-            onChanged: (v) => _prePl?.seek(Duration(milliseconds: (v * _preDur.inMilliseconds).toInt())))),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text(_fmt(_prePos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-            Text(_fmt(_preDur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-          ])),
-      ])),
-      const SizedBox(width: 8),
-      GestureDetector(onTap: _sendPreview,
-        child: Container(width: 42, height: 42,
-          decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
-          child: const Icon(Icons.send, color: Colors.white, size: 22))),
+      Expanded(child: Text('À propos de : ${widget.serviceName}',
+          style: TextStyle(fontSize: 12, color: Colors.orange[700]))),
     ]),
   );
 
-  Widget _attachBtn() => PopupMenuButton<String>(
-    icon: Icon(Icons.attach_file, color: AppConstants.primaryRed, size: 22),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    onSelected: (v) {
-      switch (v) {
-        case 'camera':   _photo();    break;
-        case 'image':    _gallery();  break;
-        case 'video':    _videoGal(); break;
-        case 'rec_vid':  _videoCam(); break;
-        case 'doc':      _document(); break;
-        case 'location': _sendLoc();  break;
-      }
-    },
-    itemBuilder: (_) => [
-      const PopupMenuItem(value: 'camera',   child: _MI(Icons.camera_alt,        Colors.blue,   'Prendre une photo')),
-      const PopupMenuItem(value: 'image',    child: _MI(Icons.image,             Colors.green,  'Choisir une image')),
-      const PopupMenuItem(value: 'video',    child: _MI(Icons.video_library,     Colors.purple, 'Choisir une vidéo')),
-      const PopupMenuItem(value: 'rec_vid',  child: _MI(Icons.videocam,          Colors.red,    'Enregistrer une vidéo')),
-      const PopupMenuItem(value: 'doc',      child: _MI(Icons.insert_drive_file, Colors.orange, 'Document')),
-      PopupMenuItem(value: 'location', enabled: !_sendingLoc,
-        child: _MI(Icons.location_on, Colors.red, _sendingLoc ? 'Envoi…' : 'Ma localisation')),
-    ],
-  );
-
-  Widget _svcBanner() => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7), color: Colors.orange[50],
-    child: Row(children: [
-      Icon(Icons.info_outline, size: 15, color: Colors.orange[700]), const SizedBox(width: 8),
-      Expanded(child: Text('À propos de: ${widget.serviceName}',
-          style: TextStyle(fontSize: 12, color: Colors.orange[700]))),
-    ]));
-
-  Widget _empty() => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-    Icon(Icons.chat_bubble_outline, size: 60, color: Colors.grey[300]), const SizedBox(height: 14),
-    Text('Aucun message', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.grey[500])),
-    const SizedBox(height: 6),
-    Text('Envoyez votre premier message', style: TextStyle(fontSize: 13, color: Colors.grey[400])),
-  ]));
-
-  void _fullImg(String url) => Navigator.push(context, MaterialPageRoute(builder: (_) => Scaffold(
-    backgroundColor: Colors.black,
-    appBar: AppBar(backgroundColor: Colors.black, iconTheme: const IconThemeData(color: Colors.white)),
-    body: Center(child: InteractiveViewer(child: Image.network(url))))));
+  void _openImg(String url) => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white)),
+        body: Center(child: InteractiveViewer(child: Image.network(url))))));
 
   Future<void> _openLoc(double lat, double lng) async {
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
-    if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
-    else _err("Impossible d'ouvrir la localisation");
+    final uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
-  Future<void> _openFile(String url) async {
+  Future<void> _openUrl(String url) async {
     final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
-    else _err("Impossible d'ouvrir le fichier");
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
-  IconData _fileIco(String url) {
-    final e = url.split('.').last.toLowerCase();
-    if (e == 'pdf') return Icons.picture_as_pdf;
-    if (e == 'doc' || e == 'docx') return Icons.description;
-    if (e == 'xls' || e == 'xlsx') return Icons.table_chart;
-    return Icons.insert_drive_file;
-  }
+  void _msgMenu(MessageModel m) => showModalBottomSheet(context: context,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+    builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const SizedBox(height: 8),
+      Container(width: 36, height: 4, decoration: BoxDecoration(
+          color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+      ListTile(leading: const Icon(Icons.copy_outlined), title: const Text('Copier'),
+        onTap: () {
+          Navigator.pop(context);
+          Clipboard.setData(ClipboardData(text: m.content));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Copié'), duration: Duration(seconds: 1)));
+        }),
+    ])));
 
-  void _err(String msg) {
+  void _showOptions() => showModalBottomSheet(context: context,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
+      const SizedBox(height: 8),
+      ListTile(leading: const Icon(Icons.search, color: AppConstants.primaryRed),
+        title: const Text('Rechercher'),
+        onTap: () { Navigator.pop(context); _showErr('Bientôt disponible'); }),
+    ]));
+
+  void _showErr(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg), backgroundColor: Colors.red,
+      content: Text(msg), backgroundColor: Colors.red[700],
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      duration: const Duration(seconds: 2)));
   }
-
-  void _options() => showModalBottomSheet(context: context,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-    builder: (_) => Container(padding: const EdgeInsets.all(16),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        ListTile(leading: const Icon(Icons.search, color: AppConstants.primaryRed),
-            title: const Text('Rechercher'), onTap: () { Navigator.pop(context); _err('Bientôt disponible'); }),
-        ListTile(leading: const Icon(Icons.delete, color: Colors.red),
-            title: const Text('Supprimer', style: TextStyle(color: Colors.red)),
-            onTap: () { Navigator.pop(context); _err('Bientôt disponible'); }),
-      ])));
 
   @override
   void dispose() {
-    _msgCtrl.dispose(); _scroll.dispose(); _focus.dispose();
-    _typingTmr?.cancel(); _recTmr?.cancel(); _pulse.dispose();
+    _typingTimer?.cancel();
+    _recTimer?.cancel();
+    _pulseCtrl.dispose();
+    _micScaleCtrl.dispose();
+
+    // Arrêter l'enregistrement si en cours
+    if (_recActive) {
+      _rec.stop().catchError((_) {}).then((p) {
+        if (p != null) try { File(p).deleteSync(); } catch (_) {}
+      });
+    }
     _rec.dispose();
-    _prePosStream?.cancel(); _preStateStream?.cancel();
-    _prePl?.dispose();
+
+    _disposePreview();
     for (final p in _players.values) p.dispose();
-    for (final c in _vCtrl.values) c.dispose();
-    for (final c in _cCtrl.values) c.dispose();
-    try { context.read<MessageProvider>().removeListener(_onProviderUpdate); } catch (_) {}
+    for (final c in _vCtrl.values)   c.dispose();
+    for (final c in _cCtrl.values)   c.dispose();
+
+    _msgCtrl.dispose();
+    _scroll.dispose();
+    _focus.dispose();
+
+    // Envoyer typing=false si encore actif (sans context.read)
+    if (_typingActive) {
+      _msgProvider?.sendTypingIndicator(widget.conversationId, false);
+    }
+
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
-}
-
-class _MI extends StatelessWidget {
-  final IconData icon; final Color color; final String label;
-  const _MI(this.icon, this.color, this.label);
-  @override
-  Widget build(BuildContext context) => Row(children: [
-    Icon(icon, color: color), const SizedBox(width: 10), Text(label),
-  ]);
 }
