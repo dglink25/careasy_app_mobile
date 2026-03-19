@@ -1,4 +1,4 @@
-
+// lib/main.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -28,13 +28,21 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Initialiser Firebase (requis pour FCM)
   try {
     await Firebase.initializeApp();
+    // ⚠️ Obligatoire: enregistrer le handler AVANT de lancer l'app
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-  } catch (e) { debugPrint('Firebase init: $e'); }
+  } catch (e) {
+    debugPrint('Firebase init: $e');
+  }
 
-  try { await NotificationService().initialize(); }
-  catch (e) { debugPrint('NotificationService init: $e'); }
+  // Initialiser le service de notifications
+  try {
+    await NotificationService().initialize();
+  } catch (e) {
+    debugPrint('NotificationService init: $e');
+  }
 
   runApp(const CarEasyApp());
 }
@@ -46,7 +54,9 @@ class CarEasyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()..loadUserData()),
+        ChangeNotifierProvider(
+          create: (_) => AuthProvider()..loadUserData(),
+        ),
         ChangeNotifierProvider(create: (_) => MessageProvider()),
         ChangeNotifierProvider(create: (_) => ServiceProvider()),
       ],
@@ -57,15 +67,16 @@ class CarEasyApp extends StatelessWidget {
         navigatorKey: navigatorKey,
         home: const SplashScreen(),
         routes: {
-          '/welcome':  (_) => const WelcomeScreen(),
-          '/login':    (_) => const LoginScreen(),
+          '/welcome' : (_) => const WelcomeScreen(),
+          '/login'   : (_) => const LoginScreen(),
           '/register': (_) => const RegisterScreen(),
-          '/home':     (_) => const HomeScreen(),
+          '/home'    : (_) => const HomeScreen(),
           '/messages': (_) => const MessagesScreen(),
         },
         onGenerateRoute: (settings) {
           if (settings.name?.startsWith('/messages') == true) {
-            return MaterialPageRoute(builder: (_) => const MessagesScreen());
+            return MaterialPageRoute(
+                builder: (_) => const MessagesScreen());
           }
           return null;
         },
@@ -74,74 +85,77 @@ class CarEasyApp extends StatelessWidget {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// NAVIGATION DEPUIS UNE NOTIFICATION PUSH
+// Appelé depuis ChatScreen, MessagesScreen, SplashScreen après init
+// ═══════════════════════════════════════════════════════════════════════
 void setupNotificationNavigation(BuildContext context) {
   NotificationService().onNotificationTap = (Map<String, dynamic> data) async {
-    final convId    = data['conversation_id']?.toString() ?? '';
-    final senderName = data['sender_name']?.toString() ?? 'Contact';
+    final convId      = data['conversation_id']?.toString() ?? '';
+    final senderName  = data['sender_name']?.toString()     ?? 'Contact';
     final senderPhoto = data['sender_photo']?.toString();
-    final senderId   = data['sender_id']?.toString() ?? '';
+    final senderId    = data['sender_id']?.toString()        ?? '';
 
     if (convId.isEmpty) {
-      // Pas de conv_id → ouvrir la liste des messages
+      // Ouvrir la liste des messages
       navigatorKey.currentState?.pushNamedAndRemoveUntil(
           '/messages', (r) => r.isFirst);
       return;
     }
 
-    // Récupérer les infos de la conversation pour ouvrir le bon chat
-    try {
-      final storage = const FlutterSecureStorage(
-        aOptions: AndroidOptions(encryptedSharedPreferences: true),
-        iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
-      );
-      final token = await storage.read(key: 'auth_token');
-      
-      if (token == null || token.isEmpty) {
-        navigatorKey.currentState?.pushNamedAndRemoveUntil(
-            '/messages', (r) => r.isFirst);
-        return;
-      }
+    // Construire l'objet UserModel pour l'autre utilisateur
+    UserModel otherUser = UserModel(
+      id      : senderId.isNotEmpty ? senderId : convId,
+      name    : senderName,
+      photoUrl: (senderPhoto?.isNotEmpty == true) ? senderPhoto : null,
+      isOnline: false,
+    );
 
-      // Essayer de récupérer les détails de la conversation
-      UserModel otherUser = UserModel(
-        id:       senderId.isNotEmpty ? senderId : convId,
-        name:     senderName,
-        photoUrl: senderPhoto?.isNotEmpty == true ? senderPhoto : null,
-        isOnline: false,
-      );
-
-      // Si on a le sender_id, essayer de charger son profil
-      if (senderId.isNotEmpty) {
-        try {
+    // Essayer de récupérer des données fraîches si on a le senderId
+    if (senderId.isNotEmpty) {
+      try {
+        const storage = FlutterSecureStorage(
+          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          iOptions: IOSOptions(
+            accessibility: KeychainAccessibility.first_unlock,
+          ),
+        );
+        final token = await storage.read(key: 'auth_token');
+        if (token != null && token.isNotEmpty) {
           final resp = await http.get(
-            Uri.parse('${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
-            headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept'       : 'application/json',
+            },
           ).timeout(const Duration(seconds: 5));
-          
+
           if (resp.statusCode == 200) {
             final userData = jsonDecode(resp.body) as Map<String, dynamic>;
-            // Mettre à jour avec les données fraîches si disponibles
+            final isOnline = userData['is_online'] == true;
+            otherUser = UserModel(
+              id      : senderId,
+              name    : senderName,
+              photoUrl: senderPhoto?.isNotEmpty == true ? senderPhoto : null,
+              isOnline: isOnline,
+            );
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
+    }
 
-      // Naviguer directement vers le ChatScreen
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(
-          builder: (ctx) => ChangeNotifierProvider.value(
-            value: navigatorKey.currentContext!.read<MessageProvider>(),
-            child: ChatScreen(
-              conversationId: convId,
-              otherUser:      otherUser,
-            ),
+    // Naviguer vers le ChatScreen
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (ctx) => ChangeNotifierProvider.value(
+          value: navigatorKey.currentContext!.read<MessageProvider>(),
+          child: ChatScreen(
+            conversationId: convId,
+            otherUser     : otherUser,
           ),
         ),
-      );
-    } catch (e) {
-      debugPrint('[NotifNav] Erreur navigation: $e');
-      // Fallback : ouvrir la liste des messages
-      navigatorKey.currentState?.pushNamedAndRemoveUntil(
-          '/messages', (r) => r.isFirst);
-    }
+      ),
+    );
   };
 }

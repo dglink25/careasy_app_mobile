@@ -173,7 +173,7 @@ class _NotificationsSettingsScreenState
       await Future.delayed(const Duration(milliseconds: 500));
       await NotificationService().showNotification(
         id:    999,
-        title: 'Son de notification 🔔',
+        title: 'Son de notification',
         body:  'Son sélectionné : $soundLabel',
       );
 

@@ -1,13 +1,4 @@
-// lib/services/pusher_service.dart
-// ═══════════════════════════════════════════════════════════════════════
-// VERSION CORRIGÉE — Réception temps réel fiable
-// CORRECTIONS:
-// 1. Reconnexion automatique après déconnexion (backoff exponentiel)
-// 2. Gestion du recording indicator (vocal en cours)
-// 3. Logs détaillés pour debugging
-// 4. Pas de double souscription / double message
-// 5. Préservation du lat/lng et type audio dans confirmMessage
-// ═══════════════════════════════════════════════════════════════════════
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -23,9 +14,12 @@ class PusherService {
   factory PusherService() => _instance;
   PusherService._internal();
 
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-
+  static const _androidOptions = AndroidOptions(
+    encryptedSharedPreferences: true,
+  );
+  static const _iOSOptions = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
+  );
   final _storage = const FlutterSecureStorage(
     aOptions: _androidOptions,
     iOptions: _iOSOptions,
@@ -36,15 +30,16 @@ class PusherService {
   bool    _isConnecting   = false;
   String? _currentUserId;
 
-  // Canaux
+  // Gestion des canaux
   final Set<String> _pendingChannels    = {};
   final Set<String> _subscribedChannels = {};
 
-  // Reconnexion
+  // Reconnexion automatique
   int    _reconnectAttempts = 0;
   Timer? _reconnectTimer;
-  static const int _maxReconnectAttempts = 5;
+  static const int _maxReconnectAttempts = 8;
 
+  // Référence au provider (injectée depuis main.dart ou splash_screen)
   MessageProvider? _messageProvider;
 
   void setMessageProvider(MessageProvider provider) {
@@ -56,24 +51,26 @@ class PusherService {
   // ═══════════════════════════════════════════════════════════════════
   Future<void> initialize() async {
     if (_isConnecting) {
-      debugPrint('[Pusher] Déjà en cours de connexion, ignoré');
+      debugPrint('[Pusher] Connexion déjà en cours');
       return;
     }
     if (_isInitialized) {
-      debugPrint('[Pusher] Déjà initialisé, souscription des canaux en attente');
       await _subscribeAllPending();
       return;
     }
+
     _isConnecting = true;
     debugPrint('[Pusher] Initialisation...');
 
     try {
+      // Charger le userId
       final raw = await _storage.read(key: 'user_data');
       if (raw == null || raw.isEmpty) {
         debugPrint('[Pusher] Pas de user_data → abandon');
         _isConnecting = false;
         return;
       }
+
       _currentUserId =
           (jsonDecode(raw) as Map<String, dynamic>)['id']?.toString();
       if (_currentUserId == null) {
@@ -81,65 +78,86 @@ class PusherService {
         _isConnecting = false;
         return;
       }
+
       debugPrint('[Pusher] UserId = $_currentUserId');
 
-      // Canal utilisateur toujours souscrit
+      // Ajouter le canal utilisateur (toujours souscrit)
       _pendingChannels.add('private-user.$_currentUserId');
 
       _pusher = PusherChannelsFlutter.getInstance();
 
       await _pusher!.init(
-        apiKey:  'cab84ca4d5eac6def57e',
-        cluster: 'eu',
-        onConnectionStateChange: (String cur, String prev) {
-          debugPrint('[Pusher] État: $prev → $cur');
-          if (cur == 'CONNECTED') {
+        // ⚠️ Remplacez par votre clé Pusher réelle depuis .env
+        apiKey : AppConstants.pusherKey,
+        cluster: AppConstants.pusherCluster,
+
+        onConnectionStateChange: (String current, String previous) {
+          debugPrint('[Pusher] État: $previous → $current');
+
+          if (current == 'CONNECTED') {
             _isInitialized     = true;
             _isConnecting      = false;
             _reconnectAttempts = 0;
             _reconnectTimer?.cancel();
             _subscribeAllPending();
-          } else if (cur == 'DISCONNECTED' || cur == 'FAILED') {
+
+          } else if (current == 'DISCONNECTED') {
             _isInitialized = false;
             _subscribedChannels.clear();
-            if (cur == 'FAILED') {
-              _scheduleReconnect();
-            }
+
+          } else if (current == 'FAILED') {
+            _isInitialized = false;
+            _isConnecting  = false;
+            _subscribedChannels.clear();
+            _scheduleReconnect();
           }
         },
-        onError: (String msg, int? code, dynamic err) {
-          debugPrint('[Pusher] Erreur: $msg (code: $code)');
+
+        onError: (String message, int? code, dynamic error) {
+          debugPrint('[Pusher] Erreur: $message (code: $code)');
           _isInitialized = false;
           _isConnecting  = false;
           _scheduleReconnect();
         },
+
         onEvent: (dynamic event) {
           if (event is PusherEvent) _onEvent(event);
         },
-        onAuthorizer: (String channelName, String socketId, dynamic options) async {
+
+        // Autorisation des canaux privés via le backend Laravel
+        onAuthorizer: (String channelName, String socketId, dynamic opts) async {
           return await _authorize(channelName, socketId);
         },
       );
 
       await _pusher!.connect();
+
     } catch (e) {
-      debugPrint('[Pusher] init error: $e');
+      debugPrint('[Pusher] Erreur init: $e');
       _isInitialized = false;
       _isConnecting  = false;
       _scheduleReconnect();
     }
   }
 
-  // ── Reconnexion avec backoff exponentiel ──────────────────────────
+  // ─── Reconnexion avec backoff exponentiel ──────────────────────────
   void _scheduleReconnect() {
     if (_reconnectAttempts >= _maxReconnectAttempts) {
-      debugPrint('[Pusher] Max tentatives atteint, reconnexion abandonnée');
+      debugPrint('[Pusher] Max tentatives atteint, abandon reconnexion');
       return;
     }
+
     _reconnectTimer?.cancel();
-    final delay = Duration(seconds: (2 << _reconnectAttempts).clamp(2, 30));
+    // Backoff: 2s, 4s, 8s, 16s, 30s, 30s, 30s, 30s
+    final seconds = _reconnectAttempts < 4
+        ? (2 << _reconnectAttempts)
+        : 30;
+    final delay = Duration(seconds: seconds);
     _reconnectAttempts++;
-    debugPrint('[Pusher] Reconnexion dans ${delay.inSeconds}s (tentative $_reconnectAttempts)');
+
+    debugPrint(
+        '[Pusher] Reconnexion dans ${delay.inSeconds}s (tentative $_reconnectAttempts)');
+
     _reconnectTimer = Timer(delay, () async {
       if (!_isInitialized && !_isConnecting) {
         await initialize();
@@ -148,7 +166,7 @@ class PusherService {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  AUTORISATION BEARER
+  //  AUTORISATION BEARER — Requis pour les canaux privés Pusher
   // ═══════════════════════════════════════════════════════════════════
   Future<dynamic> _authorize(String channelName, String socketId) async {
     try {
@@ -162,31 +180,25 @@ class PusherService {
         Uri.parse('${AppConstants.apiBaseUrl}/pusher/auth'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json',
+          'Content-Type' : 'application/x-www-form-urlencoded',
+          'Accept'       : 'application/json',
         },
         body: 'socket_id=$socketId&channel_name=$channelName',
       ).timeout(const Duration(seconds: 10));
 
       debugPrint('[Pusher] Auth ${resp.statusCode} pour $channelName');
 
-      if (resp.body.isEmpty) {
-        debugPrint('[Pusher] Auth: réponse vide pour $channelName');
-        return null;
-      }
-
-      try {
+      if (resp.statusCode == 200 && resp.body.isNotEmpty) {
         final decoded = jsonDecode(resp.body);
-        if (resp.statusCode == 200) {
+        if (decoded is Map && decoded.containsKey('auth')) {
           debugPrint('[Pusher] Auth OK: $channelName');
           return decoded;
         }
-        debugPrint('[Pusher] Auth refusée: $channelName → ${resp.body}');
-      } catch (parseErr) {
-        debugPrint('[Pusher] Auth parse error: $parseErr — body="${resp.body}"');
       }
+
+      debugPrint('[Pusher] Auth refusée: $channelName');
     } catch (e) {
-      debugPrint('[Pusher] Auth network error: $e');
+      debugPrint('[Pusher] Auth erreur réseau: $e');
     }
     return null;
   }
@@ -205,14 +217,11 @@ class PusherService {
 
   Future<void> _subscribe(String channelName) async {
     if (!_isInitialized) {
-      debugPrint('[Pusher] Pas initialisé, $channelName mis en attente');
       _pendingChannels.add(channelName);
       return;
     }
-    if (_subscribedChannels.contains(channelName)) {
-      debugPrint('[Pusher] Déjà souscrit: $channelName');
-      return;
-    }
+    if (_subscribedChannels.contains(channelName)) return;
+
     try {
       await _pusher?.subscribe(
         channelName: channelName,
@@ -228,17 +237,24 @@ class PusherService {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  GESTION DES ÉVÉNEMENTS PUSHER
+  //  ROUTEUR D'ÉVÉNEMENTS PUSHER
   // ═══════════════════════════════════════════════════════════════════
   void _onEvent(PusherEvent event) {
-    if (event.eventName.startsWith('pusher')) return; // Events système
-    
+    // Ignorer les événements système Pusher
+    if (event.eventName.startsWith('pusher') ||
+        event.eventName.startsWith('pusher_internal')) {
+      return;
+    }
+
+    if (event.data == null || event.data!.isEmpty) return;
+
     try {
-      if (event.data == null || event.data!.isEmpty) return;
       final data = jsonDecode(event.data!) as Map<String, dynamic>;
-      debugPrint('[Pusher] ← Événement: ${event.eventName} sur ${event.channelName}');
+
+      debugPrint('[Pusher] ← ${event.eventName} sur ${event.channelName}');
+
       if (_messageProvider == null || _currentUserId == null) {
-        debugPrint('[Pusher] Provider ou userId null, événement ignoré');
+        debugPrint('[Pusher] Provider null, événement ignoré');
         return;
       }
 
@@ -246,135 +262,138 @@ class PusherService {
         case 'new-message':
           _onNewMessage(data);
           break;
+
         case 'message-sent':
           _onMessageSent(data);
           break;
+
         case 'typing-indicator':
-          _onTyping(data);
+          _onTypingIndicator(data);
           break;
+
         case 'recording-indicator':
-          _onRecording(data);
+          _onRecordingIndicator(data);
           break;
+
         case 'user-status':
           _onUserStatus(data);
           break;
+
         case 'messages-read':
           _onMessagesRead(data);
           break;
-        // Notifications Laravel broadcast
-        case 'new-message': // doublon intentionnel pour Notification
-        case 'Illuminate\\Notifications\\Events\\BroadcastNotificationCreated':
-          _onBroadcastNotification(data);
-          break;
+
         default:
-          debugPrint('[Pusher] Événement non géré: ${event.eventName}');
+          // Notifications Laravel broadcast
+          if (data.containsKey('conversation_id')) {
+            _onNewMessage(data);
+          }
       }
     } catch (e) {
-      debugPrint('[Pusher] Erreur traitement event ${event.eventName}: $e');
+      debugPrint('[Pusher] Erreur traitement ${event.eventName}: $e');
     }
   }
 
-  // ── Nouveau message reçu ─────────────────────────────────────────
+  // ─── NOUVEAU MESSAGE ────────────────────────────────────────────────
+  // Appelé quand quelqu'un envoie un message dans une conversation
+  // où on est participant.
   void _onNewMessage(Map<String, dynamic> data) {
-    debugPrint('[Pusher] new-message reçu: $data');
+    // Le message peut être dans data['message'] ou à la racine
+    final Map<String, dynamic> msgData;
+    if (data['message'] is Map) {
+      msgData = Map<String, dynamic>.from(data['message'] as Map);
+    } else {
+      msgData = Map<String, dynamic>.from(data);
+    }
 
-    // Le message peut être dans data['message'] ou directement dans data
-    final msgData = (data['message'] is Map)
-        ? Map<String, dynamic>.from(data['message'] as Map)
-        : Map<String, dynamic>.from(data);
+    final convId   = (data['conversation_id'] ?? msgData['conversation_id'])
+                        ?.toString() ?? '';
+    final senderId = msgData['sender_id']?.toString() ?? '';
 
-    final convId = data['conversation_id']?.toString() ??
-        msgData['conversation_id']?.toString() ?? '';
-    
     if (convId.isEmpty) {
       debugPrint('[Pusher] new-message: conversation_id manquant');
       return;
     }
 
-    final senderId = msgData['sender_id']?.toString() ?? '';
-    
-    // Ne pas ajouter ses propres messages (déjà ajoutés localement)
+    // NE PAS ajouter ses propres messages (déjà ajoutés localement à l'envoi)
     if (senderId == _currentUserId) {
       debugPrint('[Pusher] new-message: message de soi-même, ignoré');
       return;
     }
 
     final msg = MessageModel.fromJson(msgData, _currentUserId!);
-    debugPrint('[Pusher] new-message: ajout du message ${msg.id} dans conv $convId');
+    debugPrint('[Pusher] Nouveau message de $senderId dans conv $convId');
     _messageProvider!.receiveMessage(msg, convId);
   }
 
-  // ── Confirmation d'envoi (message-sent = confirmation serveur) ────
+  // ─── CONFIRMATION D'ENVOI ───────────────────────────────────────────
+  // Confirme qu'un message envoyé par NOUS a bien été reçu par le serveur.
+  // Remplace le message temporaire (status='sending') par le message confirmé.
   void _onMessageSent(Map<String, dynamic> data) {
-    final msgData = (data['message'] is Map)
-        ? Map<String, dynamic>.from(data['message'] as Map)
-        : Map<String, dynamic>.from(data);
-    
-    final convId = msgData['conversation_id']?.toString() ?? '';
-    if (convId.isEmpty) return;
+    final Map<String, dynamic> msgData;
+    if (data['message'] is Map) {
+      msgData = Map<String, dynamic>.from(data['message'] as Map);
+    } else {
+      msgData = Map<String, dynamic>.from(data);
+    }
 
+    final convId   = msgData['conversation_id']?.toString() ?? '';
     final senderId = msgData['sender_id']?.toString() ?? '';
-    if (senderId != _currentUserId) return; // Pas notre message
 
-    debugPrint('[Pusher] message-sent: confirmation pour conv $convId');
+    // Seulement pour nos propres messages
+    if (convId.isEmpty || senderId != _currentUserId) return;
+
+    debugPrint('[Pusher] Confirmation message dans conv $convId');
     _messageProvider!.confirmMessage(msgData, convId, _currentUserId!);
   }
 
-  // ── Indicateur de frappe ──────────────────────────────────────────
-  void _onTyping(Map<String, dynamic> data) {
+  // ─── INDICATEUR "EN TRAIN D'ÉCRIRE" ────────────────────────────────
+  // Affiché en temps réel dans l'AppBar du ChatScreen
+  void _onTypingIndicator(Map<String, dynamic> data) {
     final userId   = data['user_id']?.toString();
-    final isTyping = data['is_typing'] == true;
     final convId   = data['conversation_id']?.toString() ?? '';
-    
+    final isTyping = data['is_typing'] == true;
+
+    // Ne pas traiter ses propres indicateurs
     if (userId == null || userId == _currentUserId || convId.isEmpty) return;
-    debugPrint('[Pusher] typing-indicator: user=$userId, isTyping=$isTyping, conv=$convId');
+
+    debugPrint('[Pusher] Typing: user=$userId, isTyping=$isTyping');
     _messageProvider!.setTypingIndicator(convId, userId, isTyping);
   }
 
-  // ── Indicateur d'enregistrement vocal ────────────────────────────
-  void _onRecording(Map<String, dynamic> data) {
-    final userId    = data['user_id']?.toString();
+  // ─── INDICATEUR "ENREGISTRE UN VOCAL" ──────────────────────────────
+  // Affiché en temps réel dans l'AppBar: "● enregistre un vocal..."
+  void _onRecordingIndicator(Map<String, dynamic> data) {
+    final userId      = data['user_id']?.toString();
+    final convId      = data['conversation_id']?.toString() ?? '';
     final isRecording = data['is_recording'] == true;
-    final convId    = data['conversation_id']?.toString() ?? '';
-    
+
     if (userId == null || userId == _currentUserId || convId.isEmpty) return;
-    debugPrint('[Pusher] recording-indicator: user=$userId, isRecording=$isRecording, conv=$convId');
+
+    debugPrint('[Pusher] Recording: user=$userId, isRecording=$isRecording');
     _messageProvider!.setRecordingIndicator(convId, userId, isRecording);
   }
 
-  // ── Statut en ligne ───────────────────────────────────────────────
+  // ─── STATUT EN LIGNE ────────────────────────────────────────────────
   void _onUserStatus(Map<String, dynamic> data) {
     final userId   = data['user_id']?.toString();
     final isOnline = data['is_online'] == true;
     if (userId == null) return;
-    
+
     DateTime? lastSeen;
     final raw = data['last_seen'] ?? data['last_seen_at'];
-    if (raw != null) lastSeen = DateTime.tryParse(raw.toString())?.toLocal();
-    
-    debugPrint('[Pusher] user-status: user=$userId, online=$isOnline');
+    if (raw != null) {
+      lastSeen = DateTime.tryParse(raw.toString())?.toLocal();
+    }
+
     _messageProvider!.updateUserOnlineStatus(userId, isOnline, lastSeen);
   }
 
-  // ── Messages lus ─────────────────────────────────────────────────
+  // ─── MESSAGES LUS ───────────────────────────────────────────────────
   void _onMessagesRead(Map<String, dynamic> data) {
     final convId = data['conversation_id']?.toString();
-    if (convId != null) {
-      debugPrint('[Pusher] messages-read: conv=$convId');
+    if (convId != null && convId.isNotEmpty) {
       _messageProvider!.markMessagesAsReadLocally(convId);
-    }
-  }
-
-  // ── Notification broadcast Laravel ───────────────────────────────
-  void _onBroadcastNotification(Map<String, dynamic> data) {
-    final type   = data['type'] as String? ?? '';
-    final convId = data['conversation_id']?.toString();
-    
-    if (type == 'message' && convId != null) {
-      debugPrint('[Pusher] broadcast notification message: conv=$convId');
-      // La notification FCM s'occupe de l'affichage
-      // On recharge juste la liste des conversations
-      _messageProvider!.loadConversations();
     }
   }
 
@@ -382,7 +401,7 @@ class PusherService {
   //  API PUBLIQUE
   // ═══════════════════════════════════════════════════════════════════
 
-  /// Souscrire à une conversation spécifique
+  /// Souscrire au canal d'une conversation (appelé quand on ouvre un chat)
   Future<void> subscribeToConversation(String conversationId) async {
     final ch = 'private-conversation.$conversationId';
     _pendingChannels.add(ch);
@@ -391,7 +410,7 @@ class PusherService {
     }
   }
 
-  /// Se désabonner d'une conversation
+  /// Se désabonner quand on quitte un chat
   Future<void> unsubscribeFromConversation(String conversationId) async {
     final ch = 'private-conversation.$conversationId';
     if (_subscribedChannels.contains(ch)) {
@@ -401,9 +420,25 @@ class PusherService {
         _pendingChannels.remove(ch);
         debugPrint('[Pusher] Désabonné: $ch');
       } catch (e) {
-        debugPrint('[Pusher] Erreur désabonnement $ch: $e');
+        debugPrint('[Pusher] Erreur désabonnement: $e');
       }
     }
+  }
+
+  /// Réinitialisation complète (appelée après connexion/déconnexion)
+  Future<void> reinitialize() async {
+    debugPrint('[Pusher] Réinitialisation complète...');
+    _reconnectTimer?.cancel();
+    _isInitialized     = false;
+    _isConnecting      = false;
+    _reconnectAttempts = 0;
+    _currentUserId     = null;
+    _subscribedChannels.clear();
+
+    try { await _pusher?.disconnect(); } catch (_) {}
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    await initialize();
   }
 
   Future<void> disconnect() async {
@@ -413,27 +448,13 @@ class PusherService {
         await _pusher?.disconnect();
         _isInitialized = false;
         _subscribedChannels.clear();
-        debugPrint('[Pusher] Déconnecté');
+        debugPrint('[Pusher] Déconnecté proprement');
       }
     } catch (e) {
       debugPrint('[Pusher] disconnect: $e');
     }
   }
 
-  Future<void> reinitialize() async {
-    debugPrint('[Pusher] Réinitialisation...');
-    _reconnectTimer?.cancel();
-    _isInitialized     = false;
-    _isConnecting      = false;
-    _reconnectAttempts = 0;
-    _subscribedChannels.clear();
-    _currentUserId = null;
-    
-    try { await _pusher?.disconnect(); } catch (_) {}
-    
-    await Future.delayed(const Duration(milliseconds: 500));
-    await initialize();
-  }
-
   bool get isConnected => _isInitialized;
+  String? get currentUserId => _currentUserId;
 }

@@ -1,3 +1,7 @@
+// lib/screens/messages_screen.dart
+// ═══════════════════════════════════════════════════════════════════════
+// VERSION FINALE — Polling intégré + Notifications auto
+// ═══════════════════════════════════════════════════════════════════════
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -14,7 +18,8 @@ import 'all_services_screen.dart';
 import 'all_entreprises_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
-import '../main.dart'; // pour setupNotificationNavigation
+import '../main.dart';
+import '../services/message_polling_service.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -29,10 +34,11 @@ class _MessagesScreenState extends State<MessagesScreen>
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
   static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final _storage = const FlutterSecureStorage(
-    aOptions: _androidOptions, iOptions: _iOSOptions,
+    aOptions: _androidOptions,
+    iOptions: _iOSOptions,
   );
 
   int _currentIndex = 1;
@@ -49,7 +55,10 @@ class _MessagesScreenState extends State<MessagesScreen>
       _loadUserData();
       context.read<MessageProvider>().loadConversations();
 
-      // ⭐ Configurer la navigation depuis les notifications push
+      // ⭐ Cette page n'a pas de conversation active
+      MessagePollingService().setActiveConversation(null);
+
+      // Configurer la navigation depuis les notifications push
       setupNotificationNavigation(context);
     });
   }
@@ -58,6 +67,8 @@ class _MessagesScreenState extends State<MessagesScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       context.read<MessageProvider>().loadConversations();
+      // Pas de conversation active sur cet écran
+      MessagePollingService().setActiveConversation(null);
     }
   }
 
@@ -88,11 +99,12 @@ class _MessagesScreenState extends State<MessagesScreen>
   }
 
   void _showComingSoon(String f) => ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$f — Bientôt disponible'),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 2)),
-  );
+        SnackBar(
+            content: Text('$f — Bientôt disponible'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            duration: const Duration(seconds: 2)),
+      );
 
   void _handleEntrepriseTap() {
     if (_hasEntreprise) {
@@ -112,9 +124,13 @@ class _MessagesScreenState extends State<MessagesScreen>
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Plus tard')),
           ElevatedButton(
-            onPressed: () { Navigator.pop(context); _showComingSoon('Création entreprise'); },
+            onPressed: () {
+              Navigator.pop(context);
+              _showComingSoon('Création entreprise');
+            },
             style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white,
+                backgroundColor: AppConstants.primaryRed,
+                foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
             child: const Text('Créer'),
           ),
@@ -123,12 +139,9 @@ class _MessagesScreenState extends State<MessagesScreen>
     );
   }
 
-  // ⭐ Bouton Profil → ouvre SettingsScreen (profil complet + bottom nav)
   void _showProfileDialog() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const SettingsScreen()),
-    ).then((_) => _loadUserData()); // Recharger photo/nom au retour
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()))
+        .then((_) => _loadUserData());
   }
 
   Future<void> _logout() async {
@@ -157,7 +170,6 @@ class _MessagesScreenState extends State<MessagesScreen>
     }
   }
 
-  // ── BUILD ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -170,7 +182,8 @@ class _MessagesScreenState extends State<MessagesScreen>
         backgroundColor: AppConstants.primaryRed,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Messages', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        title: const Text('Messages',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: Colors.white,
@@ -184,13 +197,18 @@ class _MessagesScreenState extends State<MessagesScreen>
                   const Text('Messages'),
                   if (provider.totalUnreadCount > 0)
                     Positioned(
-                      right: -12, top: -8,
+                      right: -12,
+                      top: -8,
                       child: Container(
                         padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(color: Colors.amber, shape: BoxShape.circle),
+                        decoration: const BoxDecoration(
+                            color: Colors.amber, shape: BoxShape.circle),
                         constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                         child: Text('${provider.totalUnreadCount}',
-                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold),
                             textAlign: TextAlign.center),
                       ),
                     ),
@@ -208,7 +226,12 @@ class _MessagesScreenState extends State<MessagesScreen>
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
-          boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, -5))],
+          boxShadow: [
+            BoxShadow(
+                color: Colors.grey.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, -5))
+          ],
         ),
         child: SafeArea(
           child: Padding(
@@ -217,8 +240,11 @@ class _MessagesScreenState extends State<MessagesScreen>
               _navItem(Icons.home, 'Accueil', 0, size),
               _navItem(Icons.message, 'Messages', 1, size),
               _navItem(Icons.calendar_today, 'Rendez-vous', 2, size),
-              _navItem(_hasEntreprise ? Icons.business : Icons.add_business,
-                  _hasEntreprise ? 'Entreprise' : 'Créer', 3, size),
+              _navItem(
+                  _hasEntreprise ? Icons.business : Icons.add_business,
+                  _hasEntreprise ? 'Entreprise' : 'Créer',
+                  3,
+                  size),
               _profileNavItem(userName, userPhoto, 4, size),
             ]),
           ),
@@ -234,7 +260,8 @@ class _MessagesScreenState extends State<MessagesScreen>
         onTap: () {
           setState(() => _currentIndex = index);
           if (index == 0) {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+            Navigator.pushReplacement(
+                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
           } else if (index == 2) {
             _showComingSoon('Rendez-vous');
           } else if (index == 3) {
@@ -253,13 +280,18 @@ class _MessagesScreenState extends State<MessagesScreen>
                 Consumer<MessageProvider>(builder: (_, p, __) {
                   if (p.totalUnreadCount == 0) return const SizedBox.shrink();
                   return Positioned(
-                    right: -6, top: -2,
+                    right: -6,
+                    top: -2,
                     child: Container(
                       padding: const EdgeInsets.all(2),
-                      decoration: const BoxDecoration(color: Colors.amber, shape: BoxShape.circle),
+                      decoration: const BoxDecoration(
+                          color: Colors.amber, shape: BoxShape.circle),
                       constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
                       child: Text('${p.totalUnreadCount}',
-                          style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold),
                           textAlign: TextAlign.center),
                     ),
                   );
@@ -284,7 +316,10 @@ class _MessagesScreenState extends State<MessagesScreen>
     final sel = _currentIndex == index;
     return Expanded(
       child: InkWell(
-        onTap: () { setState(() => _currentIndex = index); _showProfileDialog(); },
+        onTap: () {
+          setState(() => _currentIndex = index);
+          _showProfileDialog();
+        },
         borderRadius: BorderRadius.circular(8),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 6),
@@ -293,7 +328,9 @@ class _MessagesScreenState extends State<MessagesScreen>
               radius: 11,
               backgroundImage: photo.isNotEmpty ? NetworkImage(photo) : null,
               backgroundColor: Colors.grey[200],
-              child: photo.isEmpty ? Icon(Icons.person, size: 12, color: Colors.grey[600]) : null,
+              child: photo.isEmpty
+                  ? Icon(Icons.person, size: 12, color: Colors.grey[600])
+                  : null,
             ),
             const SizedBox(height: 2),
             Text('Profil',
@@ -310,43 +347,52 @@ class _MessagesScreenState extends State<MessagesScreen>
     );
   }
 
-  // ── ONGLET MESSAGES ──────────────────────────────────────────────────────────
   Widget _buildMessagesTab() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       if (provider.isLoading && provider.conversations.isEmpty) {
-        return const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed));
+        return const Center(
+            child: CircularProgressIndicator(color: AppConstants.primaryRed));
       }
 
       if (provider.error != null) {
-        return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        return Center(
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
           const SizedBox(height: 16),
-          Text('Erreur de chargement', style: TextStyle(fontSize: 18, color: Colors.grey[600])),
+          Text('Erreur de chargement',
+              style: TextStyle(fontSize: 18, color: Colors.grey[600])),
           const SizedBox(height: 8),
           Text(provider.error!, style: TextStyle(fontSize: 14, color: Colors.grey[500])),
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: provider.loadConversations,
             style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white),
+                backgroundColor: AppConstants.primaryRed,
+                foregroundColor: Colors.white),
             child: const Text('Réessayer'),
           ),
         ]));
       }
 
       if (provider.conversations.isEmpty) {
-        return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        return Center(
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
+            decoration:
+                BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
             child: Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[600]),
           ),
           const SizedBox(height: 20),
           Text('Aucune conversation',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[800])),
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800])),
           const SizedBox(height: 8),
           Text('Commencez à discuter avec des professionnels',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]), textAlign: TextAlign.center),
+              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              textAlign: TextAlign.center),
           const SizedBox(height: 24),
           ElevatedButton.icon(
             onPressed: () => Navigator.pushReplacement(
@@ -354,8 +400,10 @@ class _MessagesScreenState extends State<MessagesScreen>
             icon: const Icon(Icons.explore),
             label: const Text('Découvrir des services'),
             style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
+                backgroundColor: AppConstants.primaryRed,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
           ),
         ]));
       }
@@ -366,7 +414,8 @@ class _MessagesScreenState extends State<MessagesScreen>
         child: ListView.builder(
           padding: const EdgeInsets.all(12),
           itemCount: provider.conversations.length,
-          itemBuilder: (_, i) => _buildConvItem(provider.conversations[i], provider),
+          itemBuilder: (_, i) =>
+              _buildConvItem(provider.conversations[i], provider),
         ),
       );
     });
@@ -374,7 +423,7 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   Widget _buildConvItem(ConversationModel conv, MessageProvider provider) {
     final hasUnread = conv.unreadCount > 0;
-    final isOnline  = conv.otherUser.isOnline;
+    final isOnline = conv.otherUser.isOnline;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -402,100 +451,127 @@ class _MessagesScreenState extends State<MessagesScreen>
                   ),
                 ),
               ),
-            ).then((_) => provider.loadConversations());
+            ).then((_) {
+              // Quand on revient du chat, plus de conversation active
+              MessagePollingService().setActiveConversation(null);
+              provider.loadConversations();
+            });
           }
         },
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.all(12),
           child: Row(children: [
-            // ── Avatar + point en ligne ──────────────────────────────────
+            // Avatar
             Stack(children: [
               CircleAvatar(
                 radius: 28,
                 backgroundColor: Colors.grey[200],
                 backgroundImage: conv.otherUser.photoUrl != null
-                    ? NetworkImage(conv.otherUser.photoUrl!) : null,
+                    ? NetworkImage(conv.otherUser.photoUrl!)
+                    : null,
                 child: conv.otherUser.photoUrl == null
                     ? Text(
-                        conv.otherUser.name.isNotEmpty ? conv.otherUser.name[0].toUpperCase() : '?',
-                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
+                        conv.otherUser.name.isNotEmpty
+                            ? conv.otherUser.name[0].toUpperCase()
+                            : '?',
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
                             color: AppConstants.primaryRed))
                     : null,
               ),
               if (isOnline)
                 Positioned(
-                  bottom: 0, right: 0,
+                  bottom: 0,
+                  right: 0,
                   child: Container(
-                    width: 14, height: 14,
+                    width: 14,
+                    height: 14,
                     decoration: BoxDecoration(
-                        color: Colors.green, shape: BoxShape.circle,
+                        color: Colors.green,
+                        shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2)),
                   ),
                 ),
             ]),
             const SizedBox(width: 12),
 
-            // ── Nom + dernier message + heure ────────────────────────────
+            // Contenu
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(
-                    child: Text(conv.otherUser.name,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+              Row(children: [
+                Expanded(
+                  child: Text(conv.otherUser.name,
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight:
+                              hasUnread ? FontWeight.bold : FontWeight.w600,
+                          color: hasUnread
+                              ? AppConstants.primaryRed
+                              : Colors.black87)),
+                ),
+                if (conv.serviceName != null)
+                  Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(4)),
+                    child: Text('Service',
                         style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: hasUnread ? FontWeight.bold : FontWeight.w600,
-                            color: hasUnread ? AppConstants.primaryRed : Colors.black87)),
+                            fontSize: 10,
+                            color: Colors.blue[700],
+                            fontWeight: FontWeight.w600)),
                   ),
-                  if (conv.serviceName != null)
-                    Container(
-                      margin: const EdgeInsets.only(right: 6),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                          color: Colors.blue[50], borderRadius: BorderRadius.circular(4)),
-                      child: Text('Service',
-                          style: TextStyle(fontSize: 10, color: Colors.blue[700],
-                              fontWeight: FontWeight.w600)),
-                    ),
-                  Text(
-                    conv.lastMessage != null
-                        ? _formatTime(conv.lastMessage!.createdAt)
-                        : _formatTime(conv.updatedAt),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
-                ]),
-                const SizedBox(height: 4),
-                if (conv.lastMessage != null)
-                  Row(children: [
-                    // ⭐ Préfixe "Vous: " uniquement pour MES messages
-                    if (conv.lastMessage!.isMe)
-                      Text('Vous: ', style: TextStyle(
-                          fontSize: 13,
-                          color: hasUnread ? Colors.grey[700] : Colors.grey[600],
-                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
-                    Expanded(
-                      child: Text(
-                        _lastMsgPreview(conv.lastMessage!),
+                Text(
+                  conv.lastMessage != null
+                      ? _formatTime(conv.lastMessage!.createdAt)
+                      : _formatTime(conv.updatedAt),
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                ),
+              ]),
+              const SizedBox(height: 4),
+              if (conv.lastMessage != null)
+                Row(children: [
+                  if (conv.lastMessage!.isMe)
+                    Text('Vous: ',
                         style: TextStyle(
                             fontSize: 13,
-                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
-                            color: Colors.grey[600]),
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
-                      ),
+                            color:
+                                hasUnread ? Colors.grey[700] : Colors.grey[600],
+                            fontWeight: hasUnread
+                                ? FontWeight.w600
+                                : FontWeight.normal)),
+                  Expanded(
+                    child: Text(
+                      _lastMsgPreview(conv.lastMessage!),
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight:
+                              hasUnread ? FontWeight.w600 : FontWeight.normal,
+                          color: Colors.grey[600]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ]),
-              ]),
-            ),
+                  ),
+                ]),
+            ])),
 
-            // ── Badge messages non lus ───────────────────────────────────
+            // Badge non lus
             if (hasUnread)
               Container(
                 margin: const EdgeInsets.only(left: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                    color: AppConstants.primaryRed, borderRadius: BorderRadius.circular(12)),
+                    color: AppConstants.primaryRed,
+                    borderRadius: BorderRadius.circular(12)),
                 child: Text('${conv.unreadCount}',
-                    style: const TextStyle(color: Colors.white, fontSize: 11,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
                         fontWeight: FontWeight.bold)),
               ),
           ]),
@@ -506,12 +582,12 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   String _lastMsgPreview(lastMsg) {
     switch (lastMsg.type) {
-      case 'image':    return 'Image';
-      case 'video':    return 'Vidéo';
+      case 'image':    return '📷 Image';
+      case 'video':    return '🎥 Vidéo';
       case 'audio':
-      case 'vocal':    return 'Message vocal';
-      case 'document': return 'Document';
-      case 'location': return 'Localisation';
+      case 'vocal':    return '🎤 Message vocal';
+      case 'document': return '📄 Document';
+      case 'location': return '📍 Localisation';
       default:         return lastMsg.content ?? '';
     }
   }
@@ -521,9 +597,11 @@ class _MessagesScreenState extends State<MessagesScreen>
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         Icon(Icons.phone_in_talk, size: 64, color: Colors.grey[400]),
         const SizedBox(height: 16),
-        Text('Historique des appels', style: TextStyle(fontSize: 18, color: Colors.grey[600])),
+        Text('Historique des appels',
+            style: TextStyle(fontSize: 18, color: Colors.grey[600])),
         const SizedBox(height: 8),
-        Text('Bientôt disponible', style: TextStyle(fontSize: 14, color: Colors.grey[500])),
+        Text('Bientôt disponible',
+            style: TextStyle(fontSize: 14, color: Colors.grey[500])),
       ]),
     );
   }

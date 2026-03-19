@@ -330,7 +330,7 @@ class _AboutScreenState extends State<AboutScreen> {
                 icon: Icons.chat,
                 label: 'WhatsApp',
                 color: const Color(0xFF25D366),
-                onTap: () => _launchUrl('https://wa.me/22901234567'),
+                onTap: () => _launchUrl('https://wa.me/22994119476'),
                 isSmallScreen: isSmallScreen,
               ),
             ],

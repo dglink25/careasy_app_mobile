@@ -1,116 +1,75 @@
 // lib/services/notification_service.dart
 // ═══════════════════════════════════════════════════════════════════════
-// CORRECTION DÉFINITIVE — Son de notification personnalisable
+// ARCHITECTURE COMPLÈTE — Notifications temps réel
 //
-// POURQUOI LE SON NE CHANGEAIT PAS:
-//  - Le fichier contenait DEUX classes NotificationService en double.
-//    Dart utilise la PREMIÈRE déclaration → la deuxième (avec multi-canaux)
-//    était ignorée.
-//  - La première classe utilisait toujours 'high_importance_channel'
-//    (canal unique). Android interdit de changer le son d'un canal existant
-//    après sa création → le son restait figé sur le défaut.
+// FONCTIONNEMENT:
+//  1. App OUVERTE (foreground):
+//     → Pusher WebSocket reçoit les events en temps réel
+//     → ChatScreen se met à jour automatiquement via Consumer<MessageProvider>
+//     → Indicateurs typing/recording affichés dans l'AppBar
 //
-// SOLUTION: Un canal Android PAR son (Android exige cela depuis API 26).
-//  careasy_messages_default          → son système
-//  careasy_messages_notification_bell → cloche
-//  careasy_messages_chime             → carillon
-//  careasy_messages_ding              → ding
-//  careasy_messages_message_pop       → pop message
+//  2. App EN ARRIÈRE-PLAN ou VERROUILLÉE:
+//     → FCM (Firebase Cloud Messaging) envoie une vraie notification push
+//     → Son = son par défaut du téléphone (pas de son personnalisé)
+//     → Tap sur la notification → ouvre le bon ChatScreen
 //
-// Tous les canaux sont créés au démarrage. showNotification() lit le son
-// choisi dans SharedPreferences et utilise le canal correspondant.
+//  3. App FERMÉE:
+//     → firebaseMessagingBackgroundHandler (top-level) reçoit le message FCM
+//     → Affiche la notification avec flutter_local_notifications
+//     → Tap → App démarre → navigue vers le bon chat
+//
+// SON: Toujours le son par défaut du téléphone (conforme à ce qui est demandé)
 // ═══════════════════════════════════════════════════════════════════════
+
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:http/http.dart' as http;
 import 'package:timezone/data/latest.dart' as tz_data;
 import '../utils/constants.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
-// Préférences de son — uniquement SharedPreferences (pas de serveur)
+// CANAL ANDROID UNIQUE — son système par défaut
+// Android API 26+: le son est défini par le canal, pas par la notification.
+// On crée UN seul canal avec Importance.high → le système joue son son par défaut.
 // ═══════════════════════════════════════════════════════════════════════
-class NotificationSoundPrefs {
-  static const _keyUseCustom  = 'notif_use_custom_sound';
-  static const _keySoundName  = 'notif_sound_name';
-  static const _keySoundLabel = 'notif_sound_label';
-
-  /// Sons disponibles.
-  /// 'name' = nom du fichier SANS extension dans:
-  ///   Android → android/app/src/main/res/raw/
-  ///   iOS     → Runner/ (en .aiff ou .caf)
-  ///   Assets  → assets/sounds/ (pour l'aperçu just_audio)
-  static const List<Map<String, String>> availableSounds = [
-    {'name': 'default',           'label': 'Système (défaut)'},
-    {'name': 'notification_bell', 'label': 'Cloche'},
-    {'name': 'chime',             'label': 'Carillon'},
-    {'name': 'ding',              'label': 'Ding'},
-    {'name': 'message_pop',       'label': 'Pop message'},
-  ];
-
-  static Future<bool>   getUseCustomSound()  async =>
-      (await SharedPreferences.getInstance()).getBool(_keyUseCustom) ?? false;
-
-  static Future<String> getCustomSoundName() async =>
-      (await SharedPreferences.getInstance()).getString(_keySoundName) ?? 'default';
-
-  static Future<String> getCustomSoundLabel() async =>
-      (await SharedPreferences.getInstance()).getString(_keySoundLabel) ?? 'Système (défaut)';
-
-  static Future<void> setSoundPreference({
-    required bool   useCustom,
-    required String soundName,
-    required String soundLabel,
-  }) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setBool(_keyUseCustom,   useCustom);
-    await p.setString(_keySoundName,  soundName);
-    await p.setString(_keySoundLabel, soundLabel);
-    debugPrint('[SoundPrefs] ✅ Son sauvegardé: $soundName (custom=$useCustom)');
-  }
-
-  /// Chaque son a son propre canal Android — obligatoire pour changer le son.
-  static String channelIdFor(String soundName) =>
-      soundName == 'default' ? 'careasy_msg_default' : 'careasy_msg_$soundName';
-
-  static String channelNameFor(String soundName) {
-    final e = availableSounds.firstWhere(
-      (s) => s['name'] == soundName,
-      orElse: () => {'name': soundName, 'label': soundName},
-    );
-    return 'Messages — ${e['label']}';
-  }
-}
+const String _kChannelId   = 'careasy_messages';
+const String _kChannelName = 'Messages CarEasy';
+const String _kChannelDesc = 'Notifications de messages CarEasy';
 
 // ═══════════════════════════════════════════════════════════════════════
-// Handler FCM Background — top-level, PAS de singleton, PAS de SharedPrefs
+// HANDLER FCM BACKGROUND — obligatoirement top-level (pas dans une classe)
+// Appelé quand l'app est FERMÉE ou en arrière-plan (Android/iOS).
+// Pas d'accès au BuildContext ni aux providers ici.
 // ═══════════════════════════════════════════════════════════════════════
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  debugPrint('[FCM BG] id=${message.messageId}');
+  debugPrint('[FCM BG] Reçu: ${message.notification?.title}');
+
   try {
     final plugin = FlutterLocalNotificationsPlugin();
+
+    // Initialisation minimale pour le background isolate
     await plugin.initialize(const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(),
     ));
 
-    // Canal de secours (background ne peut pas lire SharedPrefs facilement)
-    const fallbackChannelId = 'careasy_msg_notification_bell';
+    // Créer le canal Android (idempotent — safe si déjà créé)
     await plugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(const AndroidNotificationChannel(
-          fallbackChannelId, 'Messages — Cloche',
-          description: 'Notifications CarEasy',
+          _kChannelId,
+          _kChannelName,
+          description: _kChannelDesc,
           importance: Importance.high,
-          playSound: true,
+          playSound: true,         // son système par défaut
           enableVibration: true,
-          sound: RawResourceAndroidNotificationSound('notification_bell'),
+          // PAS de sound: RawResourceAndroidNotificationSound(...)
+          // → le système utilise son son par défaut
         ));
 
     final notif  = message.notification;
@@ -119,29 +78,37 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final body   = notif?.body  ?? data['body']  ?? '';
     final convId = data['conversation_id']?.toString();
 
+    // Payload JSON pour la navigation au tap
     final payload = jsonEncode({
       'conversation_id': convId ?? '',
-      'sender_name':     data['sender_name']  ?? '',
-      'sender_photo':    data['sender_photo'] ?? '',
-      'sender_id':       data['sender_id']    ?? '',
+      'sender_name'    : data['sender_name']  ?? '',
+      'sender_photo'   : data['sender_photo'] ?? '',
+      'sender_id'      : data['sender_id']    ?? '',
     });
 
     await plugin.show(
+      // ID unique par conversation pour éviter le spam de notifications
       convId?.hashCode ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title, body,
+      title,
+      body,
       const NotificationDetails(
         android: AndroidNotificationDetails(
-          fallbackChannelId, 'Messages — Cloche',
-          channelDescription: 'Notifications CarEasy',
-          importance: Importance.high, priority: Priority.high,
-          enableVibration: true, playSound: true,
-          sound: RawResourceAndroidNotificationSound('notification_bell'),
+          _kChannelId,
+          _kChannelName,
+          channelDescription: _kChannelDesc,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
           icon: '@mipmap/ic_launcher',
           visibility: NotificationVisibility.public,
+          // styleInformation: BigTextStyleInformation pour les longs messages
         ),
         iOS: DarwinNotificationDetails(
-          sound: 'notification_bell.aiff',
-          presentAlert: true, presentBadge: true, presentSound: true,
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          // sound: null → son système par défaut iOS
         ),
       ),
       payload: payload,
@@ -151,8 +118,55 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
+// Callback background tap — top-level obligatoire
+@pragma('vm:entry-point')
+void _bgTapCallback(NotificationResponse response) {
+  debugPrint('[Notif BG Tap] payload=${response.payload}');
+  // La navigation sera gérée au démarrage via getInitialMessage()
+}
+
 // ═══════════════════════════════════════════════════════════════════════
-// NotificationService — singleton principal
+// NOTIFICATION SERVICE — Singleton principal
+// ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// NOTIFICATION SOUND PREFS — Préférences de son pour les notifications
+// Utilisé par notifications_settings_screen.dart
+// ═══════════════════════════════════════════════════════════════════════
+class NotificationSoundPrefs {
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
+  static const _keyUseCustom  = 'notif_use_custom_sound';
+  static const _keySoundName  = 'notif_custom_sound_name';
+  static const _keySoundLabel = 'notif_custom_sound_label';
+
+  /// Sons disponibles (son système = pas de son personnalisé)
+  static const List<Map<String, String>> availableSounds = [
+    {'name': 'default', 'label': 'Son par défaut'},
+    {'name': 'message', 'label': 'Message'},
+    {'name': 'chime',   'label': 'Carillon'},
+    {'name': 'pop',     'label': 'Pop'},
+  ];
+
+  static Future<bool>    getUseCustomSound()    async =>
+      (await _storage.read(key: _keyUseCustom))  == 'true';
+  static Future<String>  getCustomSoundName()   async =>
+      (await _storage.read(key: _keySoundName))  ?? 'default';
+  static Future<String>  getCustomSoundLabel()  async =>
+      (await _storage.read(key: _keySoundLabel)) ?? 'Son par défaut';
+
+  static Future<void> setSoundPreference({
+    required bool   useCustom,
+    required String soundName,
+    required String soundLabel,
+  }) async {
+    await _storage.write(key: _keyUseCustom,  value: useCustom.toString());
+    await _storage.write(key: _keySoundName,  value: soundName);
+    await _storage.write(key: _keySoundLabel, value: soundLabel);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 class NotificationService {
   static final NotificationService _inst = NotificationService._internal();
@@ -160,26 +174,32 @@ class NotificationService {
   NotificationService._internal();
 
   static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-
-  final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
-  final FirebaseMessaging _fcm = FirebaseMessaging.instance;
-  final _storage = const FlutterSecureStorage(
-    aOptions: _androidOptions, iOptions: _iOSOptions,
+  static const _iOSOptions     = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
   );
 
-  /// Callback appelé quand l'utilisateur tape sur une notification.
-  /// Reçoit un Map avec: conversation_id, sender_name, sender_photo, sender_id
+  final FlutterLocalNotificationsPlugin _local =
+      FlutterLocalNotificationsPlugin();
+  final FirebaseMessaging _fcm = FirebaseMessaging.instance;
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions,
+    iOptions: _iOSOptions,
+  );
+
+  // Callback de navigation appelé quand l'utilisateur tape une notification
+  // Reçoit: {conversation_id, sender_name, sender_photo, sender_id}
   Function(Map<String, dynamic> data)? onNotificationTap;
 
   bool _initialized = false;
 
-  // ─── Initialisation ────────────────────────────────────────────────────────
+  // ─── INITIALISATION ────────────────────────────────────────────────
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
+
     tz_data.initializeTimeZones();
 
+    // 1. Initialiser flutter_local_notifications
     await _local.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -189,118 +209,62 @@ class NotificationService {
           requestSoundPermission: true,
         ),
       ),
-      onDidReceiveNotificationResponse:           (d) => _handleTap(d.payload),
+      // Tap en foreground
+      onDidReceiveNotificationResponse: (response) {
+        _handleTap(response.payload);
+      },
+      // Tap depuis background (app pas encore fermée)
       onDidReceiveBackgroundNotificationResponse: _bgTapCallback,
     );
 
-    // ⭐ Créer TOUS les canaux dès le démarrage
-    await _createAllChannels();
+    // 2. Créer le canal Android (Importance.high = son système par défaut)
+    await _createAndroidChannel();
+
+    // 3. Initialiser FCM
     await _initFCM();
   }
 
-  // ─── Crée un canal Android pour chaque son disponible ──────────────────────
-  // Android interdit de changer le son d'un canal existant.
-  // La seule solution est d'utiliser un canal différent par son.
-  Future<void> _createAllChannels() async {
-    final androidPlugin = _local
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-    if (androidPlugin == null) return; // iOS ou Web — pas de canaux
-
-    for (final sound in NotificationSoundPrefs.availableSounds) {
-      final sName     = sound['name']!;
-      final channelId = NotificationSoundPrefs.channelIdFor(sName);
-      final chanName  = NotificationSoundPrefs.channelNameFor(sName);
-
-      // Son Android: null = son défaut du système
-      AndroidNotificationSound? androidSound;
-      if (sName != 'default') {
-        androidSound = RawResourceAndroidNotificationSound(sName);
-      }
-
-      await androidPlugin.createNotificationChannel(AndroidNotificationChannel(
-        channelId, chanName,
-        description: 'Notifications CarEasy — $chanName',
-        importance: Importance.high,
-        playSound: true,
-        enableVibration: true,
-        sound: androidSound,
-      ));
-      debugPrint('[Canaux] ✅ $channelId créé');
-    }
+  // ─── CANAL ANDROID ─────────────────────────────────────────────────
+  Future<void> _createAndroidChannel() async {
+    await _local
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(const AndroidNotificationChannel(
+          _kChannelId,
+          _kChannelName,
+          description: _kChannelDesc,
+          importance: Importance.high,
+          playSound: true,       // son système par défaut du téléphone
+          enableVibration: true,
+          // Pas de sound personnalisé → son système
+        ));
+    debugPrint('[Notif] Canal Android créé: $_kChannelId');
   }
 
-  // ─── Appelé par notifications_settings_screen après changement de son ───────
-  // Rien à faire : tous les canaux sont déjà créés dans _createAllChannels().
-  // showNotification() lit le canal depuis SharedPrefs à chaque appel.
-  Future<void> updateNotificationChannel() async {
-    final soundName = await NotificationSoundPrefs.getCustomSoundName();
-    debugPrint('[Canaux] Canal actif: ${NotificationSoundPrefs.channelIdFor(soundName)}');
-    // Re-créer les canaux si l'app vient d'être installée ou mise à jour
-    await _createAllChannels();
-  }
-
-  // ─── Aperçu sonore via just_audio (assets) ──────────────────────────────────
-  Future<void> playSoundPreview(String soundName) async {
-    if (soundName == 'default') return;
-    AudioPlayer? player;
-    try {
-      player = AudioPlayer();
-      await player.setAsset('assets/sounds/$soundName.mp3');
-      await player.play();
-      // Attendre la fin de la lecture
-      await player.playerStateStream.firstWhere(
-        (s) => s.processingState == ProcessingState.completed,
-      ).timeout(const Duration(seconds: 10));
-    } catch (e) {
-      debugPrint('[SoundPreview] Erreur $soundName: $e');
-    } finally {
-      await player?.dispose();
-    }
-  }
-
-  // ─── Affichage d'une notification locale ────────────────────────────────────
+  // ─── AFFICHAGE D'UNE NOTIFICATION LOCALE ──────────────────────────
   Future<void> showNotification({
     required int    id,
     required String title,
     required String body,
     String?         payload,
   }) async {
-    // ⭐ Lire le son CHOISI par l'utilisateur à chaque notification
-    final soundName = await NotificationSoundPrefs.getCustomSoundName();
-    final useCustom = await NotificationSoundPrefs.getUseCustomSound();
-    final channelId = NotificationSoundPrefs.channelIdFor(soundName);
-    final chanName  = NotificationSoundPrefs.channelNameFor(soundName);
-
-    // Son Android: null = utilise le son défini dans le canal (défaut système)
-    AndroidNotificationSound? androidSound;
-    if (useCustom && soundName != 'default' && soundName.isNotEmpty) {
-      androidSound = RawResourceAndroidNotificationSound(soundName);
-    }
-
-    // Son iOS: 'default' = son système, sinon nom du fichier .aiff
-    final iosSound = (useCustom && soundName != 'default')
-        ? '$soundName.aiff'
-        : 'default';
-
-    debugPrint('[Notif] → canal=$channelId son=${androidSound == null ? "défaut" : soundName}');
-
     await _local.show(
-      id, title, body,
-      NotificationDetails(
+      id,
+      title,
+      body,
+      const NotificationDetails(
         android: AndroidNotificationDetails(
-          channelId, chanName,
-          channelDescription: 'Notifications CarEasy',
+          _kChannelId,
+          _kChannelName,
+          channelDescription: _kChannelDesc,
           importance: Importance.high,
           priority: Priority.high,
-          enableVibration: true,
           playSound: true,
-          sound: androidSound,
+          enableVibration: true,
           icon: '@mipmap/ic_launcher',
           visibility: NotificationVisibility.public,
-          styleInformation: BigTextStyleInformation(body),
         ),
         iOS: DarwinNotificationDetails(
-          sound: iosSound,
           presentAlert: true,
           presentBadge: true,
           presentSound: true,
@@ -310,25 +274,7 @@ class NotificationService {
     );
   }
 
-  // ─── Wrappers ───────────────────────────────────────────────────────────────
-  Future<void> showFCMNotification(RemoteMessage message) async {
-    final notif  = message.notification;
-    final data   = message.data;
-    final convId = data['conversation_id']?.toString();
-
-    await showNotification(
-      id:    convId?.hashCode ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title: notif?.title ?? data['title'] ?? 'Nouveau message',
-      body:  notif?.body  ?? data['body']  ?? '',
-      payload: jsonEncode({
-        'conversation_id': convId ?? '',
-        'sender_name':     data['sender_name']  ?? '',
-        'sender_photo':    data['sender_photo'] ?? '',
-        'sender_id':       data['sender_id']    ?? '',
-      }),
-    );
-  }
-
+  // ─── NOTIFICATION DE MESSAGE ────────────────────────────────────────
   Future<void> showMessageNotification({
     required String senderName,
     required String messageBody,
@@ -336,144 +282,274 @@ class NotificationService {
     String? senderPhoto,
     String? senderId,
   }) async {
+    final payload = jsonEncode({
+      'conversation_id': conversationId,
+      'sender_name'    : senderName,
+      'sender_photo'   : senderPhoto ?? '',
+      'sender_id'      : senderId    ?? '',
+    });
+
     await showNotification(
-      id:    conversationId.hashCode,
-      title: senderName,
-      body:  messageBody,
-      payload: jsonEncode({
-        'conversation_id': conversationId,
-        'sender_name':     senderName,
-        'sender_photo':    senderPhoto ?? '',
-        'sender_id':       senderId    ?? '',
-      }),
+      id     : conversationId.hashCode,
+      title  : senderName,
+      body   : messageBody.length > 100
+                   ? '${messageBody.substring(0, 100)}…'
+                   : messageBody,
+      payload: payload,
     );
   }
 
-  Future<void> cancelNotification(String conversationId) async =>
-      _local.cancel(conversationId.hashCode);
+  // ─── NOTIFICATION FCM FOREGROUND ───────────────────────────────────
+  Future<void> showFCMNotification(RemoteMessage message) async {
+    final notif  = message.notification;
+    final data   = message.data;
+    final convId = data['conversation_id']?.toString();
+
+    final payload = jsonEncode({
+      'conversation_id': convId ?? '',
+      'sender_name'    : data['sender_name']  ?? '',
+      'sender_photo'   : data['sender_photo'] ?? '',
+      'sender_id'      : data['sender_id']    ?? '',
+    });
+
+    await showNotification(
+      id     : convId?.hashCode ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title  : notif?.title ?? data['title'] ?? 'Nouveau message',
+      body   : notif?.body  ?? data['body']  ?? '',
+      payload: payload,
+    );
+  }
+
+  // ─── ANNULATION ────────────────────────────────────────────────────
+  Future<void> cancelNotification(String conversationId) async {
+    await _local.cancel(conversationId.hashCode);
+  }
 
   Future<void> cancelAll() async => _local.cancelAll();
 
-  // ─── FCM ────────────────────────────────────────────────────────────────────
+  // ─── FCM ────────────────────────────────────────────────────────────
   Future<void> _initFCM() async {
+    // Demander la permission (iOS obligatoire, Android 13+)
     final settings = await _fcm.requestPermission(
-      alert: true, badge: true, sound: true, provisional: false,
+      alert    : true,
+      badge    : true,
+      sound    : true,
+      provisional: false,
     );
     debugPrint('[FCM] Permission: ${settings.authorizationStatus}');
-    if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
-    // Message reçu en foreground (app ouverte)
-    FirebaseMessaging.onMessage.listen((msg) {
+    if (settings.authorizationStatus == AuthorizationStatus.denied) {
+      debugPrint('[FCM] Notifications refusées par l\'utilisateur');
+      return;
+    }
+
+    // Message reçu en FOREGROUND (app ouverte à l'écran)
+    // Pusher gère déjà la mise à jour du chat, mais on affiche quand même
+    // la notification si l'utilisateur n'est PAS dans ce chatscreen précis
+    FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
       debugPrint('[FCM FG] ${msg.notification?.title}');
+      // Note: Dans ChatScreen, on annule la notif après ouverture
+      // Ici on l'affiche toujours pour les autres conversations
       showFCMNotification(msg);
     });
 
-    // Tap sur notification (app en arrière-plan)
-    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+    // Tap sur notification quand l'app est en ARRIÈRE-PLAN (pas fermée)
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage msg) {
       debugPrint('[FCM] onMessageOpenedApp: ${msg.data}');
       _handleFCMTap(msg.data);
     });
 
-    // App lancée depuis une notification (fermée)
-    final init = await _fcm.getInitialMessage();
-    if (init != null) {
-      debugPrint('[FCM] initialMessage: ${init.data}');
+    // App lancée DEPUIS une notification (app était fermée)
+    final initial = await _fcm.getInitialMessage();
+    if (initial != null) {
+      debugPrint('[FCM] Initial message: ${initial.data}');
+      // Délai pour laisser le temps à l'app de s'initialiser
       Future.delayed(
         const Duration(milliseconds: 1500),
-        () => _handleFCMTap(init.data),
+        () => _handleFCMTap(initial.data),
       );
     }
 
-    await _registerToken();
+    // Enregistrer le token FCM
+    await _registerFCMToken();
+
+    // Écouter les refresh de token
     _fcm.onTokenRefresh.listen(_sendTokenToBackend);
   }
 
-  Future<void> _registerToken() async {
+  Future<void> _registerFCMToken() async {
     try {
       String? token;
       if (Platform.isIOS) {
+        // iOS: attendre le token APNS d'abord
         final apns = await _fcm.getAPNSToken();
-        if (apns != null) token = await _fcm.getToken();
+        if (apns != null) {
+          token = await _fcm.getToken();
+        } else {
+          debugPrint('[FCM] Pas de token APNS — simulateur?');
+        }
       } else {
         token = await _fcm.getToken();
       }
+
       if (token != null) {
         debugPrint('[FCM] Token: ${token.substring(0, 20)}…');
         await _storage.write(key: 'fcm_token_pending', value: token);
         await _sendTokenToBackend(token);
       }
-    } catch (e) { debugPrint('[FCM] Erreur token: $e'); }
+    } catch (e) {
+      debugPrint('[FCM] Erreur récupération token: $e');
+    }
   }
 
   Future<void> _sendTokenToBackend(String fcmToken) async {
     try {
       final authToken = await _storage.read(key: 'auth_token');
       if (authToken == null || authToken.isEmpty) {
+        // Pas encore connecté — on garde le token en attente
         await _storage.write(key: 'fcm_token_pending', value: fcmToken);
         return;
       }
+
       final resp = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
         headers: {
           'Authorization': 'Bearer $authToken',
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
+          'Content-Type' : 'application/json',
+          'Accept'       : 'application/json',
         },
         body: jsonEncode({
           'fcm_token': fcmToken,
-          'platform': Platform.isIOS ? 'ios' : 'android',
+          'platform' : Platform.isIOS ? 'ios' : 'android',
         }),
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200 || resp.statusCode == 201) {
-        debugPrint('[FCM] Token enregistré ✓');
+        debugPrint('[FCM] Token enregistré sur le serveur ✓');
         await _storage.delete(key: 'fcm_token_pending');
       } else {
-        debugPrint('[FCM] Erreur enregistrement: ${resp.statusCode}');
+        debugPrint('[FCM] Erreur enregistrement token: ${resp.statusCode}');
       }
-    } catch (e) { debugPrint('[FCM] Erreur envoi token: $e'); }
+    } catch (e) {
+      debugPrint('[FCM] Erreur envoi token au backend: $e');
+    }
   }
 
+  // Appelé après la connexion pour envoyer le token si en attente
   Future<void> refreshTokenAfterLogin() async {
     try {
       final pending = await _storage.read(key: 'fcm_token_pending');
       if (pending != null && pending.isNotEmpty) {
         await _sendTokenToBackend(pending);
       } else {
-        await _registerToken();
+        await _registerFCMToken();
       }
-    } catch (e) { debugPrint('[FCM] refreshTokenAfterLogin: $e'); }
+    } catch (e) {
+      debugPrint('[FCM] refreshTokenAfterLogin: $e');
+    }
   }
 
-  // ─── Gestion du tap ─────────────────────────────────────────────────────────
+  // ─── GESTION DES TAPS ──────────────────────────────────────────────
   void _handleTap(String? payload) {
     if (payload == null || payload.isEmpty) return;
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
-      debugPrint('[Notif] Tap: $data');
+      debugPrint('[Notif] Tap navigation: $data');
       onNotificationTap?.call(data);
     } catch (_) {
-      // Ancien format (juste un string conversation_id)
+      // Ancien format simple
       onNotificationTap?.call({'conversation_id': payload});
     }
   }
 
   void _handleFCMTap(Map<String, dynamic> data) {
-    debugPrint('[FCM] Tap: $data');
+    debugPrint('[FCM] Tap navigation: $data');
     final convId = data['conversation_id']?.toString();
     if (convId != null && convId.isNotEmpty) {
       onNotificationTap?.call({
         'conversation_id': convId,
-        'sender_name':     data['sender_name']  ?? '',
-        'sender_photo':    data['sender_photo'] ?? '',
-        'sender_id':       data['sender_id']    ?? '',
+        'sender_name'    : data['sender_name']  ?? '',
+        'sender_photo'   : data['sender_photo'] ?? '',
+        'sender_id'      : data['sender_id']    ?? '',
       });
     }
   }
-}
 
-// ─── Callback background tap — obligatoirement top-level ────────────────────
-@pragma('vm:entry-point')
-void _bgTapCallback(NotificationResponse d) {
-  debugPrint('[Notif BG Tap] payload=${d.payload}');
+  // ─── PARAMÈTRES DE SON ─────────────────────────────────────────────
+  /// Recrée le canal Android avec les nouvelles préférences de son.
+  /// Appelé depuis NotificationsSettingsScreen après changement.
+  Future<void> updateNotificationChannel() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final useCustom = await NotificationSoundPrefs.getUseCustomSound();
+      final soundName = await NotificationSoundPrefs.getCustomSoundName();
+
+      AndroidNotificationChannel channel;
+      if (useCustom && soundName != 'default') {
+        channel = AndroidNotificationChannel(
+          'careasy_messages',
+          'Messages CarEasy',
+          description : 'Notifications de nouveaux messages',
+          importance  : Importance.high,
+          playSound   : true,
+          sound       : RawResourceAndroidNotificationSound(soundName),
+        );
+      } else {
+        channel = const AndroidNotificationChannel(
+          'careasy_messages',
+          'Messages CarEasy',
+          description : 'Notifications de nouveaux messages',
+          importance  : Importance.high,
+          playSound   : true,
+          // son système par défaut
+        );
+      }
+
+      await _local
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+
+      debugPrint('[Notif] Canal mis à jour (son: ${useCustom ? soundName : "défaut"})');
+    } catch (e) {
+      debugPrint('[Notif] updateNotificationChannel error: $e');
+    }
+  }
+
+  /// Joue un aperçu du son (simple notification silencieuse avec son).
+  Future<void> playSoundPreview(String soundName) async {
+    try {
+      AndroidNotificationDetails androidDetails;
+      if (soundName != 'default') {
+        androidDetails = AndroidNotificationDetails(
+          'careasy_preview',
+          'Aperçu son',
+          channelDescription : 'Aperçu des sons de notification',
+          importance         : Importance.high,
+          priority           : Priority.high,
+          playSound          : true,
+          sound              : RawResourceAndroidNotificationSound(soundName),
+          silent             : false,
+        );
+      } else {
+        androidDetails = const AndroidNotificationDetails(
+          'careasy_preview',
+          'Aperçu son',
+          channelDescription : 'Aperçu des sons de notification',
+          importance         : Importance.high,
+          priority           : Priority.high,
+          playSound          : true,
+        );
+      }
+
+      await _local.show(
+        9999,
+        'Aperçu du son',
+        'Voici à quoi ressemblera votre son de notification.',
+        NotificationDetails(android: androidDetails),
+      );
+    } catch (e) {
+      debugPrint('[Notif] playSoundPreview error: $e');
+    }
+  }
 }
