@@ -51,37 +51,42 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> with SingleTi
     return cleaned;
   }
 
-  Future<void> _makePhoneCall(String phoneNumber) async {
-    try {
-      final formattedNumber = _formatPhoneNumber(phoneNumber);
-      final telUrl = 'tel:$formattedNumber';
-      if (await canLaunch(telUrl)) {
-        await launch(telUrl);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de l\'appel')),
-      );
+  // APRÈS — correct
+Future<void> _makePhoneCall(String phoneNumber) async {
+  try {
+    final formattedNumber = _formatPhoneNumber(phoneNumber);
+    final uri = Uri.parse('tel:$formattedNumber');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
     }
+  } catch (e) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Erreur lors de l\'appel')),
+    );
   }
+}
 
-  Future<void> _openWhatsApp(String phoneNumber) async {
-    try {
-      final formattedNumber = _formatPhoneNumber(phoneNumber).replaceAll('+', '');
-      final whatsappUrl = 'https://wa.me/$formattedNumber';
-      if (await canLaunch(whatsappUrl)) {
-        await launch(whatsappUrl);
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de l\'ouverture de WhatsApp')),
-      );
+Future<void> _openWhatsApp(String phoneNumber) async {
+  try {
+    final formattedNumber = _formatPhoneNumber(phoneNumber).replaceAll('+', '');
+    final uri = Uri.parse('https://wa.me/$formattedNumber');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
+  } catch (e) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Erreur lors de l\'ouverture de WhatsApp')),
+    );
   }
+}
 
   @override
   Widget build(BuildContext context) {
-    final entreprise = widget.service['entreprise'] ?? {};
+    final entreprise = Map<String, dynamic>.from(
+    widget.service['entreprise'] is Map 
+        ? widget.service['entreprise'] 
+        : {}
+);
     final medias = widget.service['medias'] is List ? widget.service['medias'] : [];
     final hasPromo = widget.service['has_promo'] ?? false;
     final isPromoActive = widget.service['is_promo_active'] ?? false;
@@ -592,7 +597,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> with SingleTi
   }
 
   Widget _buildScheduleTab() {
-    final schedule = widget.service['schedule'] is Map ? widget.service['schedule'] : {};
+    final schedule = widget.service['schedule'] is Map
+    ? Map<String, dynamic>.from(widget.service['schedule'])
+    : <String, dynamic>{};
     final days = [
       'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'
     ];
@@ -625,7 +632,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> with SingleTi
       separatorBuilder: (context, index) => const Divider(),
       itemBuilder: (context, index) {
         final day = days[index];
-        final daySchedule = schedule[day] ?? {'is_open': false};
+        final daySchedule = schedule[day] is Map
+    ? Map<String, dynamic>.from(schedule[day])
+    : <String, dynamic>{'is_open': false};
         
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),

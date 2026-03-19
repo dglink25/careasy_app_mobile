@@ -6,11 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 
-// ─────────────────────────────────────────────
-//  AllEntreprisesScreen
-// ─────────────────────────────────────────────
+
 class AllEntreprisesScreen extends StatefulWidget {
-  /// Données pré-chargées depuis HomeScreen
   final List<dynamic> initialEntreprises;
   final List<dynamic> initialDomaines;
 
@@ -57,9 +54,6 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────
-  //  Rafraîchissement API
-  // ─────────────────────────────────────────────
   Future<void> _refresh() async {
     setState(() => _isLoading = true);
     try {
@@ -81,9 +75,6 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     }
   }
 
-  // ─────────────────────────────────────────────
-  //  Pipeline filtre + recherche
-  // ─────────────────────────────────────────────
   List<dynamic> get _processed {
     List<dynamic> list = List.from(_entreprises);
 
@@ -109,9 +100,6 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     return list;
   }
 
-  // ─────────────────────────────────────────────
-  //  BUILD
-  // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final results = _processed;
@@ -121,16 +109,10 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
       appBar: _buildAppBar(),
       body: Column(
         children: [
-          // ── Barre de recherche ──────────────────
           _buildSearchBar(),
-
-          // ── Filtres domaines ────────────────────
           _buildDomainFilters(),
-
-          // ── Compteur résultats ──────────────────
           _buildResultCount(results.length),
 
-          // ── Liste entreprises ───────────────────
           Expanded(
             child: _isLoading
                 ? const Center(
@@ -157,9 +139,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  AppBar
-  // ─────────────────────────────────────────────
+
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: AppConstants.primaryRed,
@@ -176,9 +156,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  Barre de recherche (collée à l'AppBar)
-  // ─────────────────────────────────────────────
+
   Widget _buildSearchBar() {
     return Container(
       color: AppConstants.primaryRed,
@@ -216,9 +194,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  Filtres domaines
-  // ─────────────────────────────────────────────
+
   Widget _buildDomainFilters() {
     return Container(
       height: 52,
@@ -273,9 +249,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  Compteur résultats
-  // ─────────────────────────────────────────────
+
   Widget _buildResultCount(int count) {
     return Container(
       color: Colors.grey[50],
@@ -331,9 +305,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  Carte entreprise compacte
-  // ─────────────────────────────────────────────
+
   Widget _buildCompactCard(Map<String, dynamic> entreprise) {
     final isValidated = entreprise['status'] == 'validated';
     final domaines = entreprise['domaines'] as List? ?? [];
@@ -413,7 +385,6 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
 
               const SizedBox(width: 12),
 
-              // ── Infos ───────────────────────────
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -519,7 +490,6 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
 
                     const SizedBox(height: 6),
 
-                    // Nb services + flèche
                     Row(
                       children: [
                         Icon(Icons.build_circle_outlined,
@@ -603,9 +573,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
     );
   }
 
-  // ─────────────────────────────────────────────
-  //  État vide
-  // ─────────────────────────────────────────────
+
   Widget _buildEmptyState() {
     final hasFilters = _searchQuery.isNotEmpty ||
         (_selectedDomaine != null && _selectedDomaine != 'Tous');
