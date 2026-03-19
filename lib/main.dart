@@ -11,6 +11,7 @@ import 'providers/auth_provider.dart';
 import 'providers/message_provider.dart';
 import 'providers/service_provider.dart';
 import 'providers/theme_provider.dart';
+import 'providers/rendez_vous_provider.dart';            // ← AJOUT
 import 'services/notification_service.dart';
 import 'services/pusher_service.dart';
 import 'screens/splash_screen.dart';
@@ -20,6 +21,8 @@ import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/messages_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/rendez_vous/rendez_vous_list_screen.dart';      // ← AJOUT
+import 'screens/rendez_vous/rendez_vous_detail_screen.dart';    // ← AJOUT
 import 'models/user_model.dart';
 import 'utils/constants.dart';
 import 'theme/app_theme.dart';
@@ -43,8 +46,6 @@ void main() async {
   }
 
   runApp(
-    // ✅ CORRECTION 1 — ThemeProvider DOIT être le provider racine,
-    // enveloppant toute l'app AVANT MultiProvider
     ChangeNotifierProvider(
       create: (_) => ThemeProvider(),
       child: const CarEasyApp(),
@@ -62,33 +63,48 @@ class CarEasyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()..loadUserData()),
         ChangeNotifierProvider(create: (_) => MessageProvider()),
         ChangeNotifierProvider(create: (_) => ServiceProvider()),
+        ChangeNotifierProvider(create: (_) => RendezVousProvider()),   // ← AJOUT
       ],
-      // ✅ CORRECTION 2 — Consumer<ThemeProvider> écoute les changements
-      // et rebuild MaterialApp à chaque appel de setThemeMode()
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, _) {
           return MaterialApp(
             title: 'CarEasy',
             debugShowCheckedModeBanner: false,
 
-            // ✅ Ces 3 lignes sont indispensables
-            themeMode: themeProvider.themeMode,   // pilote clair / sombre / système
-            theme: AppTheme.lightTheme,           // thème clair
-            darkTheme: AppTheme.darkTheme,        // thème sombre
+            themeMode: themeProvider.themeMode,
+            theme: AppTheme.lightTheme,
+            darkTheme: AppTheme.darkTheme,
 
             navigatorKey: navigatorKey,
             home: const SplashScreen(),
             routes: {
-              '/welcome' : (_) => const WelcomeScreen(),
-              '/login'   : (_) => const LoginScreen(),
-              '/register': (_) => const RegisterScreen(),
-              '/home'    : (_) => const HomeScreen(),
-              '/messages': (_) => const MessagesScreen(),
+              '/welcome'     : (_) => const WelcomeScreen(),
+              '/login'       : (_) => const LoginScreen(),
+              '/register'    : (_) => const RegisterScreen(),
+              '/home'        : (_) => const HomeScreen(),
+              '/messages'    : (_) => const MessagesScreen(),
+              '/rendez-vous' : (_) => const RendezVousListScreen(),    // ← AJOUT
             },
             onGenerateRoute: (settings) {
+              // ── Messages ─────────────────────────────────────────────
               if (settings.name?.startsWith('/messages') == true) {
-                return MaterialPageRoute(builder: (_) => const MessagesScreen());
+                return MaterialPageRoute(
+                    builder: (_) => const MessagesScreen());
               }
+
+              // ── Détail rendez-vous /rendez-vous/:id ──────────────────
+              if (settings.name?.startsWith('/rendez-vous/') == true) {
+                final id = settings.name!.split('/rendez-vous/').last;
+                if (id.isNotEmpty) {
+                  return MaterialPageRoute(
+                    builder: (ctx) => ChangeNotifierProvider.value(
+                      value: ctx.read<RendezVousProvider>(),
+                      child: RendezVousDetailScreen(rdvId: id),
+                    ),
+                  );
+                }
+              }
+
               return null;
             },
           );
@@ -98,18 +114,40 @@ class CarEasyApp extends StatelessWidget {
   }
 }
 
+// ── Navigation depuis les notifications ───────────────────────────────────────
 void setupNotificationNavigation(BuildContext context) {
   NotificationService().onNotificationTap = (Map<String, dynamic> data) async {
-    final convId      = data['conversation_id']?.toString() ?? '';
-    final senderName  = data['sender_name']?.toString()     ?? 'Contact';
-    final senderPhoto = data['sender_photo']?.toString();
-    final senderId    = data['sender_id']?.toString()        ?? '';
+    final type    = data['type']?.toString() ?? '';
+    final convId  = data['conversation_id']?.toString() ?? '';
+    final rdvId   = data['rdv_id']?.toString() ?? '';
 
+    // ── Notifications RDV ────────────────────────────────────────────
+    if (type.startsWith('rdv_') || rdvId.isNotEmpty) {
+      if (rdvId.isNotEmpty) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(
+            builder: (ctx) => ChangeNotifierProvider.value(
+              value: navigatorKey.currentContext!.read<RendezVousProvider>(),
+              child: RendezVousDetailScreen(rdvId: rdvId),
+            ),
+          ),
+        );
+      } else {
+        navigatorKey.currentState?.pushNamed('/rendez-vous');
+      }
+      return;
+    }
+
+    // ── Notifications Messages ────────────────────────────────────────
     if (convId.isEmpty) {
       navigatorKey.currentState?.pushNamedAndRemoveUntil(
           '/messages', (r) => r.isFirst);
       return;
     }
+
+    final senderName  = data['sender_name']?.toString()  ?? 'Contact';
+    final senderPhoto = data['sender_photo']?.toString();
+    final senderId    = data['sender_id']?.toString()    ?? '';
 
     UserModel otherUser = UserModel(
       id      : senderId.isNotEmpty ? senderId : convId,
@@ -122,20 +160,25 @@ void setupNotificationNavigation(BuildContext context) {
       try {
         const storage = FlutterSecureStorage(
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
-          iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+          iOptions: IOSOptions(
+              accessibility: KeychainAccessibility.first_unlock),
         );
         final token = await storage.read(key: 'auth_token');
         if (token != null && token.isNotEmpty) {
-          final resp = await http.get(
-            Uri.parse('${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
-            headers: {
-              'Authorization': 'Bearer $token',
-              'Accept'       : 'application/json',
-            },
-          ).timeout(const Duration(seconds: 5));
+          final resp = await http
+              .get(
+                Uri.parse(
+                    '${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
+                headers: {
+                  'Authorization': 'Bearer $token',
+                  'Accept': 'application/json',
+                },
+              )
+              .timeout(const Duration(seconds: 5));
 
           if (resp.statusCode == 200) {
-            final userData = jsonDecode(resp.body) as Map<String, dynamic>;
+            final userData =
+                jsonDecode(resp.body) as Map<String, dynamic>;
             otherUser = UserModel(
               id      : senderId,
               name    : senderName,

@@ -1,3 +1,4 @@
+// lib/services/pusher_service.dart
 
 import 'dart:async';
 import 'dart:convert';
@@ -6,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../providers/message_provider.dart';
+import '../providers/rendez_vous_provider.dart';          // ← AJOUT
 import '../models/message_model.dart';
 import '../utils/constants.dart';
 
@@ -39,11 +41,17 @@ class PusherService {
   Timer? _reconnectTimer;
   static const int _maxReconnectAttempts = 8;
 
-  // Référence au provider (injectée depuis main.dart ou splash_screen)
-  MessageProvider? _messageProvider;
+  // Providers injectés
+  MessageProvider?    _messageProvider;
+  RendezVousProvider? _rdvProvider;         // ← AJOUT
 
   void setMessageProvider(MessageProvider provider) {
     _messageProvider = provider;
+  }
+
+  // ← AJOUT : injection du RendezVousProvider
+  void setRendezVousProvider(RendezVousProvider provider) {
+    _rdvProvider = provider;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -63,7 +71,6 @@ class PusherService {
     debugPrint('[Pusher] Initialisation...');
 
     try {
-      // Charger le userId
       final raw = await _storage.read(key: 'user_data');
       if (raw == null || raw.isEmpty) {
         debugPrint('[Pusher] Pas de user_data → abandon');
@@ -81,13 +88,11 @@ class PusherService {
 
       debugPrint('[Pusher] UserId = $_currentUserId');
 
-      // Ajouter le canal utilisateur (toujours souscrit)
       _pendingChannels.add('private-user.$_currentUserId');
 
       _pusher = PusherChannelsFlutter.getInstance();
 
       await _pusher!.init(
-        // ⚠️ Remplacez par votre clé Pusher réelle depuis .env
         apiKey : AppConstants.pusherKey,
         cluster: AppConstants.pusherCluster,
 
@@ -124,7 +129,6 @@ class PusherService {
           if (event is PusherEvent) _onEvent(event);
         },
 
-        // Autorisation des canaux privés via le backend Laravel
         onAuthorizer: (String channelName, String socketId, dynamic opts) async {
           return await _authorize(channelName, socketId);
         },
@@ -148,7 +152,6 @@ class PusherService {
     }
 
     _reconnectTimer?.cancel();
-    // Backoff: 2s, 4s, 8s, 16s, 30s, 30s, 30s, 30s
     final seconds = _reconnectAttempts < 4
         ? (2 << _reconnectAttempts)
         : 30;
@@ -166,7 +169,7 @@ class PusherService {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  //  AUTORISATION BEARER — Requis pour les canaux privés Pusher
+  //  AUTORISATION BEARER
   // ═══════════════════════════════════════════════════════════════════
   Future<dynamic> _authorize(String channelName, String socketId) async {
     try {
@@ -240,7 +243,6 @@ class PusherService {
   //  ROUTEUR D'ÉVÉNEMENTS PUSHER
   // ═══════════════════════════════════════════════════════════════════
   void _onEvent(PusherEvent event) {
-    // Ignorer les événements système Pusher
     if (event.eventName.startsWith('pusher') ||
         event.eventName.startsWith('pusher_internal')) {
       return;
@@ -253,39 +255,67 @@ class PusherService {
 
       debugPrint('[Pusher] ← ${event.eventName} sur ${event.channelName}');
 
-      if (_messageProvider == null || _currentUserId == null) {
-        debugPrint('[Pusher] Provider null, événement ignoré');
-        return;
-      }
-
       switch (event.eventName) {
+        // ── Messages ─────────────────────────────────────────────────
         case 'new-message':
-          _onNewMessage(data);
+          if (_messageProvider != null && _currentUserId != null) {
+            _onNewMessage(data);
+          }
           break;
 
         case 'message-sent':
-          _onMessageSent(data);
+          if (_messageProvider != null && _currentUserId != null) {
+            _onMessageSent(data);
+          }
           break;
 
         case 'typing-indicator':
-          _onTypingIndicator(data);
+          if (_messageProvider != null && _currentUserId != null) {
+            _onTypingIndicator(data);
+          }
           break;
 
         case 'recording-indicator':
-          _onRecordingIndicator(data);
+          if (_messageProvider != null && _currentUserId != null) {
+            _onRecordingIndicator(data);
+          }
           break;
 
         case 'user-status':
-          _onUserStatus(data);
+          if (_messageProvider != null) {
+            _onUserStatus(data);
+          }
           break;
 
         case 'messages-read':
-          _onMessagesRead(data);
+          if (_messageProvider != null) {
+            _onMessagesRead(data);
+          }
+          break;
+
+        // ── Rendez-vous ───────────────────────────────────────────────
+        // Ces events viennent de RdvNotification.php via broadcastAs()
+        // Ils arrivent sur le canal private-user.{userId}
+        case 'rdv-pending':
+        case 'rdv-confirmed':
+        case 'rdv-cancelled':
+        case 'rdv-completed':
+          _onRdvNotification(data, event.eventName);
+          break;
+
+        // ── Entreprises ───────────────────────────────────────────────
+        case 'entreprise-approved':
+        case 'entreprise-rejected':
+        case 'new-entreprise-pending':
+          debugPrint('[Pusher] Notif entreprise: ${event.eventName}');
+          // Extensible : brancher un EntrepriseProvider ici si besoin
           break;
 
         default:
-          // Notifications Laravel broadcast
-          if (data.containsKey('conversation_id')) {
+          // Fallback: si le payload contient conversation_id → message
+          if (_messageProvider != null &&
+              _currentUserId != null &&
+              data.containsKey('conversation_id')) {
             _onNewMessage(data);
           }
       }
@@ -294,11 +324,11 @@ class PusherService {
     }
   }
 
-  // ─── NOUVEAU MESSAGE ────────────────────────────────────────────────
-  // Appelé quand quelqu'un envoie un message dans une conversation
-  // où on est participant.
+  // ═══════════════════════════════════════════════════════════════════
+  //  HANDLERS — Messages
+  // ═══════════════════════════════════════════════════════════════════
+
   void _onNewMessage(Map<String, dynamic> data) {
-    // Le message peut être dans data['message'] ou à la racine
     final Map<String, dynamic> msgData;
     if (data['message'] is Map) {
       msgData = Map<String, dynamic>.from(data['message'] as Map);
@@ -315,7 +345,6 @@ class PusherService {
       return;
     }
 
-    // NE PAS ajouter ses propres messages (déjà ajoutés localement à l'envoi)
     if (senderId == _currentUserId) {
       debugPrint('[Pusher] new-message: message de soi-même, ignoré');
       return;
@@ -326,9 +355,6 @@ class PusherService {
     _messageProvider!.receiveMessage(msg, convId);
   }
 
-  // ─── CONFIRMATION D'ENVOI ───────────────────────────────────────────
-  // Confirme qu'un message envoyé par NOUS a bien été reçu par le serveur.
-  // Remplace le message temporaire (status='sending') par le message confirmé.
   void _onMessageSent(Map<String, dynamic> data) {
     final Map<String, dynamic> msgData;
     if (data['message'] is Map) {
@@ -340,29 +366,23 @@ class PusherService {
     final convId   = msgData['conversation_id']?.toString() ?? '';
     final senderId = msgData['sender_id']?.toString() ?? '';
 
-    // Seulement pour nos propres messages
     if (convId.isEmpty || senderId != _currentUserId) return;
 
     debugPrint('[Pusher] Confirmation message dans conv $convId');
     _messageProvider!.confirmMessage(msgData, convId, _currentUserId!);
   }
 
-  // ─── INDICATEUR "EN TRAIN D'ÉCRIRE" ────────────────────────────────
-  // Affiché en temps réel dans l'AppBar du ChatScreen
   void _onTypingIndicator(Map<String, dynamic> data) {
     final userId   = data['user_id']?.toString();
     final convId   = data['conversation_id']?.toString() ?? '';
     final isTyping = data['is_typing'] == true;
 
-    // Ne pas traiter ses propres indicateurs
     if (userId == null || userId == _currentUserId || convId.isEmpty) return;
 
     debugPrint('[Pusher] Typing: user=$userId, isTyping=$isTyping');
     _messageProvider!.setTypingIndicator(convId, userId, isTyping);
   }
 
-  // ─── INDICATEUR "ENREGISTRE UN VOCAL" ──────────────────────────────
-  // Affiché en temps réel dans l'AppBar: "● enregistre un vocal..."
   void _onRecordingIndicator(Map<String, dynamic> data) {
     final userId      = data['user_id']?.toString();
     final convId      = data['conversation_id']?.toString() ?? '';
@@ -374,7 +394,6 @@ class PusherService {
     _messageProvider!.setRecordingIndicator(convId, userId, isRecording);
   }
 
-  // ─── STATUT EN LIGNE ────────────────────────────────────────────────
   void _onUserStatus(Map<String, dynamic> data) {
     final userId   = data['user_id']?.toString();
     final isOnline = data['is_online'] == true;
@@ -389,7 +408,6 @@ class PusherService {
     _messageProvider!.updateUserOnlineStatus(userId, isOnline, lastSeen);
   }
 
-  // ─── MESSAGES LUS ───────────────────────────────────────────────────
   void _onMessagesRead(Map<String, dynamic> data) {
     final convId = data['conversation_id']?.toString();
     if (convId != null && convId.isNotEmpty) {
@@ -398,10 +416,63 @@ class PusherService {
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  //  HANDLERS — Rendez-vous                                    ← AJOUT
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Reçoit les events rdv-pending / rdv-confirmed / rdv-cancelled / rdv-completed.
+  /// Le payload correspond exactement à RdvNotification::buildData() côté Laravel.
+  void _onRdvNotification(Map<String, dynamic> data, String eventName) {
+    debugPrint('[Pusher] RDV event: $eventName — rdv_id=${data['rdv_id']}');
+
+    // Mettre à jour la liste des RDV dans le provider si disponible
+    _rdvProvider?.updateFromNotification(data);
+
+    // Afficher une notification locale visible pour informer l'utilisateur
+    // (même si l'app est en foreground, l'event Pusher ne produit pas
+    //  de notification système — on en crée une manuellement)
+    _showRdvLocalNotification(data, eventName);
+  }
+
+  void _showRdvLocalNotification(
+      Map<String, dynamic> data, String eventName) {
+    // Import circulaire évité : on appelle via le singleton NotificationService
+    // depuis pusher_service — safe car les deux sont des singletons.
+    try {
+      final title = data['title']?.toString() ?? _rdvEventTitle(eventName);
+      final body  = data['body']?.toString()  ?? '';
+      final rdvId = data['rdv_id']?.toString() ?? '';
+
+      // On importe NotificationService dans le fichier (voir import en bas)
+      final payload = jsonEncode({
+        'type'  : data['type'] ?? 'rdv_pending',
+        'rdv_id': rdvId,
+      });
+
+      NotificationServiceRef.show(
+        id     : rdvId.isNotEmpty ? rdvId.hashCode : DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        title  : title,
+        body   : body,
+        payload: payload,
+      );
+    } catch (e) {
+      debugPrint('[Pusher] _showRdvLocalNotification error: $e');
+    }
+  }
+
+  String _rdvEventTitle(String eventName) {
+    switch (eventName) {
+      case 'rdv-pending'  : return '📅 Nouvelle demande de RDV';
+      case 'rdv-confirmed': return '✅ Rendez-vous confirmé';
+      case 'rdv-cancelled': return '❌ Rendez-vous annulé';
+      case 'rdv-completed': return '🎉 Rendez-vous terminé';
+      default             : return 'Rendez-vous';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   //  API PUBLIQUE
   // ═══════════════════════════════════════════════════════════════════
 
-  /// Souscrire au canal d'une conversation (appelé quand on ouvre un chat)
   Future<void> subscribeToConversation(String conversationId) async {
     final ch = 'private-conversation.$conversationId';
     _pendingChannels.add(ch);
@@ -410,7 +481,6 @@ class PusherService {
     }
   }
 
-  /// Se désabonner quand on quitte un chat
   Future<void> unsubscribeFromConversation(String conversationId) async {
     final ch = 'private-conversation.$conversationId';
     if (_subscribedChannels.contains(ch)) {
@@ -425,7 +495,6 @@ class PusherService {
     }
   }
 
-  /// Réinitialisation complète (appelée après connexion/déconnexion)
   Future<void> reinitialize() async {
     debugPrint('[Pusher] Réinitialisation complète...');
     _reconnectTimer?.cancel();
@@ -457,4 +526,38 @@ class PusherService {
 
   bool get isConnected => _isInitialized;
   String? get currentUserId => _currentUserId;
+}
+
+// ── Référence indirecte à NotificationService pour éviter l'import circulaire ─
+// NotificationService importe pusher_service → pusher_service ne peut pas
+// importer notification_service directement.
+// On passe par une classe statique avec une callback enregistrée au démarrage.
+class NotificationServiceRef {
+  static Future<void> Function({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  })? _showFn;
+
+  /// Appelé depuis notification_service.dart dans initialize()
+  static void register(
+    Future<void> Function({
+      required int id,
+      required String title,
+      required String body,
+      String? payload,
+    }) fn,
+  ) {
+    _showFn = fn;
+  }
+
+  static Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    await _showFn?.call(id: id, title: title, body: body, payload: payload);
+  }
 }
