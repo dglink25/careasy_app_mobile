@@ -1,6 +1,8 @@
 // lib/screens/messages_screen.dart
 // ═══════════════════════════════════════════════════════════════════════
-// VERSION FINALE — Polling intégré + Notifications auto
+// CORRECTIONS:
+// - Suppression des icônes d'appel
+// - Ajout recherche de conversation
 // ═══════════════════════════════════════════════════════════════════════
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -45,6 +47,11 @@ class _MessagesScreenState extends State<MessagesScreen>
   Map<String, dynamic>? _userData;
   bool _hasEntreprise = false;
 
+  // Recherche
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
   @override
   void initState() {
     super.initState();
@@ -54,12 +61,12 @@ class _MessagesScreenState extends State<MessagesScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadUserData();
       context.read<MessageProvider>().loadConversations();
-
-      // ⭐ Cette page n'a pas de conversation active
       MessagePollingService().setActiveConversation(null);
-
-      // Configurer la navigation depuis les notifications push
       setupNotificationNavigation(context);
+    });
+
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
     });
   }
 
@@ -67,7 +74,6 @@ class _MessagesScreenState extends State<MessagesScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       context.read<MessageProvider>().loadConversations();
-      // Pas de conversation active sur cet écran
       MessagePollingService().setActiveConversation(null);
     }
   }
@@ -87,6 +93,7 @@ class _MessagesScreenState extends State<MessagesScreen>
   @override
   void dispose() {
     _tabController.dispose();
+    _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -107,36 +114,7 @@ class _MessagesScreenState extends State<MessagesScreen>
       );
 
   void _handleEntrepriseTap() {
-    if (_hasEntreprise) {
-      _showComingSoon('Mon entreprise');
-    } else {
-      _showCreateEntrepriseDialog();
-    }
-  }
-
-  void _showCreateEntrepriseDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Créer une entreprise'),
-        content: const Text('Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une ?'),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Plus tard')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showComingSoon('Création entreprise');
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: const Text('Créer'),
-          ),
-        ],
-      ),
-    );
+    _showComingSoon('Mon entreprise');
   }
 
   void _showProfileDialog() {
@@ -182,9 +160,43 @@ class _MessagesScreenState extends State<MessagesScreen>
         backgroundColor: AppConstants.primaryRed,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Messages',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        bottom: TabBar(
+        title: _isSearching
+            ? Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: TextField(
+                  controller: _searchController,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.black87, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Rechercher une conversation...',
+                    hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: AppConstants.primaryRed, size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(Icons.close, color: Colors.grey[600], size: 18),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() { _isSearching = false; _searchQuery = ''; });
+                      },
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
+              )
+            : const Text('Messages',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        actions: [
+          if (!_isSearching)
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () => setState(() => _isSearching = true),
+            ),
+        ],
+        bottom: _isSearching ? null : TabBar(
           controller: _tabController,
           indicatorColor: Colors.white,
           indicatorWeight: 3,
@@ -215,14 +227,16 @@ class _MessagesScreenState extends State<MessagesScreen>
                 ]);
               }),
             ),
-            const Tab(text: 'Appels'),
+            const Tab(text: 'Groupes'),
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [_buildMessagesTab(), _buildCallsTab()],
-      ),
+      body: _isSearching
+          ? _buildSearchResults()
+          : TabBarView(
+              controller: _tabController,
+              children: [_buildMessagesTab(), _buildGroupsTab()],
+            ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -251,6 +265,47 @@ class _MessagesScreenState extends State<MessagesScreen>
         ),
       ),
     );
+  }
+
+  // ── Recherche de conversations ─────────────────────────────────────
+  Widget _buildSearchResults() {
+    return Consumer<MessageProvider>(builder: (_, provider, __) {
+      final query = _searchQuery;
+      if (query.isEmpty) {
+        return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.search, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text('Tapez pour rechercher une conversation',
+                style: TextStyle(color: Colors.grey[500], fontSize: 14)),
+          ]),
+        );
+      }
+
+      final filtered = provider.conversations.where((conv) {
+        final name = conv.otherUser.name.toLowerCase();
+        final lastMsg = conv.lastMessage?.content.toLowerCase() ?? '';
+        final service = (conv.serviceName ?? '').toLowerCase();
+        return name.contains(query) || lastMsg.contains(query) || service.contains(query);
+      }).toList();
+
+      if (filtered.isEmpty) {
+        return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text('Aucune conversation trouvée',
+                style: TextStyle(color: Colors.grey[500], fontSize: 14)),
+          ]),
+        );
+      }
+
+      return ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: filtered.length,
+        itemBuilder: (_, i) => _buildConvItem(filtered[i], provider),
+      );
+    });
   }
 
   Widget _navItem(IconData icon, String label, int index, Size size) {
@@ -452,7 +507,6 @@ class _MessagesScreenState extends State<MessagesScreen>
                 ),
               ),
             ).then((_) {
-              // Quand on revient du chat, plus de conversation active
               MessagePollingService().setActiveConversation(null);
               provider.loadConversations();
             });
@@ -582,22 +636,22 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   String _lastMsgPreview(lastMsg) {
     switch (lastMsg.type) {
-      case 'image':    return '📷 Image';
-      case 'video':    return '🎥 Vidéo';
+      case 'image':    return 'Image';
+      case 'video':    return 'Vidéo';
       case 'audio':
-      case 'vocal':    return '🎤 Message vocal';
-      case 'document': return '📄 Document';
-      case 'location': return '📍 Localisation';
+      case 'vocal':    return 'Message vocal';
+      case 'document': return 'Document';
+      case 'location': return 'Localisation';
       default:         return lastMsg.content ?? '';
     }
   }
 
-  Widget _buildCallsTab() {
+  Widget _buildGroupsTab() {
     return Center(
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.phone_in_talk, size: 64, color: Colors.grey[400]),
+        Icon(Icons.group_outlined, size: 64, color: Colors.grey[400]),
         const SizedBox(height: 16),
-        Text('Historique des appels',
+        Text('Groupes',
             style: TextStyle(fontSize: 18, color: Colors.grey[600])),
         const SizedBox(height: 8),
         Text('Bientôt disponible',
