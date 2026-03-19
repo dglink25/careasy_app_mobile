@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'providers/auth_provider.dart';
 import 'providers/message_provider.dart';
 import 'providers/service_provider.dart';
+import 'providers/theme_provider.dart';
 import 'services/notification_service.dart';
 import 'services/pusher_service.dart';
 import 'screens/splash_screen.dart';
@@ -28,23 +29,27 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialiser Firebase (requis pour FCM)
   try {
     await Firebase.initializeApp();
-    // ⚠️ Obligatoire: enregistrer le handler AVANT de lancer l'app
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   } catch (e) {
     debugPrint('Firebase init: $e');
   }
 
-  // Initialiser le service de notifications
   try {
     await NotificationService().initialize();
   } catch (e) {
     debugPrint('NotificationService init: $e');
   }
 
-  runApp(const CarEasyApp());
+  runApp(
+    // ✅ CORRECTION 1 — ThemeProvider DOIT être le provider racine,
+    // enveloppant toute l'app AVANT MultiProvider
+    ChangeNotifierProvider(
+      create: (_) => ThemeProvider(),
+      child: const CarEasyApp(),
+    ),
+  );
 }
 
 class CarEasyApp extends StatelessWidget {
@@ -54,41 +59,45 @@ class CarEasyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(
-          create: (_) => AuthProvider()..loadUserData(),
-        ),
+        ChangeNotifierProvider(create: (_) => AuthProvider()..loadUserData()),
         ChangeNotifierProvider(create: (_) => MessageProvider()),
         ChangeNotifierProvider(create: (_) => ServiceProvider()),
       ],
-      child: MaterialApp(
-        title: 'CarEasy',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.lightTheme,
-        navigatorKey: navigatorKey,
-        home: const SplashScreen(),
-        routes: {
-          '/welcome' : (_) => const WelcomeScreen(),
-          '/login'   : (_) => const LoginScreen(),
-          '/register': (_) => const RegisterScreen(),
-          '/home'    : (_) => const HomeScreen(),
-          '/messages': (_) => const MessagesScreen(),
-        },
-        onGenerateRoute: (settings) {
-          if (settings.name?.startsWith('/messages') == true) {
-            return MaterialPageRoute(
-                builder: (_) => const MessagesScreen());
-          }
-          return null;
+      // ✅ CORRECTION 2 — Consumer<ThemeProvider> écoute les changements
+      // et rebuild MaterialApp à chaque appel de setThemeMode()
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, _) {
+          return MaterialApp(
+            title: 'CarEasy',
+            debugShowCheckedModeBanner: false,
+
+            // ✅ Ces 3 lignes sont indispensables
+            themeMode: themeProvider.themeMode,   // pilote clair / sombre / système
+            theme: AppTheme.lightTheme,           // thème clair
+            darkTheme: AppTheme.darkTheme,        // thème sombre
+
+            navigatorKey: navigatorKey,
+            home: const SplashScreen(),
+            routes: {
+              '/welcome' : (_) => const WelcomeScreen(),
+              '/login'   : (_) => const LoginScreen(),
+              '/register': (_) => const RegisterScreen(),
+              '/home'    : (_) => const HomeScreen(),
+              '/messages': (_) => const MessagesScreen(),
+            },
+            onGenerateRoute: (settings) {
+              if (settings.name?.startsWith('/messages') == true) {
+                return MaterialPageRoute(builder: (_) => const MessagesScreen());
+              }
+              return null;
+            },
+          );
         },
       ),
     );
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// NAVIGATION DEPUIS UNE NOTIFICATION PUSH
-// Appelé depuis ChatScreen, MessagesScreen, SplashScreen après init
-// ═══════════════════════════════════════════════════════════════════════
 void setupNotificationNavigation(BuildContext context) {
   NotificationService().onNotificationTap = (Map<String, dynamic> data) async {
     final convId      = data['conversation_id']?.toString() ?? '';
@@ -97,13 +106,11 @@ void setupNotificationNavigation(BuildContext context) {
     final senderId    = data['sender_id']?.toString()        ?? '';
 
     if (convId.isEmpty) {
-      // Ouvrir la liste des messages
       navigatorKey.currentState?.pushNamedAndRemoveUntil(
           '/messages', (r) => r.isFirst);
       return;
     }
 
-    // Construire l'objet UserModel pour l'autre utilisateur
     UserModel otherUser = UserModel(
       id      : senderId.isNotEmpty ? senderId : convId,
       name    : senderName,
@@ -111,20 +118,16 @@ void setupNotificationNavigation(BuildContext context) {
       isOnline: false,
     );
 
-    // Essayer de récupérer des données fraîches si on a le senderId
     if (senderId.isNotEmpty) {
       try {
         const storage = FlutterSecureStorage(
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
-          iOptions: IOSOptions(
-            accessibility: KeychainAccessibility.first_unlock,
-          ),
+          iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
         );
         final token = await storage.read(key: 'auth_token');
         if (token != null && token.isNotEmpty) {
           final resp = await http.get(
-            Uri.parse(
-                '${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
+            Uri.parse('${AppConstants.apiBaseUrl}/user/$senderId/online-status'),
             headers: {
               'Authorization': 'Bearer $token',
               'Accept'       : 'application/json',
@@ -133,19 +136,17 @@ void setupNotificationNavigation(BuildContext context) {
 
           if (resp.statusCode == 200) {
             final userData = jsonDecode(resp.body) as Map<String, dynamic>;
-            final isOnline = userData['is_online'] == true;
             otherUser = UserModel(
               id      : senderId,
               name    : senderName,
               photoUrl: senderPhoto?.isNotEmpty == true ? senderPhoto : null,
-              isOnline: isOnline,
+              isOnline: userData['is_online'] == true,
             );
           }
         }
       } catch (_) {}
     }
 
-    // Naviguer vers le ChatScreen
     navigatorKey.currentState?.push(
       MaterialPageRoute(
         builder: (ctx) => ChangeNotifierProvider.value(
