@@ -1,15 +1,14 @@
 // lib/screens/chat_screen.dart
 // ═══════════════════════════════════════════════════════════════════════
-// VERSION FINALE — Polling 5s + Pusher + Notifications auto
-//
-// CORRECTIONS CRITIQUES :
-// 1. setActiveConversation() au mount/unmount pour stopper les notifs
-// 2. Polling des messages toutes les 5s via MessagePollingService
-// 3. Scroll automatique sur nouveau message (Consumer détecte les changements)
-// 4. dispose() sécurisé
+// AMÉLIORATIONS:
+// 1. Swipe vers le haut sur le bouton micro pour démarrer l'enregistrement
+// 2. Waveform animée en temps réel (style WhatsApp)
+// 3. Carte de localisation redesignée — belle et responsive
+// 4. UX vocale professionnelle avec lock, cancel, preview
 // ═══════════════════════════════════════════════════════════════════════
 import 'dart:io';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -67,7 +66,6 @@ class _ChatScreenState extends State<ChatScreen>
   bool _typingActive = false;
   Timer? _typingTimer;
 
-  // Compteur messages pour détecter les nouveaux dans Consumer
   int _lastMsgCount = 0;
 
   // Animations
@@ -75,6 +73,7 @@ class _ChatScreenState extends State<ChatScreen>
   late Animation<double> _pulseAnim;
   late AnimationController _micScaleCtrl;
   late Animation<double> _micScaleAnim;
+  late AnimationController _waveCtrl;
 
   // ── Enregistrement vocal ──────────────────────────────────────────────
   bool _recActive = false;
@@ -83,13 +82,24 @@ class _ChatScreenState extends State<ChatScreen>
   String? _recPath;
   Duration _recDuration = Duration.zero;
   Timer? _recTimer;
+
+  // Waveform en temps réel
+  final List<double> _waveformBars = List.filled(40, 0.1);
+  Timer? _waveformTimer;
+  final math.Random _rand = math.Random();
+  double _currentAmplitude = 0.0;
+
+  // Swipe gesture pour le micro
+  final GlobalKey _micKey = GlobalKey();
   Offset? _micTouchStart;
-  double _micDragX = 0.0;
-  double _micDragY = 0.0;
+  double _micDragY = 0.0; // swipe vers le haut = négatif
+  double _micDragX = 0.0; // swipe vers la gauche = négatif
+  bool _showSwipeHint = false;
 
-  static const double _kCancelX = -80.0;
-  static const double _kLockY = -80.0;
+  static const double _kCancelX  = -80.0;
+  static const double _kLockY    = -80.0;
 
+  // Preview audio
   AudioPlayer? _previewPlayer;
   bool _previewPlaying = false;
   Duration _previewPos = Duration.zero;
@@ -97,7 +107,6 @@ class _ChatScreenState extends State<ChatScreen>
   StreamSubscription? _previewPosSub;
   StreamSubscription? _previewStateSub;
 
-  // Référence sécurisée au provider
   MessageProvider? _msgProvider;
 
   @override
@@ -113,43 +122,40 @@ class _ChatScreenState extends State<ChatScreen>
 
     _micScaleCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 180));
-    _micScaleAnim = Tween<double>(begin: 1.0, end: 1.25)
+    _micScaleAnim = Tween<double>(begin: 1.0, end: 1.3)
         .animate(CurvedAnimation(parent: _micScaleCtrl, curve: Curves.elasticOut));
+
+    _waveCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 100))
+      ..repeat();
 
     _msgCtrl.addListener(_onTextChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _msgProvider = context.read<MessageProvider>();
-      
-      // ⭐ IMPORTANT: Marquer cette conversation comme active
-      // → Le polling et Pusher ne génèreront pas de notifications
       _msgProvider!.setActiveConversation(widget.conversationId);
-      
       _loadMessages();
       _msgProvider!.fetchOnlineStatus(widget.otherUser.id);
-      
-      // Annuler les notifications existantes de cette conv
       NotificationService().cancelNotification(widget.conversationId);
-      
-      // Configurer le tap sur notification
       NotificationService().onNotificationTap = (data) {
         final convId = data['conversation_id']?.toString() ?? '';
         if (convId != widget.conversationId && mounted) Navigator.pop(context);
       };
-
-      // ⭐ Abonner au polling pour cette conversation spécifique
       MessagePollingService().addMessageListener(
-        widget.conversationId,
-        _onPollingMessages,
-      );
+          widget.conversationId, _onPollingMessages);
+
+      // Afficher le hint swipe brièvement
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) setState(() => _showSwipeHint = true);
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _showSwipeHint = false);
+        });
+      });
     });
   }
 
-  /// Callback du polling — nouveaux messages reçus
   void _onPollingMessages(List<MessageModel> msgs) {
     if (!mounted) return;
-    // Le provider est déjà mis à jour par le polling service
-    // On force juste un rebuild
     setState(() {});
   }
 
@@ -162,16 +168,12 @@ class _ChatScreenState extends State<ChatScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // ⭐ Quand l'app revient en avant-plan, recharger les messages
       _msgProvider?.loadMessages(widget.conversationId);
       _msgProvider?.fetchOnlineStatus(widget.otherUser.id);
       _markRead();
       NotificationService().cancelNotification(widget.conversationId);
-      // Réindiquer que cette conversation est active
       _msgProvider?.setActiveConversation(widget.conversationId);
     } else if (state == AppLifecycleState.paused) {
-      // App en arrière-plan → désactiver la conversation active
-      // pour recevoir les notifications
       _msgProvider?.setActiveConversation(null);
     }
   }
@@ -182,9 +184,8 @@ class _ChatScreenState extends State<ChatScreen>
     _scrollBottom(animated: false);
   }
 
-  void _markRead() {
-    _msgProvider?.markConversationAsRead(widget.conversationId);
-  }
+  void _markRead() =>
+      _msgProvider?.markConversationAsRead(widget.conversationId);
 
   void _scrollBottom({bool animated = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -203,7 +204,6 @@ class _ChatScreenState extends State<ChatScreen>
   void _onTextChanged() {
     final h = _msgCtrl.text.trim().isNotEmpty;
     if (h != _hasText) setState(() => _hasText = h);
-
     if (h && !_typingActive) {
       _typingActive = true;
       _msgProvider?.sendTypingIndicator(widget.conversationId, true);
@@ -269,18 +269,14 @@ class _ChatScreenState extends State<ChatScreen>
     try {
       final f = await _picker.pickImage(source: s, maxWidth: 1024, imageQuality: 80);
       if (f != null) await _send(filePath: f.path, type: 'image');
-    } catch (_) {
-      _showErr('Erreur photo');
-    }
+    } catch (_) { _showErr('Erreur photo'); }
   }
 
   Future<void> _pickVid(ImageSource s) async {
     try {
       final f = await _picker.pickVideo(source: s, maxDuration: const Duration(minutes: 5));
       if (f != null) await _send(filePath: f.path, type: 'video');
-    } catch (_) {
-      _showErr('Erreur vidéo');
-    }
+    } catch (_) { _showErr('Erreur vidéo'); }
   }
 
   Future<void> _pickDoc() async {
@@ -289,9 +285,7 @@ class _ChatScreenState extends State<ChatScreen>
       if (r?.files.single.path != null) {
         await _send(filePath: r!.files.single.path!, type: 'document');
       }
-    } catch (_) {
-      _showErr('Erreur document');
-    }
+    } catch (_) { _showErr('Erreur document'); }
   }
 
   Future<void> _sendLoc() async {
@@ -301,8 +295,7 @@ class _ChatScreenState extends State<ChatScreen>
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        _showErr('Permission refusée');
-        return;
+        _showErr('Permission refusée'); return;
       }
       final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
       String addr = '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}';
@@ -326,42 +319,11 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  // ── Enregistrement vocal ──────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  //  ENREGISTREMENT VOCAL — Swipe vers le haut
+  // ══════════════════════════════════════════════════════════════════════
 
-  void _onMicLongPressStart(LongPressStartDetails d) {
-    _micTouchStart = d.globalPosition;
-    _micDragX = 0;
-    _micDragY = 0;
-    _startRec();
-  }
-
-  void _onMicLongPressMoveUpdate(LongPressMoveUpdateDetails d) {
-    if (_micTouchStart == null || !_recActive) return;
-    setState(() {
-      _micDragX = d.globalPosition.dx - _micTouchStart!.dx;
-      _micDragY = d.globalPosition.dy - _micTouchStart!.dy;
-    });
-  }
-
-  void _onMicLongPressEnd(LongPressEndDetails d) {
-    if (!_recActive) {
-      _micTouchStart = null;
-      return;
-    }
-    if (_micDragY < _kLockY) {
-      setState(() {
-        _recLocked = true;
-        _micDragX = 0;
-        _micDragY = 0;
-      });
-    } else if (_micDragX < _kCancelX) {
-      _cancelRec();
-    } else {
-      _stopForPreview();
-    }
-    _micTouchStart = null;
-  }
-
+  // Démarrer l'enregistrement
   Future<void> _startRec() async {
     if (_recActive || _recPreview) return;
     if (!await _rec.hasPermission()) {
@@ -370,15 +332,15 @@ class _ChatScreenState extends State<ChatScreen>
     }
     try {
       final dir = await getTemporaryDirectory();
-      final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final p = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _rec.start(
         const RecordConfig(encoder: AudioEncoder.aacLc, bitRate: 128000, sampleRate: 44100),
-        path: path,
+        path: p,
       );
       _micScaleCtrl.forward();
       setState(() {
-        _recActive = true;
-        _recLocked = false;
+        _recActive   = true;
+        _recLocked   = false;
         _recDuration = Duration.zero;
       });
       _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -386,108 +348,126 @@ class _ChatScreenState extends State<ChatScreen>
           setState(() => _recDuration = Duration(seconds: _recDuration.inSeconds + 1));
         }
       });
+      // Démarrer la simulation de waveform
+      _startWaveformSimulation();
       _msgProvider?.sendRecordingIndicator(widget.conversationId, true);
     } catch (_) {
       _showErr("Impossible de démarrer l'enregistrement");
     }
   }
 
+  void _startWaveformSimulation() {
+    _waveformTimer?.cancel();
+    _waveformTimer = Timer.periodic(const Duration(milliseconds: 80), (_) {
+      if (!_recActive || !mounted) return;
+      setState(() {
+        // Décaler les barres vers la gauche
+        for (int i = 0; i < _waveformBars.length - 1; i++) {
+          _waveformBars[i] = _waveformBars[i + 1];
+        }
+        // Ajouter une nouvelle barre simulée (amplitude aléatoire réaliste)
+        _currentAmplitude = 0.1 + _rand.nextDouble() * 0.85;
+        // Lisser avec la valeur précédente
+        final prev = _waveformBars[_waveformBars.length - 2];
+        _waveformBars[_waveformBars.length - 1] = (prev * 0.3 + _currentAmplitude * 0.7).clamp(0.05, 1.0);
+      });
+    });
+  }
+
+  void _stopWaveformSimulation() {
+    _waveformTimer?.cancel();
+    // Réinitialiser progressivement
+    Timer.periodic(const Duration(milliseconds: 50), (t) {
+      if (!mounted) { t.cancel(); return; }
+      bool allZero = true;
+      setState(() {
+        for (int i = 0; i < _waveformBars.length; i++) {
+          _waveformBars[i] = (_waveformBars[i] * 0.7).clamp(0.05, 1.0);
+          if (_waveformBars[i] > 0.06) allZero = false;
+        }
+      });
+      if (allZero) t.cancel();
+    });
+  }
+
   Future<void> _stopForPreview() async {
     if (!_recActive) return;
     _recTimer?.cancel();
     _micScaleCtrl.reverse();
+    _stopWaveformSimulation();
     _msgProvider?.sendRecordingIndicator(widget.conversationId, false);
     final dur = _recDuration;
     try {
-      final path = await _rec.stop();
+      final p = await _rec.stop();
       if (!mounted) return;
-      if (path != null && dur.inSeconds >= 1) {
-        await _initPreview(path);
+      if (p != null && dur.inSeconds >= 1) {
+        await _initPreview(p);
         setState(() {
-          _recActive = false;
-          _recLocked = false;
+          _recActive  = false;
+          _recLocked  = false;
           _recPreview = true;
-          _recPath = path;
-          _micDragX = 0;
-          _micDragY = 0;
+          _recPath    = p;
+          _micDragX   = 0;
+          _micDragY   = 0;
         });
       } else {
-        if (path != null) {
-          try {
-            File(path).deleteSync();
-          } catch (_) {}
-        }
+        if (p != null) try { File(p).deleteSync(); } catch (_) {}
         setState(() {
-          _recActive = false;
-          _recLocked = false;
+          _recActive   = false;
+          _recLocked   = false;
           _recDuration = Duration.zero;
         });
         if (dur.inSeconds < 1) _showErr('Trop court (min. 1 s)');
       }
     } catch (_) {
-      if (mounted) setState(() {
-        _recActive = false;
-        _recLocked = false;
-      });
+      if (mounted) setState(() { _recActive = false; _recLocked = false; });
     }
   }
 
   Future<void> _cancelRec() async {
     _recTimer?.cancel();
     _micScaleCtrl.reverse();
+    _stopWaveformSimulation();
     _msgProvider?.sendRecordingIndicator(widget.conversationId, false);
     try {
       final p = await _rec.stop();
-      if (p != null) {
-        try {
-          File(p).deleteSync();
-        } catch (_) {}
-      }
+      if (p != null) try { File(p).deleteSync(); } catch (_) {}
     } catch (_) {}
     if (mounted) {
       setState(() {
-        _recActive = false;
-        _recLocked = false;
+        _recActive   = false;
+        _recLocked   = false;
         _recDuration = Duration.zero;
-        _micDragX = 0;
-        _micDragY = 0;
+        _micDragX    = 0;
+        _micDragY    = 0;
       });
     }
+    HapticFeedback.lightImpact();
   }
 
   void _cancelPreview() {
     _disposePreview();
-    if (_recPath != null) {
-      try {
-        File(_recPath!).deleteSync();
-      } catch (_) {}
-    }
-    setState(() {
-      _recPreview = false;
-      _recPath = null;
-    });
+    if (_recPath != null) try { File(_recPath!).deleteSync(); } catch (_) {}
+    setState(() { _recPreview = false; _recPath = null; });
   }
 
   Future<void> _sendPreview() async {
     if (_recPath == null) return;
-    final path = _recPath!;
+    final p = _recPath!;
     _disposePreview();
-    setState(() {
-      _recPreview = false;
-      _recPath = null;
-    });
-    await _send(filePath: path, type: 'audio');
+    setState(() { _recPreview = false; _recPath = null; });
+    await _send(filePath: p, type: 'audio');
   }
 
-  Future<void> _initPreview(String path) async {
+  Future<void> _initPreview(String p) async {
     await _previewPlayer?.dispose();
     _previewPlayer = AudioPlayer();
-    await _previewPlayer!.setFilePath(path);
-    _previewDur = _previewPlayer!.duration ?? Duration.zero;
-    _previewPos = Duration.zero;
+    await _previewPlayer!.setFilePath(p);
+    _previewDur   = _previewPlayer!.duration ?? Duration.zero;
+    _previewPos   = Duration.zero;
     _previewPlaying = false;
-    _previewPosSub = _previewPlayer!.positionStream.listen((p) {
-      if (mounted) setState(() => _previewPos = p);
+    _previewPosSub = _previewPlayer!.positionStream.listen((pos) {
+      if (mounted) setState(() => _previewPos = pos);
     });
     _previewStateSub = _previewPlayer!.playerStateStream.listen((s) {
       if (s.processingState == ProcessingState.completed && mounted) {
@@ -501,10 +481,10 @@ class _ChatScreenState extends State<ChatScreen>
     _previewStateSub?.cancel();
     _previewPlayer?.stop();
     _previewPlayer?.dispose();
-    _previewPlayer = null;
+    _previewPlayer  = null;
     _previewPlaying = false;
-    _previewPos = Duration.zero;
-    _previewDur = Duration.zero;
+    _previewPos     = Duration.zero;
+    _previewDur     = Duration.zero;
   }
 
   Future<void> _togglePreview() async {
@@ -538,15 +518,12 @@ class _ChatScreenState extends State<ChatScreen>
         await p.play();
       }
       if (mounted) setState(() {});
-    } catch (_) {
-      _showErr("Impossible de lire l'audio");
-    }
+    } catch (_) { _showErr("Impossible de lire l'audio"); }
   }
 
-  String _fmt(Duration d) {
-    return '${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:'
-        '${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
-  }
+  String _fmt(Duration d) =>
+      '${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:'
+      '${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 
   Future<void> _initVideo(String id, String url) async {
     if (_vCtrl.containsKey(id)) return;
@@ -558,11 +535,9 @@ class _ChatScreenState extends State<ChatScreen>
           autoPlay: false,
           looping: false,
           aspectRatio: vc.value.aspectRatio,
-          errorBuilder: (_, __) => const Center(child: Icon(Icons.error, color: Colors.red)));
-      if (mounted) setState(() {
-        _vCtrl[id] = vc;
-        _cCtrl[id] = cc;
-      });
+          errorBuilder: (_, __) =>
+              const Center(child: Icon(Icons.error, color: Colors.red)));
+      if (mounted) setState(() { _vCtrl[id] = vc; _cCtrl[id] = cc; });
     } catch (_) {}
   }
 
@@ -596,9 +571,9 @@ class _ChatScreenState extends State<ChatScreen>
     ),
     titleSpacing: 0,
     title: Consumer<MessageProvider>(builder: (_, pv, __) {
-      final isOnline = pv.getUserOnlineStatus(widget.otherUser.id) || widget.otherUser.isOnline;
-      final lastSeen = pv.getUserLastSeen(widget.otherUser.id) ?? widget.otherUser.lastSeen;
-      final isTyping = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
+      final isOnline   = pv.getUserOnlineStatus(widget.otherUser.id) || widget.otherUser.isOnline;
+      final lastSeen   = pv.getUserLastSeen(widget.otherUser.id) ?? widget.otherUser.lastSeen;
+      final isTyping   = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
       final isRecording = pv.isUserRecording(widget.conversationId, widget.otherUser.id);
       return Row(children: [
         Stack(children: [
@@ -606,30 +581,28 @@ class _ChatScreenState extends State<ChatScreen>
             radius: 20,
             backgroundColor: Colors.white,
             backgroundImage: widget.otherUser.photoUrl != null
-                ? NetworkImage(widget.otherUser.photoUrl!)
-                : null,
+                ? NetworkImage(widget.otherUser.photoUrl!) : null,
             child: widget.otherUser.photoUrl == null
                 ? Text(
-                    widget.otherUser.name.isNotEmpty ? widget.otherUser.name[0].toUpperCase() : '?',
+                    widget.otherUser.name.isNotEmpty
+                        ? widget.otherUser.name[0].toUpperCase() : '?',
                     style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold, color: AppConstants.primaryRed))
+                        fontSize: 16, fontWeight: FontWeight.bold,
+                        color: AppConstants.primaryRed))
                 : null,
           ),
-          if (isOnline)
-            Positioned(
-                bottom: 1,
-                right: 1,
-                child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFF25D366),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5)))),
+          if (isOnline) Positioned(
+            bottom: 1, right: 1,
+            child: Container(
+              width: 10, height: 10,
+              decoration: BoxDecoration(
+                color: const Color(0xFF25D366),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5))),
+          ),
         ]),
         const SizedBox(width: 10),
-        Expanded(
-            child: Column(
+        Expanded(child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -639,11 +612,9 @@ class _ChatScreenState extends State<ChatScreen>
             const SizedBox(height: 1),
             if (isRecording)
               Row(children: [
-                AnimatedBuilder(
-                    animation: _pulseAnim,
-                    builder: (_, __) => Icon(Icons.mic,
-                        size: 11,
-                        color: Colors.white70.withOpacity(_pulseAnim.value))),
+                AnimatedBuilder(animation: _pulseAnim,
+                  builder: (_, __) => Icon(Icons.mic, size: 11,
+                      color: Colors.white70.withOpacity(_pulseAnim.value))),
                 const SizedBox(width: 3),
                 const Text('enregistre un vocal…',
                     style: TextStyle(fontSize: 11, color: Colors.white70)),
@@ -652,7 +623,8 @@ class _ChatScreenState extends State<ChatScreen>
               const Text('en train d\'écrire…',
                   style: TextStyle(fontSize: 11, color: Colors.white70))
             else if (isOnline)
-              const Text('en ligne', style: TextStyle(fontSize: 11, color: Colors.white70))
+              const Text('en ligne',
+                  style: TextStyle(fontSize: 11, color: Colors.white70))
             else if (lastSeen != null)
               Text(_fmtSeen(lastSeen),
                   style: const TextStyle(fontSize: 11, color: Colors.white70)),
@@ -671,7 +643,7 @@ class _ChatScreenState extends State<ChatScreen>
     final diff = DateTime.now().difference(d);
     if (diff.inMinutes < 1) return 'vu à l\'instant';
     if (diff.inMinutes < 60) return 'vu il y a ${diff.inMinutes} min';
-    if (diff.inHours < 24) return 'vu il y a ${diff.inHours} h';
+    if (diff.inHours < 24)   return 'vu il y a ${diff.inHours} h';
     return 'vu le ${DateFormat('dd/MM/yy').format(d)}';
   }
 
@@ -681,8 +653,6 @@ class _ChatScreenState extends State<ChatScreen>
     return Consumer<MessageProvider>(
       builder: (ctx, pv, _) {
         final msgs = pv.getMessages(widget.conversationId);
-
-        // ⭐ Détecter nouveaux messages et scroller
         if (msgs.length > _lastMsgCount) {
           _lastMsgCount = msgs.length;
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -691,20 +661,17 @@ class _ChatScreenState extends State<ChatScreen>
             NotificationService().cancelNotification(widget.conversationId);
           });
         }
-
         if (pv.isLoading && msgs.isEmpty) {
           return const Center(
               child: CircularProgressIndicator(color: AppConstants.primaryRed));
         }
         if (msgs.isEmpty) return _buildEmpty();
-
         return ListView.builder(
           controller: _scroll,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
           itemCount: msgs.length,
           itemBuilder: (_, i) {
-            final showDate =
-                i == 0 || msgs[i].createdAt.day != msgs[i - 1].createdAt.day;
+            final showDate = i == 0 || msgs[i].createdAt.day != msgs[i - 1].createdAt.day;
             return Column(mainAxisSize: MainAxisSize.min, children: [
               if (showDate) _buildDateSep(msgs[i].createdAt),
               _buildBubble(msgs[i]),
@@ -716,19 +683,12 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildDateSep(DateTime d) {
-    final now = DateTime.now();
-    String label;
-    final diff = now.difference(d).inDays;
-    if (diff == 0)
-      label = "Aujourd'hui";
-    else if (diff == 1)
-      label = 'Hier';
-    else
-      label = DateFormat('dd MMMM yyyy', 'fr_FR').format(d);
+    final diff = DateTime.now().difference(d).inDays;
+    String label = diff == 0 ? "Aujourd'hui" : diff == 1 ? 'Hier'
+        : DateFormat('dd MMMM yyyy', 'fr_FR').format(d);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Center(
-          child: Container(
+      child: Center(child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.85),
@@ -743,13 +703,10 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildBubble(MessageModel m) {
-    final isMe = m.isMe;
+    final isMe  = m.isMe;
     final isErr = m.status == 'error';
-    final bg = isErr
-        ? Colors.red[50]!
-        : isMe
-            ? const Color(0xFFDCF8C6)
-            : Colors.white;
+    final bg = isErr ? Colors.red[50]!
+        : isMe ? const Color(0xFFDCF8C6) : Colors.white;
 
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -759,23 +716,20 @@ class _ChatScreenState extends State<ChatScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            if (!isMe)
-              Padding(
-                  padding: const EdgeInsets.only(right: 4, bottom: 2),
-                  child: CircleAvatar(
-                      radius: 14,
-                      backgroundColor: Colors.grey[300],
-                      backgroundImage: widget.otherUser.photoUrl != null
-                          ? NetworkImage(widget.otherUser.photoUrl!)
-                          : null,
-                      child: widget.otherUser.photoUrl == null
-                          ? Text(
-                              widget.otherUser.name.isNotEmpty
-                                  ? widget.otherUser.name[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(
-                                  fontSize: 10, color: AppConstants.primaryRed))
-                          : null)),
+            if (!isMe) Padding(
+              padding: const EdgeInsets.only(right: 4, bottom: 2),
+              child: CircleAvatar(
+                radius: 14,
+                backgroundColor: Colors.grey[300],
+                backgroundImage: widget.otherUser.photoUrl != null
+                    ? NetworkImage(widget.otherUser.photoUrl!) : null,
+                child: widget.otherUser.photoUrl == null
+                    ? Text(
+                        widget.otherUser.name.isNotEmpty
+                            ? widget.otherUser.name[0].toUpperCase() : '?',
+                        style: const TextStyle(fontSize: 10, color: AppConstants.primaryRed))
+                    : null),
+            ),
             Flexible(
               child: GestureDetector(
                 onLongPress: () => _msgMenu(m),
@@ -785,19 +739,15 @@ class _ChatScreenState extends State<ChatScreen>
                   decoration: BoxDecoration(
                     color: bg,
                     borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(14),
-                        topRight: const Radius.circular(14),
-                        bottomLeft:
-                            isMe ? const Radius.circular(14) : const Radius.circular(3),
-                        bottomRight:
-                            isMe ? const Radius.circular(3) : const Radius.circular(14)),
+                      topLeft: const Radius.circular(14),
+                      topRight: const Radius.circular(14),
+                      bottomLeft: isMe ? const Radius.circular(14) : const Radius.circular(3),
+                      bottomRight: isMe ? const Radius.circular(3) : const Radius.circular(14),
+                    ),
                     border: isErr ? Border.all(color: Colors.red) : null,
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.07),
-                          blurRadius: 3,
-                          offset: const Offset(0, 1))
-                    ],
+                    boxShadow: [BoxShadow(
+                        color: Colors.black.withOpacity(0.07),
+                        blurRadius: 3, offset: const Offset(0, 1))],
                   ),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(10, 7, 10, 5),
@@ -808,17 +758,15 @@ class _ChatScreenState extends State<ChatScreen>
                         _buildMsgContent(m),
                         const SizedBox(height: 2),
                         Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Text(DateFormat('HH:mm').format(m.createdAt),
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      color: isMe
-                                          ? const Color(0xFF6E8B6E)
-                                          : Colors.grey[500])),
-                              if (isMe) ...[const SizedBox(width: 3), _statusIcon(m)],
-                            ]),
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text(DateFormat('HH:mm').format(m.createdAt),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: isMe ? const Color(0xFF6E8B6E) : Colors.grey[500])),
+                            if (isMe) ...[const SizedBox(width: 3), _statusIcon(m)],
+                          ]),
                       ],
                     ),
                   ),
@@ -833,9 +781,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   Widget _statusIcon(MessageModel m) {
     if (m.status == 'sending')
-      return const SizedBox(
-          width: 12,
-          height: 12,
+      return const SizedBox(width: 12, height: 12,
           child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6E8B6E)));
     if (m.status == 'error')
       return const Icon(Icons.error_outline, size: 13, color: Colors.red);
@@ -846,17 +792,12 @@ class _ChatScreenState extends State<ChatScreen>
 
   Widget _buildMsgContent(MessageModel m) {
     switch (m.type) {
-      case 'image':
-        return _buildImgContent(m);
-      case 'video':
-        return _buildVidContent(m);
-      case 'location':
-        return _buildLocContent(m);
+      case 'image':    return _buildImgContent(m);
+      case 'video':    return _buildVidContent(m);
+      case 'location': return _buildLocContent(m);
       case 'audio':
-      case 'vocal':
-        return _buildAudioContent(m);
-      case 'document':
-        return _buildDocContent(m);
+      case 'vocal':    return _buildAudioContent(m);
+      case 'document': return _buildDocContent(m);
       default:
         if (m.content.isEmpty) return const SizedBox.shrink();
         return Text(m.content,
@@ -872,19 +813,13 @@ class _ChatScreenState extends State<ChatScreen>
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Image.network(m.fileUrl!,
-            width: 220,
-            height: 180,
-            fit: BoxFit.cover,
-            loadingBuilder: (_, c, p) => p == null
-                ? c
-                : Container(
-                    width: 220,
-                    height: 180,
-                    color: Colors.grey[200],
-                    child: const Center(
-                        child: CircularProgressIndicator(strokeWidth: 2))),
+            width: 220, height: 180, fit: BoxFit.cover,
+            loadingBuilder: (_, c, p) => p == null ? c
+                : Container(width: 220, height: 180, color: Colors.grey[200],
+                    child: const Center(child: CircularProgressIndicator(strokeWidth: 2))),
             errorBuilder: (_, __, ___) => Container(
-                width: 220, height: 180, color: Colors.grey[200], child: const Icon(Icons.broken_image))),
+                width: 220, height: 180, color: Colors.grey[200],
+                child: const Icon(Icons.broken_image))),
       ),
     );
   }
@@ -894,57 +829,135 @@ class _ChatScreenState extends State<ChatScreen>
     if (!_cCtrl.containsKey(m.id)) {
       _initVideo(m.id, m.fileUrl!);
       return Container(
-          width: 220,
-          height: 160,
+          width: 220, height: 160,
           decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(8)),
           child: const Center(child: CircularProgressIndicator(color: Colors.white)));
     }
-    return SizedBox(
-        width: 220,
-        height: 160,
-        child: ClipRRect(
-            borderRadius: BorderRadius.circular(8), child: Chewie(controller: _cCtrl[m.id]!)));
+    return SizedBox(width: 220, height: 160,
+        child: ClipRRect(borderRadius: BorderRadius.circular(8),
+            child: Chewie(controller: _cCtrl[m.id]!)));
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  //  CARTE LOCALISATION REDESIGNÉE — Belle et responsive
+  // ════════════════════════════════════════════════════════════════════
   Widget _buildLocContent(MessageModel m) {
+    final hasCoords = m.latitude != null && m.longitude != null;
     return GestureDetector(
-      onTap: () => _openLoc(m.latitude ?? 0, m.longitude ?? 0),
+      onTap: () => hasCoords ? _openLoc(m.latitude!, m.longitude!) : null,
       child: Container(
-        width: 220,
+        width: 240,
         decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.green.withOpacity(0.3))),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (m.latitude != null && m.longitude != null)
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-              child: Image.network(
-                  'https://staticmap.openstreetmap.de/staticmap.php?'
-                  'center=${m.latitude},${m.longitude}&zoom=15&size=220x100'
-                  '&markers=${m.latitude},${m.longitude},red',
-                  width: 220,
-                  height: 100,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                      width: 220,
-                      height: 80,
-                      color: Colors.grey[200],
-                      child: const Icon(Icons.map, color: Colors.grey))),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.12),
+              blurRadius: 8, offset: const Offset(0, 3)),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // ── Miniature carte ──────────────────────────────────────
+            if (hasCoords)
+              Stack(children: [
+                // Image de la carte OpenStreetMap
+                SizedBox(
+                  height: 130,
+                  width: double.infinity,
+                  child: Image.network(
+                    'https://staticmap.openstreetmap.de/staticmap.php?'
+                    'center=${m.latitude},${m.longitude}&zoom=15&size=400x200'
+                    '&markers=${m.latitude},${m.longitude},red',
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      height: 130,
+                      color: const Color(0xFFE8F4F0),
+                      child: Center(child: Icon(
+                          Icons.map_outlined, size: 40, color: Colors.teal[300])),
+                    ),
+                  ),
+                ),
+                // Overlay gradient en bas de la carte
+                Positioned(
+                  bottom: 0, left: 0, right: 0,
+                  child: Container(
+                    height: 40,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black.withOpacity(0.35)],
+                      ),
+                    ),
+                  ),
+                ),
+                // Pin marker centré
+                const Positioned.fill(
+                  child: Center(
+                    child: _MapPin(),
+                  ),
+                ),
+                // Badge "Voir l'itinéraire"
+                Positioned(
+                  bottom: 8, right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 4)],
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.directions, size: 12, color: Colors.blue[700]),
+                      const SizedBox(width: 3),
+                      Text('Itinéraire',
+                          style: TextStyle(
+                              fontSize: 10, fontWeight: FontWeight.w600,
+                              color: Colors.blue[700])),
+                    ]),
+                  ),
+                ),
+              ])
+            else
+              Container(
+                height: 80,
+                color: const Color(0xFFE8F4F0),
+                child: Center(child: Icon(Icons.map_outlined, size: 36, color: Colors.teal[300])),
+              ),
+
+            // ── Pied de carte ────────────────────────────────────────
+            Container(
+              color: m.isMe ? const Color(0xFFDCF8C6) : Colors.white,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppConstants.primaryRed.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.location_on, size: 16, color: AppConstants.primaryRed),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Position partagée',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.w700,
+                            color: Colors.grey[700])),
+                    if (m.content.isNotEmpty)
+                      Text(m.content,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: Colors.grey[500], height: 1.3)),
+                  ]),
+                ),
+                Icon(Icons.open_in_new, size: 14, color: Colors.grey[400]),
+              ]),
             ),
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(children: [
-              const Icon(Icons.location_on, size: 16, color: AppConstants.primaryRed),
-              const SizedBox(width: 6),
-              Expanded(
-                  child: Text(
-                      m.content.isNotEmpty ? m.content : 'Localisation partagée',
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis)),
-            ]),
-          ),
-        ]),
+          ]),
+        ),
       ),
     );
   }
@@ -957,88 +970,82 @@ class _ChatScreenState extends State<ChatScreen>
       builder: (_, snap) {
         final pos = snap.data ?? Duration.zero;
         final dur = p?.duration ?? Duration.zero;
-        final pct =
-            dur.inMilliseconds > 0 ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0) : 0.0;
+        final pct = dur.inMilliseconds > 0
+            ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
+            : 0.0;
         return SizedBox(
-            width: 200,
-            child: Row(children: [
-              GestureDetector(
-                onTap: () {
-                  if (m.fileUrl != null) _playAudio(m.id, m.fileUrl!);
-                },
-                child: Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                        color: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
-                        shape: BoxShape.circle),
-                    child: Icon(playing ? Icons.pause : Icons.play_arrow,
-                        color: Colors.white, size: 22)),
+          width: 210,
+          child: Row(children: [
+            GestureDetector(
+              onTap: () { if (m.fileUrl != null) _playAudio(m.id, m.fileUrl!); },
+              child: Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                    color: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+                    shape: BoxShape.circle),
+                child: Icon(playing ? Icons.pause : Icons.play_arrow,
+                    color: Colors.white, size: 22)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SliderTheme(
+                data: SliderThemeData(
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                    trackHeight: 3,
+                    thumbColor: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+                    activeTrackColor: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
+                    inactiveTrackColor: Colors.grey[300],
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 10)),
+                child: Slider(
+                    value: pct.toDouble(),
+                    onChanged: (v) => p?.seek(
+                        Duration(milliseconds: (v * dur.inMilliseconds).toInt()))),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                SliderTheme(
-                    data: SliderThemeData(
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                        trackHeight: 3,
-                        thumbColor: m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
-                        activeTrackColor:
-                            m.isMe ? const Color(0xFF25D366) : AppConstants.primaryRed,
-                        inactiveTrackColor: Colors.grey[300],
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 10)),
-                    child: Slider(
-                        value: pct,
-                        onChanged: (v) => p?.seek(
-                            Duration(milliseconds: (v * dur.inMilliseconds).toInt())))),
-                Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      Text(_fmt(pos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                      Text(_fmt(dur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                    ])),
-              ])),
-            ]));
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text(_fmt(pos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+                  Text(_fmt(dur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+                ])),
+            ])),
+          ]),
+        );
       },
     );
   }
 
   Widget _buildDocContent(MessageModel m) {
     if (m.fileUrl == null) return const SizedBox.shrink();
-    final fn = m.fileUrl!.split('/').last;
+    final fn  = m.fileUrl!.split('/').last;
     final ext = fn.split('.').last.toLowerCase();
-    final ico = ext == 'pdf'
-        ? Icons.picture_as_pdf
-        : (ext == 'doc' || ext == 'docx')
-            ? Icons.description
-            : Icons.insert_drive_file;
+    final ico = ext == 'pdf' ? Icons.picture_as_pdf
+        : (ext == 'doc' || ext == 'docx') ? Icons.description
+        : Icons.insert_drive_file;
     return GestureDetector(
       onTap: () => _openUrl(m.fileUrl!),
       child: Container(
-          width: 200,
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey[300]!)),
-          child: Row(children: [
-            Icon(ico, color: AppConstants.primaryRed, size: 28),
-            const SizedBox(width: 8),
-            Expanded(
-                child: Text(fn,
-                    style: const TextStyle(fontSize: 12),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis)),
-            const Icon(Icons.download, size: 18, color: Colors.grey),
-          ])),
+        width: 200,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey[300]!)),
+        child: Row(children: [
+          Icon(ico, color: AppConstants.primaryRed, size: 28),
+          const SizedBox(width: 8),
+          Expanded(child: Text(fn,
+              style: const TextStyle(fontSize: 12),
+              maxLines: 2, overflow: TextOverflow.ellipsis)),
+          const Icon(Icons.download, size: 18, color: Colors.grey),
+        ])),
     );
   }
 
-  // ── Indicateur typing/recording ────────────────────────────────────────
+  // ── Indicateurs typing / recording ────────────────────────────────────
 
   Widget _buildOtherIndicator() {
     return Consumer<MessageProvider>(builder: (_, pv, __) {
-      final typing = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
+      final typing   = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
       final recording = pv.isUserRecording(widget.conversationId, widget.otherUser.id);
       if (!typing && !recording) return const SizedBox.shrink();
       return Container(
@@ -1046,14 +1053,11 @@ class _ChatScreenState extends State<ChatScreen>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
         child: Row(children: [
           if (recording) ...[
-            AnimatedBuilder(
-                animation: _pulseAnim,
-                builder: (_, __) => Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(_pulseAnim.value),
-                        shape: BoxShape.circle))),
+            AnimatedBuilder(animation: _pulseAnim, builder: (_, __) => Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(_pulseAnim.value),
+                    shape: BoxShape.circle))),
             const SizedBox(width: 8),
             Text('${widget.otherUser.name} enregistre un vocal…',
                 style: const TextStyle(
@@ -1071,339 +1075,403 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _typingDots() {
-    return AnimatedBuilder(
-        animation: _pulseAnim,
-        builder: (_, __) => Row(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(3, (i) {
-                final t = (_pulseAnim.value + i * 0.33) % 1.0;
-                return Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.3 + 0.7 * t),
-                        shape: BoxShape.circle));
-              }),
-            ));
+    return AnimatedBuilder(animation: _pulseAnim, builder: (_, __) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        final t = (_pulseAnim.value + i * 0.33) % 1.0;
+        return Container(
+            margin: const EdgeInsets.symmetric(horizontal: 1.5),
+            width: 6, height: 6,
+            decoration: BoxDecoration(
+                color: Colors.grey.withOpacity(0.3 + 0.7 * t),
+                shape: BoxShape.circle));
+      }),
+    ));
   }
 
-  // ── Barre de saisie ────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  //  BARRE D'INPUT
+  // ══════════════════════════════════════════════════════════════════════
 
   Widget _buildInputBar() => Container(
-        color: const Color(0xFFF0F2F5),
-        padding: const EdgeInsets.fromLTRB(6, 6, 6, 10),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (_recPreview) _buildPreviewBar(),
-          if (_recActive && _recLocked && !_recPreview) _buildLockedBar(),
-          if (!_recPreview)
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              _buildAttachBtn(),
-              const SizedBox(width: 4),
-              Expanded(child: _buildTextField()),
-              const SizedBox(width: 6),
-              _buildSendOrMic(),
-            ]),
-          if (_recActive && !_recLocked && !_recPreview) _buildRecIndicator(),
+    color: const Color(0xFFF0F2F5),
+    padding: const EdgeInsets.fromLTRB(6, 6, 6, 10),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      if (_recPreview) _buildPreviewBar(),
+      if (_recActive && _recLocked) _buildLockedRecBar(),
+      if (!_recPreview)
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          _buildAttachBtn(),
+          const SizedBox(width: 4),
+          Expanded(child: _buildTextField()),
+          const SizedBox(width: 6),
+          _buildSendOrMic(),
         ]),
-      );
+      if (_recActive && !_recLocked) _buildActiveRecBar(),
+    ]),
+  );
 
   Widget _buildTextField() => Container(
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 3, offset: const Offset(0, 1))
-            ]),
-        child: Row(children: [
-          const SizedBox(width: 14),
-          Expanded(
-              child: TextField(
-            controller: _msgCtrl,
-            focusNode: _focus,
-            minLines: 1,
-            maxLines: 5,
-            keyboardType: TextInputType.multiline,
-            textInputAction: TextInputAction.newline,
-            enabled: !_sending && !_recActive && !_recPreview,
-            style: const TextStyle(fontSize: 15, color: Color(0xFF2D2D2D)),
-            decoration: InputDecoration(
-                hintText: 'Message',
-                hintStyle: TextStyle(color: Colors.grey[400], fontSize: 15),
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10)),
-          )),
-          IconButton(
-              icon: Icon(Icons.emoji_emotions_outlined, color: Colors.grey[500], size: 22),
-              onPressed: () {},
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
-          const SizedBox(width: 4),
-        ]),
-      );
+    decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 3, offset: const Offset(0, 1))]),
+    child: Row(children: [
+      const SizedBox(width: 14),
+      Expanded(child: TextField(
+        controller: _msgCtrl,
+        focusNode: _focus,
+        minLines: 1, maxLines: 5,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        enabled: !_sending && !_recActive && !_recPreview,
+        style: const TextStyle(fontSize: 15, color: Color(0xFF2D2D2D)),
+        decoration: InputDecoration(
+            hintText: 'Message',
+            hintStyle: TextStyle(color: Colors.grey[400], fontSize: 15),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 10)),
+      )),
+      IconButton(
+          icon: Icon(Icons.emoji_emotions_outlined, color: Colors.grey[500], size: 22),
+          onPressed: () {},
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+      const SizedBox(width: 4),
+    ]),
+  );
 
   Widget _buildAttachBtn() => PopupMenuButton<String>(
-        icon: Container(
-            width: 44,
-            height: 44,
-            decoration: const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
-            child: const Icon(Icons.add, color: Colors.white, size: 24)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        onSelected: (v) {
-          switch (v) {
-            case 'camera':
-              _pickImg(ImageSource.camera);
-              break;
-            case 'gallery':
-              _pickImg(ImageSource.gallery);
-              break;
-            case 'video':
-              _pickVid(ImageSource.gallery);
-              break;
-            case 'document':
-              _pickDoc();
-              break;
-            case 'location':
-              _sendLoc();
-              break;
-          }
-        },
-        itemBuilder: (_) => [
-          _mi('camera', Icons.camera_alt, const Color(0xFF1DA1F2), 'Photo'),
-          _mi('gallery', Icons.photo, const Color(0xFF9B59B6), 'Galerie'),
-          _mi('video', Icons.videocam, const Color(0xFFF39C12), 'Vidéo'),
-          _mi('document', Icons.insert_drive_file, const Color(0xFFE74C3C), 'Document'),
-          PopupMenuItem(
-              value: 'location',
-              enabled: !_sendingLoc,
-              child: Row(children: [
-                Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFF2ECC71).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(8)),
-                    child: Icon(Icons.location_on, color: const Color(0xFF2ECC71), size: 18)),
-                const SizedBox(width: 12),
-                Text(_sendingLoc ? 'Envoi…' : 'Localisation',
-                    style: const TextStyle(fontSize: 14)),
-              ])),
-        ],
-      );
+    icon: Container(
+        width: 44, height: 44,
+        decoration: const BoxDecoration(
+            color: AppConstants.primaryRed, shape: BoxShape.circle),
+        child: const Icon(Icons.add, color: Colors.white, size: 24)),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    onSelected: (v) {
+      switch (v) {
+        case 'camera':   _pickImg(ImageSource.camera); break;
+        case 'gallery':  _pickImg(ImageSource.gallery); break;
+        case 'video':    _pickVid(ImageSource.gallery); break;
+        case 'document': _pickDoc(); break;
+        case 'location': _sendLoc(); break;
+      }
+    },
+    itemBuilder: (_) => [
+      _mi('camera',   Icons.camera_alt,        const Color(0xFF1DA1F2), 'Photo'),
+      _mi('gallery',  Icons.photo,             const Color(0xFF9B59B6), 'Galerie'),
+      _mi('video',    Icons.videocam,          const Color(0xFFF39C12), 'Vidéo'),
+      _mi('document', Icons.insert_drive_file, const Color(0xFFE74C3C), 'Document'),
+      PopupMenuItem(
+        value: 'location',
+        enabled: !_sendingLoc,
+        child: Row(children: [
+          Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF2ECC71).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8)),
+              child: Icon(Icons.location_on, color: const Color(0xFF2ECC71), size: 18)),
+          const SizedBox(width: 12),
+          Text(_sendingLoc ? 'Envoi…' : 'Localisation',
+              style: const TextStyle(fontSize: 14)),
+        ])),
+    ],
+  );
 
   PopupMenuItem<String> _mi(String val, IconData icon, Color c, String label) =>
-      PopupMenuItem(
-          value: val,
-          child: Row(children: [
-            Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                    color: c.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                child: Icon(icon, color: c, size: 18)),
-            const SizedBox(width: 12),
-            Text(label, style: const TextStyle(fontSize: 14)),
-          ]));
+      PopupMenuItem(value: val, child: Row(children: [
+        Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+                color: c.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, color: c, size: 18)),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(fontSize: 14)),
+      ]));
+
+  // ── Bouton envoi / micro ──────────────────────────────────────────────
 
   Widget _buildSendOrMic() {
     if (_hasText || _sending) {
       return GestureDetector(
         onTap: _sending ? null : () => _send(content: _msgCtrl.text),
         child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-                color: _sending ? Colors.grey : AppConstants.primaryRed,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                      color: AppConstants.primaryRed.withOpacity(0.4),
-                      blurRadius: 6,
-                      offset: const Offset(0, 2))
-                ]),
-            child: _sending
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Icon(Icons.send, color: Colors.white, size: 22)),
+          duration: const Duration(milliseconds: 150),
+          width: 48, height: 48,
+          decoration: BoxDecoration(
+              color: _sending ? Colors.grey : AppConstants.primaryRed,
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(
+                  color: AppConstants.primaryRed.withOpacity(0.4),
+                  blurRadius: 6, offset: const Offset(0, 2))]),
+          child: _sending
+              ? const Padding(padding: EdgeInsets.all(12),
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              : const Icon(Icons.send, color: Colors.white, size: 22)),
       );
     }
-    return _buildMicBtn();
+    return _buildMicButton();
   }
 
-  Widget _buildMicBtn() {
-    final canceling = _recActive && _micDragX < _kCancelX;
-    final locking = _recActive && _micDragY < _kLockY;
-
-    return Stack(clipBehavior: Clip.none, children: [
-      if (_recActive && _micDragX < -20)
-        Positioned(
-            right: 56,
-            top: 12,
-            child: Opacity(
-                opacity: ((-_micDragX - 20) / 60).clamp(0.0, 1.0),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.chevron_left,
-                      size: 18, color: canceling ? Colors.red : Colors.grey[500]),
-                  Icon(Icons.chevron_left,
-                      size: 18, color: canceling ? Colors.red : Colors.grey[400]),
-                  Text('Annuler',
-                      style: TextStyle(
-                          fontSize: 11, color: canceling ? Colors.red : Colors.grey[500])),
-                ]))),
-      if (_recActive && _micDragY < -20)
-        Positioned(
+  // ══════════════════════════════════════════════════════════════════════
+  //  BOUTON MICRO — Swipe vers le haut pour démarrer
+  // ══════════════════════════════════════════════════════════════════════
+  Widget _buildMicButton() {
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        // Hint "Glisser ↑" animé
+        if (_showSwipeHint && !_recActive)
+          Positioned(
             bottom: 56,
-            right: 6,
-            child: Opacity(
-                opacity: ((-_micDragY - 20) / 60).clamp(0.0, 1.0),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.lock,
-                      size: 16, color: locking ? Colors.green : Colors.grey[400]),
-                  Icon(Icons.keyboard_arrow_up,
-                      size: 20, color: locking ? Colors.green : Colors.grey[400]),
-                ]))),
-      GestureDetector(
-        onLongPressStart: _onMicLongPressStart,
-        onLongPressMoveUpdate: _onMicLongPressMoveUpdate,
-        onLongPressEnd: _onMicLongPressEnd,
-        onLongPressCancel: () {
-          if (_recActive) _cancelRec();
-        },
-        child: AnimatedBuilder(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.0, end: 1.0),
+              duration: const Duration(milliseconds: 600),
+              builder: (_, v, child) => Opacity(
+                opacity: v,
+                child: Transform.translate(
+                  offset: Offset(0, -8 * v),
+                  child: child,
+                ),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.keyboard_arrow_up, color: Colors.white, size: 14),
+                  SizedBox(width: 3),
+                  Text('Maintenir & glisser', style: TextStyle(color: Colors.white, fontSize: 10)),
+                ]),
+              ),
+            ),
+          ),
+
+        // Le bouton lui-même
+        GestureDetector(
+          key: _micKey,
+          onVerticalDragStart: (d) {
+            _micTouchStart = d.globalPosition;
+            _startRec();
+          },
+          onVerticalDragUpdate: (d) {
+            if (_micTouchStart == null || !_recActive) return;
+            final dy = d.globalPosition.dy - _micTouchStart!.dy;
+            final dx = d.globalPosition.dx - _micTouchStart!.dx;
+            setState(() {
+              _micDragY = dy;
+              _micDragX = dx;
+            });
+            if (dy < _kLockY && !_recLocked) {
+              HapticFeedback.mediumImpact();
+              setState(() {
+                _recLocked = true;
+                _micDragX  = 0;
+                _micDragY  = 0;
+              });
+            } else if (dx < _kCancelX) {
+              _cancelRec();
+              _micTouchStart = null;
+            }
+          },
+          onVerticalDragEnd: (_) {
+            if (!_recActive) { _micTouchStart = null; return; }
+            if (!_recLocked) _stopForPreview();
+            _micTouchStart = null;
+          },
+          onVerticalDragCancel: () {
+            if (_recActive && !_recLocked) _cancelRec();
+            _micTouchStart = null;
+          },
+          child: AnimatedBuilder(
             animation: _micScaleAnim,
             builder: (_, __) => Transform.scale(
-                  scale: _micScaleAnim.value,
-                  child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      width: _recActive ? 54 : 48,
-                      height: _recActive ? 54 : 48,
-                      decoration: BoxDecoration(
-                          color: canceling
-                              ? Colors.red
-                              : locking
-                                  ? Colors.green
-                                  : AppConstants.primaryRed,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                                color: (canceling
-                                        ? Colors.red
-                                        : locking
-                                            ? Colors.green
-                                            : AppConstants.primaryRed)
-                                    .withOpacity(0.45),
-                                blurRadius: _recActive ? 14 : 6,
-                                spreadRadius: _recActive ? 2 : 0,
-                                offset: const Offset(0, 2))
-                          ]),
-                      child: _recActive
-                          ? AnimatedBuilder(
-                              animation: _pulseAnim,
-                              builder: (_, __) => Icon(
-                                  canceling
-                                      ? Icons.delete_outline
-                                      : locking
-                                          ? Icons.lock_outline
-                                          : Icons.mic,
-                                  color: Colors.white.withOpacity(0.55 + 0.45 * _pulseAnim.value),
-                                  size: 24))
-                          : const Icon(Icons.mic, color: Colors.white, size: 24)),
-                )),
-      ),
-    ]);
+              scale: _micScaleAnim.value,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: _recActive ? 56 : 48,
+                height: _recActive ? 56 : 48,
+                decoration: BoxDecoration(
+                    color: _recActive
+                        ? (_micDragX < _kCancelX ? Colors.red : const Color(0xFF25D366))
+                        : AppConstants.primaryRed,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(
+                        color: (_recActive
+                            ? const Color(0xFF25D366)
+                            : AppConstants.primaryRed).withOpacity(0.45),
+                        blurRadius: _recActive ? 16 : 6,
+                        spreadRadius: _recActive ? 3 : 0,
+                        offset: const Offset(0, 2))]),
+                child: _recActive
+                    ? (_micDragX < _kCancelX
+                        ? const Icon(Icons.delete_outline, color: Colors.white, size: 24)
+                        : AnimatedBuilder(animation: _pulseAnim, builder: (_, __) =>
+                            Icon(Icons.mic,
+                                color: Colors.white.withOpacity(0.6 + 0.4 * _pulseAnim.value),
+                                size: 24)))
+                    : const Icon(Icons.mic, color: Colors.white, size: 24),
+              ),
+            ),
+          ),
+        ),
+
+        // Indicateur swipe lock (flèche haut)
+        if (_recActive && !_recLocked && _micDragY < -10)
+          Positioned(
+            bottom: 60,
+            child: Opacity(
+              opacity: ((-_micDragY - 10) / 60).clamp(0.0, 1.0),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.white, shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 6)]),
+                child: Icon(Icons.lock_outline,
+                    size: 16,
+                    color: _micDragY < _kLockY ? Colors.green : Colors.grey[600]),
+              ),
+            ),
+          ),
+
+        // Indicateur cancel (flèche gauche)
+        if (_recActive && !_recLocked && _micDragX < -10)
+          Positioned(
+            right: 58,
+            child: Opacity(
+              opacity: ((-_micDragX - 10) / 60).clamp(0.0, 1.0),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.chevron_left, color: _micDragX < _kCancelX ? Colors.red : Colors.grey[600], size: 20),
+                Text('Annuler',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: _micDragX < _kCancelX ? Colors.red : Colors.grey[600])),
+              ]),
+            ),
+          ),
+      ],
+    );
   }
 
-  Widget _buildRecIndicator() {
-    final canceling = _micDragX < _kCancelX;
-    final locking = _micDragY < _kLockY;
+  // ── Barre d'enregistrement actif (waveform) ────────────────────────────
+
+  Widget _buildActiveRecBar() {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
+      duration: const Duration(milliseconds: 200),
       margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-          color: canceling ? Colors.red[50] : locking ? Colors.green[50] : Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-              color: canceling
-                  ? Colors.red.withOpacity(0.4)
-                  : locking
-                      ? Colors.green.withOpacity(0.4)
-                      : Colors.grey[300]!)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 6)]),
       child: Row(children: [
-        AnimatedBuilder(
-            animation: _pulseAnim,
-            builder: (_, __) => Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.4 + 0.6 * _pulseAnim.value),
-                    shape: BoxShape.circle))),
-        const SizedBox(width: 10),
-        Text(_fmt(_recDuration),
-            style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: canceling ? Colors.red : const Color(0xFF2D2D2D))),
+        // Indicateur REC
+        Row(children: [
+          AnimatedBuilder(animation: _pulseAnim, builder: (_, __) => Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.5 + 0.5 * _pulseAnim.value),
+                  shape: BoxShape.circle))),
+          const SizedBox(width: 6),
+          Text(_fmt(_recDuration),
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D),
+                  fontFeatures: [FontFeature.tabularFigures()])),
+        ]),
         const SizedBox(width: 12),
-        Expanded(
-            child: Text(
-                canceling
-                    ? 'Relâchez pour annuler'
-                    : locking
-                        ? 'Relâchez pour verrouiller'
-                        : '← Annuler   ↑ Bloquer',
-                style: TextStyle(
-                    fontSize: 11,
-                    color: canceling
-                        ? Colors.red
-                        : locking
-                            ? Colors.green[700]
-                            : Colors.grey[600]),
-                overflow: TextOverflow.ellipsis)),
+        // Waveform en temps réel
+        Expanded(child: _buildWaveform()),
+        const SizedBox(width: 8),
+        // Bouton cancel
         GestureDetector(
-            onTap: _cancelRec, child: const Icon(Icons.close, color: Colors.grey, size: 20)),
+            onTap: _cancelRec,
+            child: Icon(Icons.close, color: Colors.grey[500], size: 20)),
       ]),
     );
   }
 
-  Widget _buildLockedBar() => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.grey[300]!)),
-        child: Row(children: [
-          AnimatedBuilder(
-              animation: _pulseAnim,
-              builder: (_, __) => Container(
-                  width: 10,
-                  height: 10,
+  Widget _buildWaveform() {
+    return SizedBox(
+      height: 32,
+      child: AnimatedBuilder(
+        animation: _waveCtrl,
+        builder: (_, __) => Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: _waveformBars.reversed.take(28).toList().reversed.map((amp) {
+            final h = (4 + amp * 26).clamp(4.0, 30.0);
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 0.8),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 80),
+                  height: h,
                   decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.4 + 0.6 * _pulseAnim.value),
-                      shape: BoxShape.circle))),
-          const SizedBox(width: 10),
-          Text(_fmt(_recDuration),
-              style: const TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2D2D2D))),
-          const SizedBox(width: 8),
-          Text('Verrouillé', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-          const Spacer(),
-          IconButton(
-              icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
-              onPressed: _cancelRec,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
-          GestureDetector(
+                    color: amp > 0.5
+                        ? const Color(0xFF25D366)
+                        : const Color(0xFF25D366).withOpacity(0.4 + amp * 0.6),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  // ── Barre verrou (enregistrement locked) ──────────────────────────────
+
+  Widget _buildLockedRecBar() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.07), blurRadius: 6)]),
+      child: Row(children: [
+        // Indicateur REC
+        AnimatedBuilder(animation: _pulseAnim, builder: (_, __) => Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.5 + 0.5 * _pulseAnim.value),
+                shape: BoxShape.circle))),
+        const SizedBox(width: 8),
+        Text(_fmt(_recDuration),
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2D2D2D))),
+        const SizedBox(width: 8),
+        Expanded(child: _buildWaveform()),
+        // Actions
+        const SizedBox(width: 8),
+        GestureDetector(
+            onTap: _cancelRec,
+            child: Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                    color: Colors.red[50], borderRadius: BorderRadius.circular(20)),
+                child: Icon(Icons.delete_outline, color: Colors.red[600], size: 18))),
+        const SizedBox(width: 8),
+        GestureDetector(
             onTap: _stopForPreview,
             child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration:
-                    const BoxDecoration(color: AppConstants.primaryRed, shape: BoxShape.circle),
-                child: const Icon(Icons.send, color: Colors.white, size: 18)),
-          ),
-        ]),
-      );
+                padding: const EdgeInsets.all(7),
+                decoration: const BoxDecoration(
+                    color: AppConstants.primaryRed, shape: BoxShape.circle),
+                child: const Icon(Icons.send, color: Colors.white, size: 18))),
+      ]),
+    );
+  }
+
+  // ── Barre preview audio ────────────────────────────────────────────────
 
   Widget _buildPreviewBar() {
     final pct = _previewDur.inMilliseconds > 0
@@ -1411,59 +1479,57 @@ class _ChatScreenState extends State<ChatScreen>
         : 0.0;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: AppConstants.primaryRed.withOpacity(0.3))),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: AppConstants.primaryRed.withOpacity(0.3)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6)]),
       child: Row(children: [
+        // Supprimer
         GestureDetector(
             onTap: _cancelPreview,
             child: Container(
-                width: 36,
-                height: 36,
-                decoration:
-                    BoxDecoration(color: Colors.grey[100], shape: BoxShape.circle),
-                child: const Icon(Icons.delete_outline, color: Colors.red, size: 20))),
+                width: 36, height: 36,
+                decoration: BoxDecoration(color: Colors.red[50], shape: BoxShape.circle),
+                child: const Icon(Icons.delete_outline, color: Colors.red, size: 18))),
         const SizedBox(width: 8),
+        // Play/Pause
         GestureDetector(
             onTap: _togglePreview,
             child: Container(
-                width: 40,
-                height: 40,
+                width: 42, height: 42,
                 decoration: const BoxDecoration(
                     color: AppConstants.primaryRed, shape: BoxShape.circle),
                 child: Icon(_previewPlaying ? Icons.pause : Icons.play_arrow,
                     color: Colors.white, size: 24))),
         const SizedBox(width: 10),
-        Expanded(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Slider + timer
+        Expanded(child: Column(mainAxisSize: MainAxisSize.min, children: [
           SliderTheme(
-              data: SliderThemeData(
-                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                  trackHeight: 3,
-                  thumbColor: AppConstants.primaryRed,
-                  activeTrackColor: AppConstants.primaryRed,
-                  inactiveTrackColor: Colors.grey[300]),
-              child: Slider(
-                  value: pct,
-                  onChanged: (v) => _previewPlayer?.seek(
-                      Duration(milliseconds: (v * _previewDur.inMilliseconds).toInt())))),
+            data: SliderThemeData(
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                trackHeight: 3,
+                thumbColor: AppConstants.primaryRed,
+                activeTrackColor: AppConstants.primaryRed,
+                inactiveTrackColor: Colors.grey[300]),
+            child: Slider(
+                value: pct.toDouble(),
+                onChanged: (v) => _previewPlayer?.seek(
+                    Duration(milliseconds: (v * _previewDur.inMilliseconds).toInt())))),
           Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text(_fmt(_previewPos),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                Text(_fmt(_previewDur),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-              ])),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(_fmt(_previewPos), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+              Text(_fmt(_previewDur), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+            ])),
         ])),
         const SizedBox(width: 10),
+        // Envoyer
         GestureDetector(
             onTap: _sendPreview,
             child: Container(
-                width: 44,
-                height: 44,
+                width: 44, height: 44,
                 decoration: const BoxDecoration(
                     color: Color(0xFF25D366), shape: BoxShape.circle),
                 child: const Icon(Icons.send, color: Colors.white, size: 22))),
@@ -1474,101 +1540,81 @@ class _ChatScreenState extends State<ChatScreen>
   // ── Helpers ────────────────────────────────────────────────────────────
 
   Widget _buildEmpty() => Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.7), shape: BoxShape.circle),
-                child: Icon(Icons.chat_bubble_outline, size: 52, color: Colors.grey[400])),
-            const SizedBox(height: 16),
-            Text('Aucun message',
-                style: TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.bold, color: Colors.grey[600])),
-            const SizedBox(height: 6),
-            Text('Envoyez votre premier message',
-                style: TextStyle(fontSize: 13, color: Colors.grey[500])),
-          ],
-        ),
-      );
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.7), shape: BoxShape.circle),
+          child: Icon(Icons.chat_bubble_outline, size: 52, color: Colors.grey[400])),
+      const SizedBox(height: 16),
+      Text('Aucun message',
+          style: TextStyle(
+              fontSize: 17, fontWeight: FontWeight.bold, color: Colors.grey[600])),
+      const SizedBox(height: 6),
+      Text('Envoyez votre premier message',
+          style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+    ]),
+  );
 
   Widget _serviceBanner() => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        color: Colors.orange[50],
-        child: Row(children: [
-          Icon(Icons.info_outline, size: 14, color: Colors.orange[700]),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text('À propos de : ${widget.serviceName}',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[700]))),
-        ]),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+    color: Colors.orange[50],
+    child: Row(children: [
+      Icon(Icons.info_outline, size: 14, color: Colors.orange[700]),
+      const SizedBox(width: 8),
+      Expanded(child: Text('À propos de : ${widget.serviceName}',
+          style: TextStyle(fontSize: 12, color: Colors.orange[700]))),
+    ]),
+  );
 
-  void _openImg(String url) => Navigator.push(
-      context,
-      MaterialPageRoute(
-          builder: (_) => Scaffold(
-                backgroundColor: Colors.black,
-                appBar: AppBar(
-                    backgroundColor: Colors.black,
-                    iconTheme: const IconThemeData(color: Colors.white)),
-                body: Center(
-                    child: InteractiveViewer(child: Image.network(url))))));
+  void _openImg(String url) => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white)),
+        body: Center(child: InteractiveViewer(child: Image.network(url))))));
 
   Future<void> _openLoc(double lat, double lng) async {
     final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _openUrl(String url) async {
     final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   void _msgMenu(MessageModel m) => showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
-      builder: (_) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const SizedBox(height: 8),
-            Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-            ListTile(
-                leading: const Icon(Icons.copy_outlined),
-                title: const Text('Copier'),
-                onTap: () {
-                  Navigator.pop(context);
-                  Clipboard.setData(ClipboardData(text: m.content));
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Copié'),
-                      duration: Duration(seconds: 1)));
-                }),
-          ])));
+      builder: (_) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(height: 8),
+        Container(width: 36, height: 4,
+            decoration: BoxDecoration(
+                color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+        ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Copier'),
+            onTap: () {
+              Navigator.pop(context);
+              Clipboard.setData(ClipboardData(text: m.content));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copié'), duration: Duration(seconds: 1)));
+            }),
+      ])));
 
   void _showOptions() => showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-            const SizedBox(height: 8),
-            ListTile(
-                leading:
-                    const Icon(Icons.search, color: AppConstants.primaryRed),
-                title: const Text('Rechercher'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showErr('Bientôt disponible');
-                }),
-          ]));
+        const SizedBox(height: 8),
+        ListTile(
+            leading: const Icon(Icons.search, color: AppConstants.primaryRed),
+            title: const Text('Rechercher'),
+            onTap: () { Navigator.pop(context); _showErr('Bientôt disponible'); }),
+      ]));
 
   void _showErr(String msg) {
     if (!mounted) return;
@@ -1584,41 +1630,92 @@ class _ChatScreenState extends State<ChatScreen>
   void dispose() {
     _typingTimer?.cancel();
     _recTimer?.cancel();
+    _waveformTimer?.cancel();
     _pulseCtrl.dispose();
     _micScaleCtrl.dispose();
+    _waveCtrl.dispose();
 
-    // ⭐ IMPORTANT: Désactiver la conversation active quand on quitte
     _msgProvider?.setActiveConversation(null);
-
-    // Désabonner du polling
     MessagePollingService().removeMessageListener(widget.conversationId, _onPollingMessages);
 
-    // Arrêter l'enregistrement si en cours
     if (_recActive) {
       _rec.stop().catchError((_) {}).then((p) {
-        if (p != null) {
-          try {
-            File(p).deleteSync();
-          } catch (_) {}
-        }
+        if (p != null) try { File(p).deleteSync(); } catch (_) {}
       });
     }
     _rec.dispose();
-
     _disposePreview();
     for (final p in _players.values) p.dispose();
-    for (final c in _vCtrl.values) c.dispose();
-    for (final c in _cCtrl.values) c.dispose();
-
+    for (final c in _vCtrl.values)  c.dispose();
+    for (final c in _cCtrl.values)  c.dispose();
     _msgCtrl.dispose();
     _scroll.dispose();
     _focus.dispose();
-
     if (_typingActive) {
       _msgProvider?.sendTypingIndicator(widget.conversationId, false);
     }
-
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  Widget PIN de carte — Icône épingle animée
+// ════════════════════════════════════════════════════════════════════════
+class _MapPin extends StatefulWidget {
+  const _MapPin();
+
+  @override
+  State<_MapPin> createState() => _MapPinState();
+}
+
+class _MapPinState extends State<_MapPin> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _bounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200))
+      ..repeat(reverse: true);
+    _bounce = Tween<double>(begin: 0.0, end: -6.0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _bounce,
+      builder: (_, __) => Transform.translate(
+        offset: Offset(0, _bounce.value),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+                color: AppConstants.primaryRed,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(
+                    color: AppConstants.primaryRed.withOpacity(0.5),
+                    blurRadius: 8, spreadRadius: 2)]),
+            child: const Icon(Icons.location_on, color: Colors.white, size: 18),
+          ),
+          // Ombre du pin
+          Container(
+            width: 8, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }
