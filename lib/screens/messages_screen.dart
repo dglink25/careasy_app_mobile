@@ -15,6 +15,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import '../main.dart';
 import '../services/message_polling_service.dart';
+import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
+import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -103,8 +105,54 @@ class _MessagesScreenState extends State<MessagesScreen>
             duration: const Duration(seconds: 2)),
       );
 
+  void _showCreateEntrepriseDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Créer une entreprise'),
+        content: const Text(
+          'Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une maintenant ?',
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Plus tard'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const CreateEntrepriseScreen(),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppConstants.primaryRed,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('Créer'),
+          ),
+        ],
+      ),
+    );
+  }
   void _handleEntrepriseTap() {
-    _showComingSoon('Mon entreprise');
+    if (_hasEntreprise) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()),
+      );
+    } else {
+      _showCreateEntrepriseDialog();
+    }
   }
 
   void _showProfileDialog() {

@@ -1,12 +1,3 @@
-// lib/screens/settings_screen.dart
-// ═══════════════════════════════════════════════════════════════════════
-// CORRECTIONS:
-// 1. Bottom navigation bar identique à home_screen (Accueil, Messages,
-//    Rendez-vous, Entreprise, Profil)
-// 2. Logout complet: révocation serveur + nettoyage storage → WelcomeScreen
-// 3. encryptedSharedPreferences pour la persistance sécurisée
-// 4. Refresh des données après retour de EditProfile
-// ═══════════════════════════════════════════════════════════════════════
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -34,6 +25,8 @@ import 'help_screen.dart' as help;
 import 'about_screen.dart' as about;
 import 'mes_entreprises_screen.dart' as entreprises;
 import 'plans_abonnement_screen.dart' as plans;
+import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
+import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -209,29 +202,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _handleEntrepriseTap() {
     final hasEnt = _userData?['has_entreprise'] ?? false;
     if (hasEnt) {
-      Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()));
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()),
+      );
     } else {
       _showCreateEntrepriseDialog();
     }
   }
-
   void _showCreateEntrepriseDialog() {
-    showDialog(context: context, builder: (_) => AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('Créer votre entreprise', style: TextStyle(fontWeight: FontWeight.bold)),
-      content: const Text('Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une ?'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-        ElevatedButton(
-          onPressed: () { Navigator.pop(context); _showComingSoon('Création d\'entreprise'); },
-          style: ElevatedButton.styleFrom(
-              backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-          child: const Text('Créer'),
-        ),
-      ],
-    ));
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Créer votre entreprise', 
+          style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const Text('Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context), 
+            child: const Text('Annuler')
+          ),
+          ElevatedButton(
+            onPressed: () { 
+              Navigator.pop(context); 
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CreateEntrepriseScreen()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppConstants.primaryRed, 
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+            ),
+            child: const Text('Créer'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ─── CONTENU PRINCIPAL ───────────────────────────────────────────────────────
