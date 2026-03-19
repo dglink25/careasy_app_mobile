@@ -1,12 +1,3 @@
-// lib/screens/chat_screen.dart
-// ═══════════════════════════════════════════════════════════════════════
-// CORRECTIONS:
-// 1. Suppression des icônes d'appel et vidéo dans l'AppBar
-// 2. Réponse à un message (swipe vers la droite style WhatsApp)
-// 3. Recherche de messages dans la conversation
-// 4. Modification de message (≤15 min après envoi)
-// 5. Bouton emoji/sticker fonctionnel (picker simple)
-// ═══════════════════════════════════════════════════════════════════════
 import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;

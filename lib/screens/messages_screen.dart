@@ -1,9 +1,4 @@
 // lib/screens/messages_screen.dart
-// ═══════════════════════════════════════════════════════════════════════
-// CORRECTIONS:
-// - Suppression des icônes d'appel
-// - Ajout recherche de conversation
-// ═══════════════════════════════════════════════════════════════════════
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -16,8 +11,6 @@ import 'chat_screen.dart';
 import 'home_screen.dart';
 import 'settings_screen.dart';
 import 'welcome_screen.dart';
-import 'all_services_screen.dart';
-import 'all_entreprises_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import '../main.dart';
@@ -31,8 +24,7 @@ class MessagesScreen extends StatefulWidget {
 }
 
 class _MessagesScreenState extends State<MessagesScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late TabController _tabController;
+    with WidgetsBindingObserver {
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
   static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
@@ -55,7 +47,6 @@ class _MessagesScreenState extends State<MessagesScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -92,7 +83,6 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   @override
   void dispose() {
-    _tabController.dispose();
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -196,47 +186,10 @@ class _MessagesScreenState extends State<MessagesScreen>
               onPressed: () => setState(() => _isSearching = true),
             ),
         ],
-        bottom: _isSearching ? null : TabBar(
-          controller: _tabController,
-          indicatorColor: Colors.white,
-          indicatorWeight: 3,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white70,
-          tabs: [
-            Tab(
-              child: Consumer<MessageProvider>(builder: (_, provider, __) {
-                return Stack(clipBehavior: Clip.none, children: [
-                  const Text('Messages'),
-                  if (provider.totalUnreadCount > 0)
-                    Positioned(
-                      right: -12,
-                      top: -8,
-                      child: Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(
-                            color: Colors.amber, shape: BoxShape.circle),
-                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Text('${provider.totalUnreadCount}',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold),
-                            textAlign: TextAlign.center),
-                      ),
-                    ),
-                ]);
-              }),
-            ),
-            const Tab(text: 'Groupes'),
-          ],
-        ),
       ),
       body: _isSearching
           ? _buildSearchResults()
-          : TabBarView(
-              controller: _tabController,
-              children: [_buildMessagesTab(), _buildGroupsTab()],
-            ),
+          : _buildMessagesTab(),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -267,7 +220,7 @@ class _MessagesScreenState extends State<MessagesScreen>
     );
   }
 
-  // ── Recherche de conversations ─────────────────────────────────────
+  // ── Recherche ──────────────────────────────────────────────────────
   Widget _buildSearchResults() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       final query = _searchQuery;
@@ -308,100 +261,7 @@ class _MessagesScreenState extends State<MessagesScreen>
     });
   }
 
-  Widget _navItem(IconData icon, String label, int index, Size size) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentIndex = index);
-          if (index == 0) {
-            Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-          } else if (index == 2) {
-            _showComingSoon('Rendez-vous');
-          } else if (index == 3) {
-            _handleEntrepriseTap();
-          } else if (index == 4) {
-            _showProfileDialog();
-          }
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Stack(clipBehavior: Clip.none, children: [
-              Icon(icon, color: sel ? AppConstants.primaryRed : Colors.grey, size: 22),
-              if (index == 1)
-                Consumer<MessageProvider>(builder: (_, p, __) {
-                  if (p.totalUnreadCount == 0) return const SizedBox.shrink();
-                  return Positioned(
-                    right: -6,
-                    top: -2,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: const BoxDecoration(
-                          color: Colors.amber, shape: BoxShape.circle),
-                      constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                      child: Text('${p.totalUnreadCount}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 8,
-                              fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center),
-                    ),
-                  );
-                }),
-            ]),
-            const SizedBox(height: 2),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  Widget _profileNavItem(String name, String photo, int index, Size size) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentIndex = index);
-          _showProfileDialog();
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 11,
-              backgroundImage: photo.isNotEmpty ? NetworkImage(photo) : null,
-              backgroundColor: Colors.grey[200],
-              child: photo.isEmpty
-                  ? Icon(Icons.person, size: 12, color: Colors.grey[600])
-                  : null,
-            ),
-            const SizedBox(height: 2),
-            Text('Profil',
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
-    );
-  }
-
+  // ── Liste de messages (onglet unique) ──────────────────────────────
   Widget _buildMessagesTab() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       if (provider.isLoading && provider.conversations.isEmpty) {
@@ -594,11 +454,8 @@ class _MessagesScreenState extends State<MessagesScreen>
                     Text('Vous: ',
                         style: TextStyle(
                             fontSize: 13,
-                            color:
-                                hasUnread ? Colors.grey[700] : Colors.grey[600],
-                            fontWeight: hasUnread
-                                ? FontWeight.w600
-                                : FontWeight.normal)),
+                            color: hasUnread ? Colors.grey[700] : Colors.grey[600],
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
                   Expanded(
                     child: Text(
                       _lastMsgPreview(conv.lastMessage!),
@@ -646,17 +503,98 @@ class _MessagesScreenState extends State<MessagesScreen>
     }
   }
 
-  Widget _buildGroupsTab() {
-    return Center(
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.group_outlined, size: 64, color: Colors.grey[400]),
-        const SizedBox(height: 16),
-        Text('Groupes',
-            style: TextStyle(fontSize: 18, color: Colors.grey[600])),
-        const SizedBox(height: 8),
-        Text('Bientôt disponible',
-            style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-      ]),
+  // ── Navigation bar ─────────────────────────────────────────────────
+  Widget _navItem(IconData icon, String label, int index, Size size) {
+    final sel = _currentIndex == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() => _currentIndex = index);
+          if (index == 0) {
+            Navigator.pushReplacement(
+                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+          } else if (index == 2) {
+            _showComingSoon('Rendez-vous');
+          } else if (index == 3) {
+            _handleEntrepriseTap();
+          } else if (index == 4) {
+            _showProfileDialog();
+          }
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Stack(clipBehavior: Clip.none, children: [
+              Icon(icon, color: sel ? AppConstants.primaryRed : Colors.grey, size: 22),
+              if (index == 1)
+                Consumer<MessageProvider>(builder: (_, p, __) {
+                  if (p.totalUnreadCount == 0) return const SizedBox.shrink();
+                  return Positioned(
+                    right: -6,
+                    top: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: const BoxDecoration(
+                          color: Colors.amber, shape: BoxShape.circle),
+                      constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                      child: Text('${p.totalUnreadCount}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center),
+                    ),
+                  );
+                }),
+            ]),
+            const SizedBox(height: 2),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: sel ? AppConstants.primaryRed : Colors.grey,
+                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _profileNavItem(String name, String photo, int index, Size size) {
+    final sel = _currentIndex == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          setState(() => _currentIndex = index);
+          _showProfileDialog();
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircleAvatar(
+              radius: 11,
+              backgroundImage: photo.isNotEmpty ? NetworkImage(photo) : null,
+              backgroundColor: Colors.grey[200],
+              child: photo.isEmpty
+                  ? Icon(Icons.person, size: 12, color: Colors.grey[600])
+                  : null,
+            ),
+            const SizedBox(height: 2),
+            Text('Profil',
+                style: TextStyle(
+                    fontSize: 10,
+                    color: sel ? AppConstants.primaryRed : Colors.grey,
+                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+      ),
     );
   }
 }
