@@ -405,9 +405,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildSettingsItem(
           icon: Icons.info_outline, title: 'À propos', subtitle: 'Version 1.0.0',
           onTap: () => _navigateToAbout(context), isSmallScreen: isSmallScreen),
-        _buildSettingsItem(
-          icon: Icons.description_outlined, title: 'Conditions d\'utilisation', subtitle: 'Lire nos conditions',
-          onTap: () => _showComingSoon('Conditions d\'utilisation'), isSmallScreen: isSmallScreen),
         _buildDivider(),
 
         // ── Bouton déconnexion ──

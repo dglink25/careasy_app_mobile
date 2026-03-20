@@ -125,7 +125,7 @@ class _HelpScreenState extends State<HelpScreen> {
           _buildContactButton(
             icon: Icons.email_outlined,
             title: 'Email',
-            subtitle: 'support@careasy.com',
+            subtitle: 'careasy26@gmail.com',
             onTap: () => _launchEmail(),
             isSmallScreen: isSmallScreen,
           ),
@@ -134,8 +134,8 @@ class _HelpScreenState extends State<HelpScreen> {
           _buildContactButton(
             icon: Icons.phone_outlined,
             title: 'Téléphone',
-            subtitle: '+229 01 23 45 67',
-            onTap: () => _launchPhone('+22901234567'),
+            subtitle: '+229 01 90 07 89 88',
+            onTap: () => _launchPhone('+22990078988'),
             isSmallScreen: isSmallScreen,
           ),
           const SizedBox(height: 8),
@@ -144,7 +144,7 @@ class _HelpScreenState extends State<HelpScreen> {
             icon: Icons.chat_outlined,
             title: 'WhatsApp',
             subtitle: 'Support WhatsApp',
-            onTap: () => _launchWhatsApp('+22901234567'),
+            onTap: () => _launchWhatsApp('+22994119476'),
             isSmallScreen: isSmallScreen,
           ),
         ],

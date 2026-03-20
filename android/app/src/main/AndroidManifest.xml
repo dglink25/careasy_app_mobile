@@ -71,11 +71,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="careasy" android:host="auth"/>
             </intent-filter>
         </activity>
 
-        <!-- ⭐ Service FCM pour recevoir les notifications quand l'app est FERMÉE -->
-        <!-- C'est ce service qui appelle firebaseMessagingBackgroundHandler -->
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
             android:exported="false">

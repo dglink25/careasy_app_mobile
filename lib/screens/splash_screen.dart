@@ -1,5 +1,4 @@
-// lib/screens/splash_screen.dart
-// VERSION FINALE — Démarre le polling après vérification du token
+
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
