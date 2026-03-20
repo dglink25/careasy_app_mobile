@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -6,8 +5,10 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
+import '../providers/rendez_vous_provider.dart';          // ← AJOUT
 import '../services/notification_service.dart';
 import '../services/message_polling_service.dart';
+import '../services/pusher_service.dart';
 import '../utils/constants.dart';
 import 'home_screen.dart';
 import 'welcome_screen.dart';
@@ -21,8 +22,10 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  static const _androidOptions =
+      AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions =
+      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: _androidOptions,
@@ -36,7 +39,8 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
-    _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+    _anim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
     _fade = Tween<double>(begin: 0.0, end: 1.0)
         .animate(CurvedAnimation(parent: _anim, curve: Curves.easeIn));
     _scale = Tween<double>(begin: 0.85, end: 1.0)
@@ -54,7 +58,7 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _checkSession() async {
     if (!mounted) return;
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token    = await _storage.read(key: 'auth_token');
       final userData = await _storage.read(key: 'user_data');
 
       if (token == null || token.isEmpty) {
@@ -80,9 +84,17 @@ class _SplashScreenState extends State<SplashScreen>
         }
         if (!mounted) return;
 
-        // ⭐ Démarrer Pusher + Polling + FCM après login
+        // ── Démarrer Pusher + Polling + FCM ──────────────────────────
         await context.read<MessageProvider>().reinitializeAfterLogin();
         await NotificationService().refreshTokenAfterLogin();
+
+        // ── Injecter RendezVousProvider dans PusherService ──────────
+        // Doit être fait APRÈS reinitializeAfterLogin() pour que Pusher
+        // soit déjà initialisé.
+        if (mounted) {
+          PusherService().setRendezVousProvider(
+              context.read<RendezVousProvider>());              // ← AJOUT
+        }
 
         if (!mounted) return;
         _goTo(const HomeScreen());
@@ -101,7 +113,10 @@ class _SplashScreenState extends State<SplashScreen>
     try {
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       ).timeout(const Duration(seconds: 8));
 
       if (resp.statusCode == 200) {
@@ -126,7 +141,10 @@ class _SplashScreenState extends State<SplashScreen>
     try {
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
-        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
       ).timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200 && mounted) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -143,12 +161,9 @@ class _SplashScreenState extends State<SplashScreen>
     await _storage.delete(key: 'user_data');
     await _storage.delete(key: 'fcm_token_pending');
     await _storage.delete(key: 'remember_me');
-    // Arrêter le polling
     MessagePollingService().stop();
     if (mounted) {
-      try {
-        await context.read<AuthProvider>().logout();
-      } catch (_) {}
+      try { await context.read<AuthProvider>().logout(); } catch (_) {}
     }
   }
 
@@ -171,31 +186,31 @@ class _SplashScreenState extends State<SplashScreen>
       backgroundColor: Colors.white,
       body: Stack(children: [
         Positioned(
-            top: -80,
-            right: -80,
-            child: Container(
-              width: 320,
-              height: 320,
-              decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppConstants.primaryRed.withOpacity(0.07),
-                    Colors.transparent
-                  ])),
-            )),
+          top: -80, right: -80,
+          child: Container(
+            width: 320, height: 320,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [
+                AppConstants.primaryRed.withOpacity(0.07),
+                Colors.transparent,
+              ]),
+            ),
+          ),
+        ),
         Positioned(
-            bottom: -60,
-            left: -60,
-            child: Container(
-              width: 240,
-              height: 240,
-              decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppConstants.primaryRed.withOpacity(0.05),
-                    Colors.transparent
-                  ])),
-            )),
+          bottom: -60, left: -60,
+          child: Container(
+            width: 240, height: 240,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [
+                AppConstants.primaryRed.withOpacity(0.05),
+                Colors.transparent,
+              ]),
+            ),
+          ),
+        ),
         Center(
           child: AnimatedBuilder(
             animation: _anim,
@@ -205,18 +220,19 @@ class _SplashScreenState extends State<SplashScreen>
                 scale: _scale,
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   SizedBox(
-                    width: 200,
-                    height: 200,
-                    child: Image.asset('assets/images/logo.png', fit: BoxFit.contain),
+                    width: 200, height: 200,
+                    child: Image.asset('assets/images/logo.png',
+                        fit: BoxFit.contain),
                   ),
                   const SizedBox(height: 16),
                   Text(
                     'Votre Automobile, Notre Expertise',
                     style: TextStyle(
-                        fontSize: 14,
-                        fontStyle: FontStyle.italic,
-                        color: Colors.grey[500],
-                        fontWeight: FontWeight.w400),
+                      fontSize: 14,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.grey[500],
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
                 ]),
               ),
@@ -224,20 +240,19 @@ class _SplashScreenState extends State<SplashScreen>
           ),
         ),
         Positioned(
-          bottom: 60,
-          left: 0,
-          right: 0,
+          bottom: 60, left: 0, right: 0,
           child: AnimatedBuilder(
             animation: _anim,
             builder: (_, __) => FadeTransition(
               opacity: _fade,
               child: Column(children: [
                 SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: AppConstants.primaryRed.withOpacity(0.7))),
+                  width: 28, height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: AppConstants.primaryRed.withOpacity(0.7),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Text('Chargement…',
                     style: TextStyle(fontSize: 12, color: Colors.grey[400])),

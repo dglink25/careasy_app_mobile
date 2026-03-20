@@ -17,11 +17,14 @@ import 'package:careasy_app_mobile/screens/all_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import '../models/user_model.dart';
 import './settings_screen.dart';
+import '../providers/rendez_vous_provider.dart';    
+import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart'; 
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 import 'welcome_screen.dart';
 import 'chat_screen.dart';
+
 
 
 class HomeScreen extends StatefulWidget {
@@ -1716,7 +1719,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             }
           });
           }
-          if (index == 2) _showComingSoon('Rendez-vous');
+          if (index == 2) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChangeNotifierProvider.value(
+                  value: context.read<RendezVousProvider>(),
+                  child: const RendezVousListScreen(),
+                ),
+                ),
+              );
+            }
           if (index == 3) _handleEntrepriseTap();
           if (index == 4) _showProfileDialog();
         },
