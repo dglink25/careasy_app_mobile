@@ -6,6 +6,9 @@ import 'package:http/http.dart' as http;
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import 'package:careasy_app_mobile/screens/mes_services_screen.dart';
+import 'package:provider/provider.dart';
+import '../providers/rendez_vous_provider.dart';
+import '../widgets/app_bottom_nav.dart';
 
 class MesEntreprisesScreen extends StatefulWidget {
   const MesEntreprisesScreen({super.key});
@@ -97,6 +100,7 @@ final _storage = const FlutterSecureStorage(
         title: const Text('Mes entreprises', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
         actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchMesEntreprises)],
       ),
+      bottomNavigationBar: const AppBottomNav(currentIndex: 3),
       body: _isLoading ? _buildLoading() : _entreprises.isEmpty ? _buildEmpty() :
         RefreshIndicator(onRefresh: _fetchMesEntreprises, color: AppConstants.primaryRed,
           child: ListView.builder(padding: const EdgeInsets.fromLTRB(16, 16, 16, 100), itemCount: _entreprises.length, itemBuilder: (_, i) {

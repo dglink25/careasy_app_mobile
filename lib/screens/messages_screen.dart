@@ -16,6 +16,9 @@ import 'dart:convert';
 import '../main.dart';
 import '../services/message_polling_service.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
+import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
+import '../providers/rendez_vous_provider.dart';
+import '../widgets/app_bottom_nav.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 
 class MessagesScreen extends StatefulWidget {
@@ -238,33 +241,7 @@ class _MessagesScreenState extends State<MessagesScreen>
       body: _isSearching
           ? _buildSearchResults()
           : _buildMessagesTab(),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-                color: Colors.grey.withOpacity(0.1),
-                blurRadius: 10,
-                offset: const Offset(0, -5))
-          ],
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-              _navItem(Icons.home, 'Accueil', 0, size),
-              _navItem(Icons.message, 'Messages', 1, size),
-              _navItem(Icons.calendar_today, 'Rendez-vous', 2, size),
-              _navItem(
-                  _hasEntreprise ? Icons.business : Icons.add_business,
-                  _hasEntreprise ? 'Entreprise' : 'Créer',
-                  3,
-                  size),
-              _profileNavItem(userName, userPhoto, 4, size),
-            ]),
-          ),
-        ),
-      ),
+      bottomNavigationBar: const AppBottomNav(currentIndex: 1),
     );
   }
 
@@ -549,100 +526,5 @@ class _MessagesScreenState extends State<MessagesScreen>
       case 'location': return 'Localisation';
       default:         return lastMsg.content ?? '';
     }
-  }
-
-  // ── Navigation bar ─────────────────────────────────────────────────
-  Widget _navItem(IconData icon, String label, int index, Size size) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentIndex = index);
-          if (index == 0) {
-            Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-          } else if (index == 2) {
-            _showComingSoon('Rendez-vous');
-          } else if (index == 3) {
-            _handleEntrepriseTap();
-          } else if (index == 4) {
-            _showProfileDialog();
-          }
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Stack(clipBehavior: Clip.none, children: [
-              Icon(icon, color: sel ? AppConstants.primaryRed : Colors.grey, size: 22),
-              if (index == 1)
-                Consumer<MessageProvider>(builder: (_, p, __) {
-                  if (p.totalUnreadCount == 0) return const SizedBox.shrink();
-                  return Positioned(
-                    right: -6,
-                    top: -2,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: const BoxDecoration(
-                          color: Colors.amber, shape: BoxShape.circle),
-                      constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                      child: Text('${p.totalUnreadCount}',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 8,
-                              fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center),
-                    ),
-                  );
-                }),
-            ]),
-            const SizedBox(height: 2),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  Widget _profileNavItem(String name, String photo, int index, Size size) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentIndex = index);
-          _showProfileDialog();
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 11,
-              backgroundImage: photo.isNotEmpty ? NetworkImage(photo) : null,
-              backgroundColor: Colors.grey[200],
-              child: photo.isEmpty
-                  ? Icon(Icons.person, size: 12, color: Colors.grey[600])
-                  : null,
-            ),
-            const SizedBox(height: 2),
-            Text('Profil',
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
-    );
   }
 }

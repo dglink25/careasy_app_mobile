@@ -27,6 +27,9 @@ import 'mes_entreprises_screen.dart' as entreprises;
 import 'plans_abonnement_screen.dart' as plans;
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
+import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
+import '../providers/rendez_vous_provider.dart';
+import '../widgets/app_bottom_nav.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -100,102 +103,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed))
           : _buildContent(context, size, isSmallScreen, isTablet),
 
-      // ⭐ Bottom navigation bar identique à home_screen
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, -5)),
-          ],
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _navItem(Icons.home, 'Accueil', 0),
-                _navItem(Icons.message, 'Messages', 1),
-                _navItem(Icons.calendar_today, 'Rendez-vous', 2),
-                _navItem(
-                  hasEntreprise ? Icons.business : Icons.add_business,
-                  hasEntreprise ? 'Entreprise' : 'Créer',
-                  3,
-                ),
-                _profileNavItem(userName, userPhoto, 4),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Navigation items (copie exacte de home_screen) ─────────────────────────
-  Widget _navItem(IconData icon, String label, int index) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() => _currentIndex = index);
-          if (index == 0) {
-            Navigator.pushAndRemoveUntil(context,
-                MaterialPageRoute(builder: (_) => const HomeScreen()),
-                (_) => false);
-          } else if (index == 1) {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const MessagesScreen()));
-          } else if (index == 2) {
-            _showComingSoon('Rendez-vous');
-          } else if (index == 3) {
-            _handleEntrepriseTap();
-          }
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, color: sel ? AppConstants.primaryRed : Colors.grey, size: 22),
-            const SizedBox(height: 2),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  Widget _profileNavItem(String name, String photo, int index) {
-    final sel = _currentIndex == index;
-    return Expanded(
-      child: InkWell(
-        onTap: () { setState(() => _currentIndex = index); /* déjà sur paramètres */ },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
-              radius: 11,
-              backgroundImage: photo.isNotEmpty ? NetworkImage(photo) : null,
-              backgroundColor: Colors.grey[200],
-              child: photo.isEmpty
-                  ? Icon(Icons.person, size: 12, color: Colors.grey[600])
-                  : null,
-            ),
-            const SizedBox(height: 2),
-            Text('Profil',
-                style: TextStyle(
-                    fontSize: 10,
-                    color: sel ? AppConstants.primaryRed : Colors.grey,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.normal),
-                textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis),
-          ]),
-        ),
-      ),
+      // ⭐ Bottom navigation bar partagée — identique à home_screen
+      bottomNavigationBar: const AppBottomNav(currentIndex: 4),
     );
   }
 
