@@ -1,10 +1,10 @@
 // lib/screens/service_detail_screen.dart
 import 'package:flutter/material.dart';
 import 'package:careasy_app_mobile/utils/constants.dart';
-import 'package:provider/provider.dart';                                   // ← AJOUT
+import 'package:provider/provider.dart';                                   
 import 'package:url_launcher/url_launcher.dart';
-import '../providers/rendez_vous_provider.dart';                           // ← AJOUT
-import 'rendez_vous/create_rendez_vous_screen.dart';                       // ← AJOUT
+import '../providers/rendez_vous_provider.dart';                           
+import 'rendez_vous/create_rendez_vous_screen.dart';                       
 
 class ServiceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> service;
@@ -79,23 +79,17 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     }
   }
 
-  // ── Navigation vers la création de RDV ───────────────────────────────────
-
   void _navigateToCreateRdv() {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider(
-          // On crée un RendezVousProvider frais pour cet écran,
-          // ou on réutilise celui du contexte si déjà disponible.
-          create: (_) => RendezVousProvider(),
+           create: (_) => RendezVousProvider(),
           child: CreateRendezVousScreen(service: widget.service),
         ),
       ),
     );
   }
-
-  // ── BUILD ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -114,8 +108,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       backgroundColor: Colors.grey[50],
       body: CustomScrollView(
         slivers: [
-          // ── App Bar avec image ──────────────────────────────────────────
-          SliverAppBar(
+           SliverAppBar(
             expandedHeight: size.height * 0.4,
             pinned: true,
             stretch: true,
@@ -435,7 +428,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                 ]),
               ),
 
-              // ── Onglets ────────────────────────────────────────────────
               Container(
                 margin: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -471,7 +463,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                 ]),
               ),
 
-              // ── À propos de l'entreprise ───────────────────────────────
               Container(
                 margin: const EdgeInsets.all(20),
                 padding: const EdgeInsets.all(20),
@@ -540,8 +531,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       ),
     );
   }
-
-  // ── Onglets ───────────────────────────────────────────────────────────────
 
   Widget _buildDescriptionTab() => SingleChildScrollView(
     child: Text(
