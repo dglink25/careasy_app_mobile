@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
-import '../providers/rendez_vous_provider.dart';          // ← AJOUT
+import '../providers/rendez_vous_provider.dart';         
 import '../services/notification_service.dart';
 import '../services/message_polling_service.dart';
 import '../services/pusher_service.dart';

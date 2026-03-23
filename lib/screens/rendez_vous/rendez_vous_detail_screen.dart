@@ -72,7 +72,7 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Consumer<RendezVousProvider>(
         builder: (context, prov, _) {
           if (!_userLoaded || (prov.isLoading && prov.selected == null)) {
@@ -181,9 +181,9 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
   Widget _buildStatusCard(RendezVousModel rdv) => Container(
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.grey[200]!),
+      border: Border.all(color: Theme.of(context).dividerColor!),
     ),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -212,9 +212,9 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
+        border: Border.all(color: Theme.of(context).dividerColor!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,7 +464,7 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
             decoration: InputDecoration(
               hintText: hintText,
               filled: true,
-              fillColor: Colors.grey[50],
+              fillColor: Theme.of(context).scaffoldBackgroundColor,
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: BorderSide(color: Colors.grey[300]!)),

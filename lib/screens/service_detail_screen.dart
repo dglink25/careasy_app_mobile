@@ -5,6 +5,9 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/rendez_vous_provider.dart';                           
 import 'rendez_vous/create_rendez_vous_screen.dart';                       
+import 'rendez_vous/create_rendez_vous_screen.dart';        
+import 'dart:convert';                
+
 
 class ServiceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> service;
@@ -541,9 +544,25 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
   );
 
   Widget _buildScheduleTab() {
-    final schedule = widget.service['schedule'] is Map
-        ? Map<String, dynamic>.from(widget.service['schedule'])
-        : <String, dynamic>{};
+    // Récupérer et décoder le schedule
+    Map<String, dynamic> schedule = {};
+    dynamic scheduleRaw = widget.service['schedule'];
+    
+    if (scheduleRaw != null) {
+      if (scheduleRaw is String && scheduleRaw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(scheduleRaw);
+          if (decoded is Map) {
+            schedule = Map<String, dynamic>.from(decoded);
+          }
+        } catch (e) {
+          debugPrint('Erreur décodage schedule: $e');
+        }
+      } else if (scheduleRaw is Map) {
+        schedule = Map<String, dynamic>.from(scheduleRaw);
+      }
+    }
+    
     const days = [
       'monday', 'tuesday', 'wednesday', 'thursday',
       'friday', 'saturday', 'sunday'
@@ -553,51 +572,127 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       'Vendredi', 'Samedi', 'Dimanche'
     ];
 
-    if (widget.service['is_always_open'] == true) {
+    // Cas 1: Service ouvert 24h/24
+    if (widget.service['is_always_open'] == true || widget.service['is_open_24h'] == true) {
       return const Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(Icons.access_time, size: 50, color: Colors.green),
-          SizedBox(height: 16),
-          Text('Ouvert 24h/24',
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.all_inclusive, size: 50, color: Colors.green),
+            SizedBox(height: 16),
+            Text(
+              'Disponible 24h/24 et 7j/7',
               style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.green)),
-        ]),
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.green,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Service accessible à tout moment',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+          ],
+        ),
       );
     }
-
+    
+    // Cas 2: Pas d'horaire défini
+    if (schedule.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.schedule, size: 50, color: Colors.orange),
+            SizedBox(height: 16),
+            Text(
+              'Horaires non définis',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.orange,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Contacter le prestataire pour plus d\'informations',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+    
+    // Cas 3: Affichage normal des horaires
     return ListView.separated(
       itemCount: days.length,
-      separatorBuilder: (_, __) => const Divider(),
+      separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final day = days[i];
         final daySchedule = schedule[day] is Map
             ? Map<String, dynamic>.from(schedule[day])
-            : <String, dynamic>{'is_open': false};
+            : {};
+        
+        // Gérer différents types de is_open
+        bool isOpen = false;
+        if (daySchedule.isNotEmpty) {
+          final openValue = daySchedule['is_open'];
+          isOpen = openValue == true || openValue == '1' || openValue == 1;
+        }
+        
+        String start = '--:--';
+        String end = '--:--';
+        if (isOpen) {
+          if (daySchedule['start'] != null) {
+            start = daySchedule['start'].toString();
+            if (start.length > 5) start = start.substring(0, 5);
+          }
+          if (daySchedule['end'] != null) {
+            end = daySchedule['end'].toString();
+            if (end.length > 5) end = end.substring(0, 5);
+          }
+        }
+        
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Row(children: [
-            Expanded(
-              flex: 2,
-              child: Text(dayNames[i],
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-            ),
-            Expanded(
-              flex: 3,
-              child: daySchedule['is_open'] == true
-                  ? Text(
-                      '${daySchedule['start']} - ${daySchedule['end']}',
-                      style: const TextStyle(
-                          color: Colors.green,
-                          fontWeight: FontWeight.w500),
-                    )
-                  : const Text('Fermé',
-                      style: TextStyle(
-                          color: Colors.red,
-                          fontWeight: FontWeight.w500)),
-            ),
-          ]),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: Text(
+                  dayNames[i],
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isOpen ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    isOpen ? '$start - $end' : 'Fermé',
+                    style: TextStyle(
+                      color: isOpen ? Colors.green : Colors.red,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );

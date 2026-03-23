@@ -11,7 +11,7 @@ import 'providers/auth_provider.dart';
 import 'providers/message_provider.dart';
 import 'providers/service_provider.dart';
 import 'providers/theme_provider.dart';
-import 'providers/rendez_vous_provider.dart';            // ← AJOUT
+import 'providers/rendez_vous_provider.dart';            
 import 'services/notification_service.dart';
 import 'services/pusher_service.dart';
 import 'screens/splash_screen.dart';
@@ -21,11 +21,15 @@ import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/messages_screen.dart';
 import 'screens/chat_screen.dart';
-import 'screens/rendez_vous/rendez_vous_list_screen.dart';      // ← AJOUT
-import 'screens/rendez_vous/rendez_vous_detail_screen.dart';    // ← AJOUT
+import 'screens/rendez_vous/rendez_vous_list_screen.dart';      
+import 'screens/rendez_vous/rendez_vous_detail_screen.dart';    
 import 'models/user_model.dart';
 import 'utils/constants.dart';
 import 'theme/app_theme.dart';
+import 'package:intl/intl.dart';
+import 'package:intl/date_symbol_data_local.dart';
+
+
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -44,6 +48,7 @@ void main() async {
   } catch (e) {
     debugPrint('NotificationService init: $e');
   }
+  await initializeDateFormatting('fr_FR', null);
 
   runApp(
     ChangeNotifierProvider(
