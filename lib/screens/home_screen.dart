@@ -1,14 +1,5 @@
-// lib/screens/home_screen.dart
-// ═══════════════════════════════════════════════════════════════════════════
-// HOME SCREEN — Design original complet + Cloche notification avec badge
-// MODIFICATIONS PAR RAPPORT À L'ORIGINAL :
-//   ✅ Import NotificationProvider + NotificationBell
-//   ✅ startPolling() dans initState (après _checkAuth)
-//   ✅ Stack notifications remplacé par <NotificationBell/>
-//   ✅ stopPolling() dans _logout()
-//   ✅ RefreshIndicator recharge aussi les notifications
-// ═══════════════════════════════════════════════════════════════════════════
-
+import '../services/notification_service.dart';
+import '../main.dart' show setupNotificationNavigation;
 import 'package:flutter/material.dart';
 import 'package:careasy_app_mobile/utils/constants.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -75,13 +66,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<dynamic> _searchResults = [];
   Timer? _debounceTimer;
 
+
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAuth();
-      // ← AJOUT : démarrer le polling des notifications après auth
+      // Démarrer le polling des notifications
       context.read<NotificationProvider>().startPolling();
+      // ← AJOUT : brancher la navigation depuis les notifications
+      // (FCM tap, local notif tap → ouvre le bon écran)
+      setupNotificationNavigation(context);
+      // ← AJOUT : envoyer le token FCM au serveur après login
+      NotificationService().refreshTokenAfterLogin();
     });
     _loadUserData();
     _fetchData();

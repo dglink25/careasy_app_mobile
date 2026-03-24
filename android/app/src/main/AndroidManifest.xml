@@ -1,13 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ── Permissions ─────────────────────────────────────────────────────── -->
+    <!-- ══════════════════════════════════════════════════════
+         PERMISSIONS
+    ══════════════════════════════════════════════════════ -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Android 13+ (API 33+) : permission explicite pour les notifications -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -18,7 +24,6 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE"/>
 
-    <!-- ✅ Badge sur l'icône de l'app (Samsung, Xiaomi, Huawei, etc.) -->
     <uses-permission android:name="com.sec.android.provider.badge.permission.READ"/>
     <uses-permission android:name="com.sec.android.provider.badge.permission.WRITE"/>
     <uses-permission android:name="com.htc.launcher.permission.READ_SETTINGS"/>
@@ -36,6 +41,9 @@
     <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_READ"/>
     <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_WRITE"/>
 
+    <!-- ══════════════════════════════════════════════════════
+         QUERIES (Android 11+ package visibility)
+    ══════════════════════════════════════════════════════ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -44,16 +52,22 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
-            <data android:host="wa.me" />
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="whatsapp" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
     </queries>
 
+    <!-- ══════════════════════════════════════════════════════
+         APPLICATION
+    ══════════════════════════════════════════════════════ -->
     <application
         android:usesCleartextTraffic="true"
         android:label="CarEasy"
@@ -77,16 +91,28 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
+            <!-- ── Icône de la notification dans la barre de statut ────────
+                 Fichier : android/app/src/main/res/drawable/ic_stat_notification.png
+                 DOIT être monochrome blanc sur fond transparent (Android 5+)
+                 Tailles recommandées :
+                   mdpi    : 24×24 px
+                   hdpi    : 36×36 px
+                   xhdpi   : 48×48 px
+                   xxhdpi  : 72×72 px
+                   xxxhdpi : 96×96 px
+            ─────────────────────────────────────────────────────────────── -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_icon"
                 android:resource="@drawable/ic_stat_notification" />
 
-            <!-- Couleur du fond de l'icône de notification -->
+            <!-- Couleur de fond de l'icône de notification
+                 Fichier : android/app/src/main/res/values/colors.xml
+                 Ajouter : <color name="notification_color">#C0392B</color>
+            -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_color"
                 android:resource="@color/notification_color" />
 
-            <!-- Canal par défaut FCM — doit correspondre au canal créé dans le code -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_channel_id"
                 android:value="high_importance_channel" />
@@ -94,6 +120,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+
+            <!-- Deep links -->
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
@@ -108,26 +138,21 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
-
-        <!-- Service Flutter pour le handler background FCM (obligatoire) -->
         <service
             android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingBackgroundService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
-        <!-- Service flutter_local_notifications -->
         <service
             android:name="com.dexterous.flutterlocalnotifications.ForegroundService"
             android:exported="false" />
 
+        <!-- Receiver pour les notifications planifiées (zonedSchedule) -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false" />
 
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="VOTRE_CLE_GOOGLE_MAPS"/>
-
+        <!-- Receiver pour relancer les notifs planifiées après reboot -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
             android:exported="false">
@@ -138,6 +163,11 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!-- ── Autres ──────────────────────────────────────────────────── -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="VOTRE_CLE_GOOGLE_MAPS"/>
 
         <meta-data
             android:name="flutterEmbedding"
@@ -154,12 +184,5 @@
         </provider>
 
     </application>
-
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
-        </intent>
-    </queries>
 
 </manifest>
