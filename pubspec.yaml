@@ -80,6 +80,7 @@ dependencies:
  
   # Formatage relatif des dates ("il y a 5 min", "hier"…)
   timeago: ^3.6.1
+  share_plus: ^7.2.1
  
 
 

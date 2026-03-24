@@ -20,14 +20,15 @@ import 'package:careasy_app_mobile/screens/entreprise_detail_screen.dart';
 import '../models/user_model.dart';
 import './settings_screen.dart';
 import '../providers/rendez_vous_provider.dart';
-import '../providers/notification_provider.dart';           // ← AJOUT
+import '../providers/notification_provider.dart';
 import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
-import '../widgets/notification_bell.dart';                 // ← AJOUT
+import '../widgets/notification_bell.dart';
 import 'welcome_screen.dart';
 import 'chat_screen.dart';
+import 'rendez_vous/create_rendez_vous_screen.dart'; // ← AJOUT pour la redirection
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -73,12 +74,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAuth();
-      // Démarrer le polling des notifications
       context.read<NotificationProvider>().startPolling();
-      // ← AJOUT : brancher la navigation depuis les notifications
-      // (FCM tap, local notif tap → ouvre le bon écran)
       setupNotificationNavigation(context);
-      // ← AJOUT : envoyer le token FCM au serveur après login
       NotificationService().refreshTokenAfterLogin();
     });
     _loadUserData();
@@ -211,7 +208,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (mounted) {
       try { context.read<AuthProvider>().clearError(); } catch (_) {}
       try { context.read<MessageProvider>().stopOnlineTimer(); } catch (_) {}
-      try { context.read<NotificationProvider>().stopPolling(); } catch (_) {} // ← AJOUT
+      try { context.read<NotificationProvider>().stopPolling(); } catch (_) {}
     }
     if (mounted) Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const WelcomeScreen()), (_) => false);
   }
@@ -479,7 +476,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   }),
                   const SizedBox(height: 12),
                 ],
-                _buildContactButton(icon: Icons.calendar_month, color: Colors.blue, title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention', onTap: () { Navigator.pop(context); _showServiceDetails(service); }),
+                _buildContactButton(icon: Icons.calendar_month, color: Colors.blue, title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention', onTap: () { 
+                  Navigator.pop(context); 
+                  // ← MODIFICATION : redirection directe vers l'écran de création de rendez-vous
+                  Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => ChangeNotifierProvider(
+                      create: (_) => RendezVousProvider(),
+                      child: CreateRendezVousScreen(service: service),
+                    ),
+                  ));
+                }),
                 const SizedBox(height: 12),
                 _buildContactButton(icon: Icons.message, color: Colors.purple, title: 'Message', subtitle: 'Envoyer un message à l\'entreprise pour ce service', onTap: () { Navigator.pop(context); _startConversationWithEntreprise(service); }),
               ]),
@@ -515,10 +521,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _showError(String message) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // BUILD PRINCIPAL
-  // ═══════════════════════════════════════════════════════════════════════════
-  @override
   Widget build(BuildContext context) {
     final userName      = _userData?['name'] ?? 'Utilisateur';
     final userPhoto     = _userData?['profile_photo_url'] ?? '';
@@ -564,7 +566,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 Text('CarEasy', style: TextStyle(fontSize: isSmallScreen ? 18 : 20, fontWeight: FontWeight.bold, color: Colors.white)),
               ]),
         actions: [
-          // Bouton recherche
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
@@ -578,14 +579,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               },
             ),
           ),
-
-          // ╔════════════════════════════════════════════════════════════╗
-          // ║  CLOCHE NOTIFICATION avec badge numérique + dropdown 3    ║
-          // ║  Remplace l'ancien Stack(IconButton + point ambre)         ║
-          // ╚════════════════════════════════════════════════════════════╝
           const NotificationBell(),
-
-          // Paramètres
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: Colors.white),
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
@@ -598,7 +592,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           : RefreshIndicator(
               onRefresh: () async {
                 await _fetchData();
-                // ← AJOUT : recharger aussi les notifications
                 if (mounted) context.read<NotificationProvider>().fetchNotifications(silent: true);
               },
               color: AppConstants.primaryRed,
@@ -607,7 +600,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   : CustomScrollView(
                       controller: _serviceScrollController,
                       slivers: [
-                        // ── Filtre domaines ──────────────────────────────────
                         SliverAppBar(
                           pinned: true, floating: true, elevation: 2,
                           backgroundColor: Colors.white,
@@ -644,8 +636,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             ),
                           ),
                         ),
-
-                        // ── Corps ─────────────────────────────────────────────
                         SliverPadding(
                           padding: EdgeInsets.all(size.width * 0.04),
                           sliver: SliverList(
@@ -673,7 +663,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
             ),
 
-      // ── BOTTOM NAVIGATION ─────────────────────────────────────────────────
       bottomNavigationBar: Container(
         decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, -5))]),
         child: SafeArea(
@@ -695,7 +684,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // ── Résultats recherche ────────────────────────────────────────────────────
   Widget _buildSearchResults() {
     if (_searchResults.isEmpty) {
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -748,7 +736,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // ── Navigation ─────────────────────────────────────────────────────────────
   Widget _buildNavItem(IconData icon, String label, int index) {
     final isSelected = _currentIndex == index;
     return Expanded(
@@ -791,7 +778,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // ── Sections ───────────────────────────────────────────────────────────────
   Widget _buildSectionHeader(String title, {VoidCallback? onSeeAll}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -818,7 +804,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         shadowColor: Colors.black.withOpacity(0.05),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Image carrousel
           Stack(children: [
             ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
@@ -834,7 +819,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               Positioned(top: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)), child: Text('-${service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)))),
           ]),
 
-          // Infos
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(children: [
@@ -852,7 +836,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Text(service['is_always_open'] == true ? '24h/24' : service['start_time'] != null && service['end_time'] != null ? '${service['start_time']} - ${service['end_time']}' : 'Horaires variables', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
                   ]),
                 ])),
-                // Prix
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (service['is_price_on_request'] == true)
                     Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)), child: Text('Sur devis', style: TextStyle(fontSize: 11, color: Colors.blue[700], fontWeight: FontWeight.w600)))
@@ -893,17 +876,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             Padding(padding: const EdgeInsets.all(8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(entreprise['name'] ?? 'Entreprise', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              Row(children: [
-                Icon(Icons.star, size: 12, color: Colors.amber[600]),
-                const SizedBox(width: 2),
-                Text('4.5', style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                const SizedBox(width: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(color: entreprise['status'] == 'validated' ? Colors.green[50] : Colors.orange[50], borderRadius: BorderRadius.circular(4)),
-                  child: Text(entreprise['status'] == 'validated' ? 'Validé' : 'En attente', style: TextStyle(fontSize: 8, color: entreprise['status'] == 'validated' ? Colors.green[700] : Colors.orange[700], fontWeight: FontWeight.w600)),
-                ),
-              ]),
             ])),
           ]),
         ),
