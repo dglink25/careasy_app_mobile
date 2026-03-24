@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../providers/rendez_vous_provider.dart';
 import '../../models/rendez_vous_model.dart';
 import '../../utils/constants.dart';
+import '../../services/notification_service.dart';  // ← AJOUT notifications
 
 class RendezVousDetailScreen extends StatefulWidget {
   final String rdvId;
@@ -412,8 +413,7 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
   // ── Actions serveur ───────────────────────────────────────────────────────
   Future<void> _confirm(String id) async {
     setState(() => _actionLoading = true);
-    final ok =
-        await context.read<RendezVousProvider>().confirmRendezVous(id);
+    final ok = await context.read<RendezVousProvider>().confirmRendezVous(id);
     if (mounted) {
       setState(() => _actionLoading = false);
       _showFeedback(
@@ -422,13 +422,25 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
             : context.read<RendezVousProvider>().error ?? 'Erreur',
         ok,
       );
+      // ── AJOUT : planifier rappel 1h avant ──────────────────────────
+      if (ok) {
+        final rdv = context.read<RendezVousProvider>().selected;
+        if (rdv != null) {
+          await NotificationService().scheduleRdvReminder(
+            rdvId        : rdv.id,
+            rdvDate      : rdv.date,
+            rdvTime      : rdv.startTime,
+            serviceName  : rdv.serviceName ?? 'le service',
+            isPrestataire: _isPrestataire(rdv),
+          );
+        }
+      }
     }
   }
 
   Future<void> _complete(String id) async {
     setState(() => _actionLoading = true);
-    final ok =
-        await context.read<RendezVousProvider>().completeRendezVous(id);
+    final ok = await context.read<RendezVousProvider>().completeRendezVous(id);
     if (mounted) {
       setState(() => _actionLoading = false);
       _showFeedback(
@@ -437,6 +449,17 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
             : context.read<RendezVousProvider>().error ?? 'Erreur',
         ok,
       );
+      // ── AJOUT : notif "noter le service" + annuler rappel ──────────
+      if (ok) {
+        final rdv = context.read<RendezVousProvider>().selected;
+        if (rdv != null) {
+          await NotificationService().showReviewRequestNotification(
+            rdvId      : rdv.id,
+            serviceName: rdv.serviceName ?? 'le service',
+          );
+          await NotificationService().cancelRdvReminder(rdv.id);
+        }
+      }
     }
   }
 
@@ -495,6 +518,13 @@ class _RendezVousDetailScreenState extends State<RendezVousDetailScreen> {
                           'Erreur',
                   ok,
                 );
+                // ── AJOUT : annuler le rappel planifié ──────────────
+                if (ok) {
+                  final rdv = context.read<RendezVousProvider>().selected;
+                  if (rdv != null) {
+                    await NotificationService().cancelRdvReminder(rdv.id);
+                  }
+                }
               }
             },
             style: ElevatedButton.styleFrom(

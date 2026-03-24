@@ -14,6 +14,27 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE"/>
+
+    <!-- ✅ Badge sur l'icône de l'app (Samsung, Xiaomi, Huawei, etc.) -->
+    <uses-permission android:name="com.sec.android.provider.badge.permission.READ"/>
+    <uses-permission android:name="com.sec.android.provider.badge.permission.WRITE"/>
+    <uses-permission android:name="com.htc.launcher.permission.READ_SETTINGS"/>
+    <uses-permission android:name="com.htc.launcher.permission.UPDATE_SHORTCUT"/>
+    <uses-permission android:name="com.sonyericsson.home.permission.BROADCAST_BADGE"/>
+    <uses-permission android:name="com.sonymobile.home.permission.PROVIDER_INSERT_BADGE"/>
+    <uses-permission android:name="com.anddoes.launcher.permission.UPDATE_COUNT"/>
+    <uses-permission android:name="com.majeur.launcher.permission.UPDATE_BADGE"/>
+    <uses-permission android:name="com.huawei.android.launcher.permission.CHANGE_BADGE"/>
+    <uses-permission android:name="com.huawei.android.launcher.permission.READ_SETTINGS"/>
+    <uses-permission android:name="com.huawei.android.launcher.permission.WRITE_SETTINGS"/>
+    <uses-permission android:name="android.permission.READ_APP_BADGE"/>
+    <uses-permission android:name="com.oppo.launcher.permission.READ_SETTINGS"/>
+    <uses-permission android:name="com.oppo.launcher.permission.WRITE_SETTINGS"/>
+    <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_READ"/>
+    <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_WRITE"/>
 
     <queries>
         <intent>
@@ -56,14 +77,25 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
-            <!-- ⭐ Icône et couleur par défaut des notifications FCM -->
+            <!--
+            ✅ CORRECTION CRITIQUE : icône de notification FCM
+            ⚠️  OBLIGATOIRE : créer le fichier
+                android/app/src/main/res/drawable/ic_stat_notification.png
+                (et les variantes mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi)
+                Cette icône DOIT être monochromatique (blanc sur transparent)
+                car Android 5+ n'utilise que le canal alpha de l'icône de notification.
+                Utiliser @mipmap/ic_launcher (icône colorée) provoque un NullPointerException !
+            -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_icon"
-                android:resource="@mipmap/ic_launcher" />
+                android:resource="@drawable/ic_stat_notification" />
+
+            <!-- Couleur du fond de l'icône de notification -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_color"
                 android:resource="@color/notification_color" />
-            <!-- ⭐ Canal par défaut FCM — doit correspondre au canal créé dans le code -->
+
+            <!-- Canal par défaut FCM — doit correspondre au canal créé dans le code -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_channel_id"
                 android:value="high_importance_channel" />
@@ -86,7 +118,7 @@
             </intent-filter>
         </service>
 
-        <!-- ⭐ Service Flutter pour le handler background FCM (obligatoire) -->
+        <!-- Service Flutter pour le handler background FCM (obligatoire) -->
         <service
             android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingBackgroundService"
             android:exported="false"

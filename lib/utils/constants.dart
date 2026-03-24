@@ -4,7 +4,7 @@ class AppConstants {
   static const String appName = 'CarEasy';
 
 
-  static const String apiBaseUrl = 'http://10.239.211.115:8000/api';
+  static const String apiBaseUrl = 'http://192.168.100.195:8000/api';
 
   static const String pusherKey     = 'cab84ca4d5eac6def57e';
   static const String pusherCluster = 'eu';

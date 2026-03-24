@@ -9,6 +9,7 @@ import '../../models/rendez_vous_model.dart';
 import '../../providers/rendez_vous_provider.dart';
 import '../../services/rendez_vous_service.dart';
 import '../../utils/constants.dart';
+import '../../services/notification_service.dart';  // ← AJOUT rappel RDV
 
 const Color _kRed = AppConstants.primaryRed;
 const Color _kGreen = Color(0xFF22C55E);
@@ -228,6 +229,22 @@ class _CreateRendezVousScreenState extends State<CreateRendezVousScreen>
     if (ok) {
       if (_phoneRequired && _phoneCtrl.text.trim().isNotEmpty) {
         await _savePhoneLocally(_phoneCtrl.text.trim());
+      }
+      // ── AJOUT : rappel local planifié côté client ──────────────────
+      // On utilise directement les valeurs du formulaire (déjà disponibles)
+      // car le provider n'expose pas le RDV créé.
+      if (_selectedDate != null && _selectedSlot != null) {
+        try {
+          await NotificationService().scheduleRdvReminder(
+            rdvId        : 'rdv_${DateTime.now().millisecondsSinceEpoch}',
+            rdvDate      : _formatDate(_selectedDate!),
+            rdvTime      : _selectedSlot!.start,
+            serviceName  : widget.service['name']?.toString() ?? 'le service',
+            isPrestataire: false,
+          );
+        } catch (e) {
+          debugPrint('[Notif] scheduleRdvReminder error: $e');
+        }
       }
       _showSuccessDialog();
     } else {
