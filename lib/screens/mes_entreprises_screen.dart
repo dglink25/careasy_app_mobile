@@ -201,9 +201,9 @@ final _storage = const FlutterSecureStorage(
               Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.add_circle_outline, color: Colors.white, size: 20)),
               const SizedBox(width: 12),
               const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Créer un service', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                Text('Gérer', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
                 SizedBox(height: 2),
-                Text('Ajoutez un service à votre entreprise', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                Text('Gérer les services de votre entreprise', style: TextStyle(color: Colors.white70, fontSize: 12)),
               ])),
               const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 14),
             ]),
