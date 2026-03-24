@@ -77,15 +77,6 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
-            <!--
-            ✅ CORRECTION CRITIQUE : icône de notification FCM
-            ⚠️  OBLIGATOIRE : créer le fichier
-                android/app/src/main/res/drawable/ic_stat_notification.png
-                (et les variantes mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi)
-                Cette icône DOIT être monochromatique (blanc sur transparent)
-                car Android 5+ n'utilise que le canal alpha de l'icône de notification.
-                Utiliser @mipmap/ic_launcher (icône colorée) provoque un NullPointerException !
-            -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_icon"
                 android:resource="@drawable/ic_stat_notification" />

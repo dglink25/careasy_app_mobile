@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../providers/notification_provider.dart';
+import '../services/notification_service.dart';
 import '../utils/constants.dart';
-import '../screens/notifications_screen.dart';
 
 class NotificationBell extends StatelessWidget {
   const NotificationBell({super.key});
@@ -12,20 +12,45 @@ class NotificationBell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<NotificationProvider>(
       builder: (context, prov, _) {
+        final unread = prov.unreadCount;
+
+        // Synchroniser le badge de l'icône d'app avec le compte non-lu
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          NotificationService().updateAppBadge(unread);
+        });
+
         return Stack(
           clipBehavior: Clip.none,
           children: [
             IconButton(
-              icon: const Icon(Icons.notifications_outlined, color: Colors.white, size: 26),
+              icon: const Icon(Icons.notifications_outlined, color: Colors.white),
               tooltip: 'Notifications',
-              onPressed: () => _showDropdown(context, prov),
+              onPressed: () => _showNotifDropdown(context, prov),
             ),
-            // Badge
-            if (prov.unreadCount > 0)
+            if (unread > 0)
               Positioned(
-                right: 6,
-                top: 6,
-                child: _Badge(count: prov.unreadCount),
+                right: 4,
+                top: 4,
+                child: IgnorePointer(
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.amber[600],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: Text(
+                      unread > 99 ? '99+' : '$unread',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
               ),
           ],
         );
@@ -33,278 +58,224 @@ class NotificationBell extends StatelessWidget {
     );
   }
 
-  void _showDropdown(BuildContext context, NotificationProvider prov) {
-    // Recharger silencieusement à l'ouverture
-    prov.fetchNotifications(silent: true);
+  void _showNotifDropdown(BuildContext context, NotificationProvider prov) {
+    final recent = prov.recentThree;
 
-    final RenderBox button = context.findRenderObject() as RenderBox;
-    final RenderBox overlay =
-        Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
-    final buttonPos = button.localToGlobal(Offset.zero, ancestor: overlay);
-
-    showDialog(
-      context: context,
-      barrierColor: Colors.transparent,
-      builder: (ctx) => _NotifDropdown(
-        position: buttonPos,
-        buttonWidth: button.size.width,
-        prov: prov,
-        onSeeAll: () {
-          Navigator.pop(ctx);
-          Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const NotificationsScreen()));
-        },
-        onNavigate: (notif) {
-          Navigator.pop(ctx);
-          _navigate(context, notif);
-        },
-      ),
-    );
-  }
-
-  void _navigate(BuildContext context, AppNotification n) {
-    if (!n.isRead) context.read<NotificationProvider>().markAsRead(n.id);
-    final rdvId = n.data['rdv_id']?.toString() ?? '';
-    final convId = n.data['conversation_id']?.toString() ?? '';
-
-    if (rdvId.isNotEmpty) {
-      Navigator.pushNamed(context, '/rendez-vous/$rdvId');
-    } else if (convId.isNotEmpty) {
-      Navigator.pushNamed(context, '/messages');
-    } else if (n.type.contains('rdv')) {
-      Navigator.pushNamed(context, '/rendez-vous');
-    } else if (n.type.contains('message')) {
-      Navigator.pushNamed(context, '/messages');
+    // Si pas de notifications, aller directement à l'écran complet
+    if (recent.isEmpty) {
+      Navigator.pushNamed(context, '/notifications');
+      return;
     }
-  }
-}
 
-// ─── Badge numérique ─────────────────────────────────────────────────────────
-class _Badge extends StatelessWidget {
-  final int count;
-  const _Badge({required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    final label = count > 99 ? '99+' : count.toString();
-    return Container(
-      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF59E0B),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppConstants.primaryRed, width: 1.5),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 9,
-          fontWeight: FontWeight.bold,
-          height: 1,
-        ),
-        textAlign: TextAlign.center,
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _NotifDropdown(
+        notifications: recent,
+        unreadCount: prov.unreadCount,
+        onMarkAllRead: () async {
+          await prov.markAllAsRead();
+          // Réinitialiser le badge
+          await NotificationService().clearBadge();
+        },
+        onViewAll: () => Navigator.pushNamed(context, '/notifications'),
+        onTap: (notif) {
+          if (!notif.isRead) {
+            prov.markAsRead(notif.id);
+          }
+        },
       ),
     );
   }
 }
 
-// ─── Dropdown ────────────────────────────────────────────────────────────────
 class _NotifDropdown extends StatelessWidget {
-  final Offset position;
-  final double buttonWidth;
-  final NotificationProvider prov;
-  final VoidCallback onSeeAll;
-  final ValueChanged<AppNotification> onNavigate;
+  final List<AppNotification> notifications;
+  final int unreadCount;
+  final VoidCallback onMarkAllRead;
+  final VoidCallback onViewAll;
+  final void Function(AppNotification) onTap;
 
   const _NotifDropdown({
-    required this.position,
-    required this.buttonWidth,
-    required this.prov,
-    required this.onSeeAll,
-    required this.onNavigate,
+    required this.notifications,
+    required this.unreadCount,
+    required this.onMarkAllRead,
+    required this.onViewAll,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    const dropWidth = 320.0;
-    double left = position.dx - dropWidth + buttonWidth;
-    if (left < 8) left = 8;
-    if (left + dropWidth > screenW - 8) left = screenW - dropWidth - 8;
-    final top = position.dy + 48;
-
-    return GestureDetector(
-      onTap: () => Navigator.pop(context),
-      behavior: HitTestBehavior.translucent,
-      child: Stack(
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned(
-            left: left,
-            top: top,
-            width: dropWidth,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(16),
-              color: Colors.white,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+          // Poignée
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          // En-tête
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.notifications_rounded,
+                    color: AppConstants.primaryRed, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'Notifications',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                if (unreadCount > 0) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppConstants.primaryRed,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$unreadCount',
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                if (unreadCount > 0)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      onMarkAllRead();
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppConstants.primaryRed,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: const Text('Tout lire', style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // Liste 3 dernières
+          ...notifications.map((n) => _NotifItem(
+            notif: n,
+            onTap: () {
+              Navigator.pop(context);
+              onTap(n);
+            },
+          )),
+          const Divider(height: 1),
+          // Voir tout
+          InkWell(
+            onTap: () {
+              Navigator.pop(context);
+              onViewAll();
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Header
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-                    child: Row(
-                      children: [
-                        const Text('Notifications',
-                            style: TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 15)),
-                        const Spacer(),
-                        if (prov.unreadCount > 0)
-                          TextButton(
-                            onPressed: prov.markAllAsRead,
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4),
-                            ),
-                            child: Text('Tout lire',
-                                style: TextStyle(
-                                    color: AppConstants.primaryRed,
-                                    fontSize: 12)),
-                          ),
-                      ],
+                  Text(
+                    'Voir toutes les notifications',
+                    style: TextStyle(
+                      color: AppConstants.primaryRed,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
                     ),
                   ),
-                  const Divider(height: 0),
-
-                  // 3 dernières
-                  if (prov.recentThree.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 24, horizontal: 16),
-                      child: Column(
-                        children: [
-                          Icon(Icons.notifications_none_rounded,
-                              size: 36, color: Colors.grey[400]),
-                          const SizedBox(height: 8),
-                          Text('Aucune notification',
-                              style: TextStyle(
-                                  color: Colors.grey[500], fontSize: 13)),
-                        ],
-                      ),
-                    )
-                  else
-                    ...prov.recentThree.map((n) => _DropdownTile(
-                          notif: n,
-                          onTap: () => onNavigate(n),
-                        )),
-
-                  const Divider(height: 0),
-
-                  // Voir plus
-                  InkWell(
-                    onTap: onSeeAll,
-                    borderRadius: const BorderRadius.vertical(
-                        bottom: Radius.circular(16)),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 12, horizontal: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            'Voir toutes les notifications',
-                            style: TextStyle(
-                              color: AppConstants.primaryRed,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(Icons.arrow_forward_ios_rounded,
-                              size: 12, color: AppConstants.primaryRed),
-                        ],
-                      ),
-                    ),
-                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.arrow_forward_ios,
+                      size: 12, color: AppConstants.primaryRed),
                 ],
               ),
             ),
           ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom),
         ],
       ),
     );
   }
 }
 
-// ─── Tuile dans le dropdown ──────────────────────────────────────────────────
-class _DropdownTile extends StatelessWidget {
+class _NotifItem extends StatelessWidget {
   final AppNotification notif;
   final VoidCallback onTap;
 
-  const _DropdownTile({required this.notif, required this.onTap});
+  const _NotifItem({required this.notif, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
       child: Container(
-        color: notif.isRead
-            ? Colors.transparent
-            : AppConstants.primaryRed.withOpacity(0.04),
+        color: notif.isRead ? null : AppConstants.primaryRed.withOpacity(0.04),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 40, height: 40,
               decoration: BoxDecoration(
                 color: notif.iconColor.withOpacity(0.12),
                 shape: BoxShape.circle,
               ),
-              child: Icon(notif.icon, color: notif.iconColor, size: 18),
+              child: Icon(notif.icon, color: notif.iconColor, size: 20),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    notif.title,
-                    style: TextStyle(
-                      fontWeight:
-                          notif.isRead ? FontWeight.w500 : FontWeight.w700,
-                      fontSize: 13,
-                      color: Colors.grey[900],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          notif.title,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: notif.isRead
+                                ? FontWeight.w500
+                                : FontWeight.w700,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        timeago.format(notif.createdAt, locale: 'fr'),
+                        style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     notif.body,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                        height: 1.3),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    timeago.format(notif.createdAt, locale: 'fr'),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[400]),
                   ),
                 ],
               ),
             ),
             if (!notif.isRead)
               Padding(
-                padding: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.only(left: 6, top: 4),
                 child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
+                  width: 8, height: 8,
+                  decoration: const BoxDecoration(
                     color: AppConstants.primaryRed,
                     shape: BoxShape.circle,
                   ),

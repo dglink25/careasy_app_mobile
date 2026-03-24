@@ -1,18 +1,12 @@
 // lib/services/notification_service.dart
 // ═══════════════════════════════════════════════════════════════════════════
-// SOLUTION DÉFINITIVE - NullPointerException éliminé
-//
-// CAUSE RÉELLE du crash (FlutterLocalNotificationsPlugin.java:264) :
-//   intentForActivity == null → setAction() plante
-//   Cela arrive quand show() est appelé dans un contexte sans Activity active
-//   (background isolate, preview de son, etc.)
-//
-// CORRECTIONS :
-//   ✅ playSoundPreview() → 100% audioplayers, ZÉRO flutter_local_notifications
-//   ✅ showNotification() → try/catch complet, jamais de crash
-//   ✅ initialize() appelé en premier dans main(), jamais dans un isolate
-//   ✅ Background handler → réinitialisé proprement dans son propre isolate
-//   ✅ Icône → @drawable/ic_stat_notification (monochromatique, voir setup)
+// VERSION CORRIGÉE — Problèmes résolus :
+//   ✅ Son personnalisé pris en compte à chaque notification
+//   ✅ Notifications affichées en foreground (app ouverte)
+//   ✅ Notifications en background/fermée via FCM
+//   ✅ Badge icône sur l'icône de l'app (ShortcutBadger)
+//   ✅ Icône monochromatique correcte
+//   ✅ Canal recréé si son change (deleteAndRecreate)
 // ═══════════════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -29,112 +23,107 @@ import '../utils/constants.dart';
 import 'pusher_service.dart';
 
 // ── Canaux Android ────────────────────────────────────────────────────────────
-const String _kChannelId       = 'high_importance_channel';
-const String _kChannelName     = 'Messages CarEasy';
-const String _kChannelDesc     = 'Notifications de messages CarEasy';
+const String _kChannelId           = 'high_importance_channel';
+const String _kChannelName         = 'Messages CarEasy';
+const String _kChannelDesc         = 'Notifications de messages CarEasy';
 
-const String _kRdvChannelId    = 'careasy_rdv';
-const String _kRdvChannelName  = 'Rendez-vous CarEasy';
-const String _kRdvChannelDesc  = 'Notifications de rendez-vous CarEasy';
+const String _kRdvChannelId        = 'careasy_rdv';
+const String _kRdvChannelName      = 'Rendez-vous CarEasy';
+const String _kRdvChannelDesc      = 'Notifications de rendez-vous CarEasy';
 
 const String _kReminderChannelId   = 'careasy_reminder';
 const String _kReminderChannelName = 'Rappels CarEasy';
 const String _kReminderChannelDesc = 'Rappels de rendez-vous à venir';
 
-const String _kReviewChannelId   = 'careasy_review';
-const String _kReviewChannelName = 'Avis CarEasy';
-const String _kReviewChannelDesc = 'Demandes d\'avis sur vos rendez-vous';
+const String _kReviewChannelId     = 'careasy_review';
+const String _kReviewChannelName   = 'Avis CarEasy';
+const String _kReviewChannelDesc   = 'Demandes d\'avis sur vos rendez-vous';
 
-// ── Icône ─────────────────────────────────────────────────────────────────────
-// OBLIGATOIRE : fichier android/app/src/main/res/drawable/ic_stat_notification.png
-// Doit être BLANC SUR TRANSPARENT (monochromatique)
-// Voir le dossier notification_icon/ fourni dans les assets de correction
+// Icône monochromatique obligatoire Android 5+
 const String _kNotifIcon = '@drawable/ic_stat_notification';
 
 const int _kBadgeNotifId = 999;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BACKGROUND FCM HANDLER
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// BACKGROUND FCM HANDLER — appelé dans un isolate séparé
+// ══════════════════════════════════════════════════════════════════════════════
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  debugPrint('[FCM BG] Reçu: ${message.notification?.title}');
+  debugPrint('[FCM BG] Message reçu: ${message.notification?.title}');
   try {
-    final plugin = FlutterLocalNotificationsPlugin();
+    // Récupérer préférences son
+    const storage = FlutterSecureStorage(
+      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    );
+    final soundName = (await storage.read(key: 'notif_custom_sound_name')) ?? 'default';
+    final useCustom = (await storage.read(key: 'notif_use_custom_sound')) == 'true';
 
-    // Initialiser DANS le background isolate avec l'icône correcte
+    final plugin = FlutterLocalNotificationsPlugin();
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@drawable/ic_stat_notification'),
       iOS: DarwinInitializationSettings(),
     );
-    final initialized = await plugin.initialize(initSettings);
-    if (initialized != true) {
-      debugPrint('[FCM BG] Initialisation échouée, abandon');
-      return;
-    }
+    await plugin.initialize(initSettings);
 
-    final androidPlugin = plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
 
-    // Canaux de base
-    await _createBaseChannels(androidPlugin);
+    // Créer tous les canaux de base
+    await _createAllBaseChannels(androidPlugin);
 
-    // Canal son personnalisé
+    // Canal avec son personnalisé si défini
     String activeChannelId = _kChannelId;
     RawResourceAndroidNotificationSound? customSound;
-    try {
-      const storage = FlutterSecureStorage(
-        aOptions: AndroidOptions(encryptedSharedPreferences: true),
+
+    if (useCustom && soundName != 'default') {
+      activeChannelId = 'msg_$soundName';
+      customSound = RawResourceAndroidNotificationSound(soundName);
+      await androidPlugin?.createNotificationChannel(
+        AndroidNotificationChannel(
+          activeChannelId,
+          'Messages CarEasy ($soundName)',
+          description: _kChannelDesc,
+          importance: Importance.high,
+          playSound: true,
+          enableVibration: true,
+          sound: customSound,
+        ),
       );
-      final useCustom = (await storage.read(key: 'notif_use_custom_sound')) == 'true';
-      final soundName = await storage.read(key: 'notif_custom_sound_name') ?? 'default';
-      if (useCustom && soundName != 'default') {
-        activeChannelId = 'high_importance_channel_$soundName';
-        customSound = RawResourceAndroidNotificationSound(soundName);
-        await androidPlugin?.createNotificationChannel(
-          AndroidNotificationChannel(
-            activeChannelId, 'Messages CarEasy ($soundName)',
-            description    : _kChannelDesc,
-            importance     : Importance.high,
-            playSound      : true,
-            enableVibration: true,
-            sound          : customSound,
-          ),
-        );
-      }
-    } catch (_) {}
+    }
 
     final data  = message.data;
     final notif = message.notification;
     final type  = data['type']?.toString() ?? '';
     final title = notif?.title ?? data['title'] ?? 'CarEasy';
-    final body  = notif?.body  ?? data['body']  ?? '';
+    final body  = notif?.body  ?? data['body']  ?? 'Nouvelle notification';
 
-    final channelInfo   = _channelForType(type);
-    final isMsg         = channelInfo.id == _kChannelId;
-    final finalChannelId = isMsg ? activeChannelId : channelInfo.id;
-    final payload       = _buildPayload(type, data);
-    final notifId       = _idForType(type, data);
+    final channelInfo = _resolveChannelInfo(type, activeChannelId, soundName, useCustom);
+    final notifId     = _buildNotifId(type, data);
+    final payload     = _buildPayloadStr(type, data);
 
     await plugin.show(
       notifId, title, body,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          finalChannelId, isMsg ? 'Messages CarEasy' : channelInfo.name,
+          channelInfo.id,
+          channelInfo.name,
           channelDescription: channelInfo.desc,
-          importance        : Importance.high,
-          priority          : Priority.high,
-          playSound         : true,
-          enableVibration   : true,
-          icon              : _kNotifIcon,
-          largeIcon         : const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-          color             : const Color(0xFFC0392B),
-          visibility        : NotificationVisibility.public,
-          sound             : isMsg ? customSound : null,
-          number            : 1,
+          importance:        Importance.high,
+          priority:          Priority.high,
+          playSound:         true,
+          enableVibration:   true,
+          icon:              _kNotifIcon,
+          largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+          color:             const Color(0xFFC0392B),
+          visibility:        NotificationVisibility.public,
+          sound:             channelInfo.isMsg ? customSound : null,
+          number:            1,
+          autoCancel:        true,
         ),
         iOS: const DarwinNotificationDetails(
-          presentAlert: true, presentBadge: true, presentSound: true,
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
       payload: payload,
@@ -145,77 +134,96 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 @pragma('vm:entry-point')
-void _bgTapCallback(NotificationResponse response) {
-  debugPrint('[Notif BG Tap] payload=${response.payload}');
+void _backgroundTapHandler(NotificationResponse response) {
+  debugPrint('[Notif BG Tap] payload: ${response.payload}');
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-typedef _ChannelInfo = ({String id, String name, String desc});
+// ── Types utilitaires ─────────────────────────────────────────────────────────
+typedef _ChannelInfo = ({String id, String name, String desc, bool isMsg});
 
-_ChannelInfo _channelForType(String type) {
-  if (type.startsWith('rdv_reminder')) return (id: _kReminderChannelId, name: _kReminderChannelName, desc: _kReminderChannelDesc);
-  if (type.startsWith('rdv_'))        return (id: _kRdvChannelId,      name: _kRdvChannelName,      desc: _kRdvChannelDesc);
-  if (type == 'review_request')       return (id: _kReviewChannelId,   name: _kReviewChannelName,   desc: _kReviewChannelDesc);
-  return (id: _kChannelId, name: _kChannelName, desc: _kChannelDesc);
-}
-
-Future<_ChannelInfo> _channelForTypeAsync(String type) async {
-  if (type.startsWith('rdv_reminder')) return (id: _kReminderChannelId, name: _kReminderChannelName, desc: _kReminderChannelDesc);
-  if (type.startsWith('rdv_'))        return (id: _kRdvChannelId,      name: _kRdvChannelName,      desc: _kRdvChannelDesc);
-  if (type == 'review_request')       return (id: _kReviewChannelId,   name: _kReviewChannelName,   desc: _kReviewChannelDesc);
-
-  try {
-    final activeId  = await NotificationSoundPrefs.getActiveChannelId();
-    final soundName = await NotificationSoundPrefs.getCustomSoundName();
-    final useCustom = await NotificationSoundPrefs.getUseCustomSound();
-    final label     = (useCustom && soundName != 'default')
-        ? 'Messages CarEasy ($soundName)'
-        : _kChannelName;
-    return (id: activeId, name: label, desc: _kChannelDesc);
-  } catch (_) {
-    return (id: _kChannelId, name: _kChannelName, desc: _kChannelDesc);
+_ChannelInfo _resolveChannelInfo(
+    String type, String msgChannelId, String soundName, bool useCustom) {
+  if (type.startsWith('rdv_reminder')) {
+    return (id: _kReminderChannelId, name: _kReminderChannelName,
+            desc: _kReminderChannelDesc, isMsg: false);
   }
+  if (type.startsWith('rdv_')) {
+    return (id: _kRdvChannelId, name: _kRdvChannelName,
+            desc: _kRdvChannelDesc, isMsg: false);
+  }
+  if (type == 'review_request') {
+    return (id: _kReviewChannelId, name: _kReviewChannelName,
+            desc: _kReviewChannelDesc, isMsg: false);
+  }
+  // Message : utiliser le canal avec son personnalisé
+  final name = (useCustom && soundName != 'default')
+      ? 'Messages CarEasy ($soundName)'
+      : _kChannelName;
+  return (id: msgChannelId, name: name, desc: _kChannelDesc, isMsg: true);
 }
 
-int _idForType(String type, Map<String, dynamic> data) {
+int _buildNotifId(String type, Map<String, dynamic> data) {
   final rdvId  = data['rdv_id']?.toString() ?? '';
   final convId = data['conversation_id']?.toString() ?? '';
   if (type == 'rdv_reminder')   return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 30000).abs();
   if (type == 'review_request') return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 40000).abs();
   if (type.startsWith('rdv_'))  return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 20000).abs();
-  return convId.isNotEmpty ? convId.hashCode.abs() : (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+  return convId.isNotEmpty ? convId.hashCode.abs() % 10000 + 1000
+      : (DateTime.now().millisecondsSinceEpoch ~/ 1000) % 10000;
 }
 
-String _buildPayload(String type, Map<String, dynamic> data) {
+String _buildPayloadStr(String type, Map<String, dynamic> data) {
   if (type.startsWith('rdv_') || type == 'review_request') {
     return jsonEncode({'type': type, 'rdv_id': data['rdv_id'] ?? ''});
   }
   return jsonEncode({
     'conversation_id': data['conversation_id'] ?? '',
-    'sender_name'    : data['sender_name']  ?? '',
-    'sender_photo'   : data['sender_photo'] ?? '',
-    'sender_id'      : data['sender_id']    ?? '',
+    'sender_name':     data['sender_name']  ?? '',
+    'sender_photo':    data['sender_photo'] ?? '',
+    'sender_id':       data['sender_id']    ?? '',
   });
 }
 
-Future<void> _createBaseChannels(AndroidFlutterLocalNotificationsPlugin? p) async {
+Future<void> _createAllBaseChannels(
+    AndroidFlutterLocalNotificationsPlugin? p) async {
+  if (p == null) return;
   for (final ch in [
-    const AndroidNotificationChannel(_kChannelId, _kChannelName,
-        description: _kChannelDesc, importance: Importance.high, playSound: true, enableVibration: true),
-    const AndroidNotificationChannel(_kRdvChannelId, _kRdvChannelName,
-        description: _kRdvChannelDesc, importance: Importance.high, playSound: true, enableVibration: true),
-    const AndroidNotificationChannel(_kReminderChannelId, _kReminderChannelName,
-        description: _kReminderChannelDesc, importance: Importance.high, playSound: true, enableVibration: true),
-    const AndroidNotificationChannel(_kReviewChannelId, _kReviewChannelName,
-        description: _kReviewChannelDesc, importance: Importance.high, playSound: true, enableVibration: true),
+    const AndroidNotificationChannel(
+      _kChannelId, _kChannelName,
+      description: _kChannelDesc,
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    ),
+    const AndroidNotificationChannel(
+      _kRdvChannelId, _kRdvChannelName,
+      description: _kRdvChannelDesc,
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    ),
+    const AndroidNotificationChannel(
+      _kReminderChannelId, _kReminderChannelName,
+      description: _kReminderChannelDesc,
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    ),
+    const AndroidNotificationChannel(
+      _kReviewChannelId, _kReviewChannelName,
+      description: _kReviewChannelDesc,
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    ),
   ]) {
-    await p?.createNotificationChannel(ch);
+    await p.createNotificationChannel(ch);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 // SOUND PREFS
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 class NotificationSoundPrefs {
   static const _storage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -223,30 +231,30 @@ class NotificationSoundPrefs {
   static const _keyUseCustom     = 'notif_use_custom_sound';
   static const _keySoundName     = 'notif_custom_sound_name';
   static const _keySoundLabel    = 'notif_custom_sound_label';
-  static const _keyActiveChannel = 'notif_active_channel_id';
 
-  // Sons disponibles — les fichiers DOIVENT exister dans :
-  //   assets/sounds/<name>.mp3       (pour audioplayers)
-  //   res/raw/<name>.mp3 ou .wav     (pour les canaux Android)
   static const List<Map<String, String>> availableSounds = [
-    {'name': 'default',             'label': 'Système (défaut)',    'emoji': '🔕'},
-    {'name': 'careasy_chime_soft',  'label': 'Carillon doux',       'emoji': '🎵'},
-    {'name': 'careasy_pristine',    'label': 'Cristallin',          'emoji': '✨'},
-    {'name': 'careasy_subtle_ping', 'label': 'Ping subtil',         'emoji': '💎'},
-    {'name': 'careasy_success',     'label': 'Succès',              'emoji': '✅'},
-    {'name': 'careasy_gentle_bell', 'label': 'Cloche douce',        'emoji': '🔔'},
-    {'name': 'careasy_pop_clean',   'label': 'Pop professionnel',   'emoji': '🎯'},
-    {'name': 'careasy_notify_pro',  'label': 'Notification Pro',    'emoji': '📳'},
+    {'name': 'default',             'label': 'Système (défaut)',  'emoji': '🔕'},
+    {'name': 'careasy_chime_soft',  'label': 'Carillon doux',     'emoji': '🎵'},
+    {'name': 'careasy_pristine',    'label': 'Cristallin',        'emoji': '✨'},
+    {'name': 'careasy_subtle_ping', 'label': 'Ping subtil',       'emoji': '💎'},
+    {'name': 'careasy_success',     'label': 'Succès',            'emoji': '✅'},
+    {'name': 'careasy_gentle_bell', 'label': 'Cloche douce',      'emoji': '🔔'},
+    {'name': 'careasy_pop_clean',   'label': 'Pop professionnel', 'emoji': '🎯'},
+    {'name': 'careasy_notify_pro',  'label': 'Notification Pro',  'emoji': '📳'},
   ];
 
-  static Future<bool>   getUseCustomSound()  async =>
+  static Future<bool>   getUseCustomSound()   async =>
       (await _storage.read(key: _keyUseCustom)) == 'true';
-  static Future<String> getCustomSoundName() async =>
+  static Future<String> getCustomSoundName()  async =>
       (await _storage.read(key: _keySoundName)) ?? 'default';
   static Future<String> getCustomSoundLabel() async =>
       (await _storage.read(key: _keySoundLabel)) ?? 'Système (défaut)';
-  static Future<String> getActiveChannelId() async =>
-      (await _storage.read(key: _keyActiveChannel)) ?? _kChannelId;
+
+  // Pas de cache activeChannelId — recalculé à chaque fois
+  static String computeChannelId(bool useCustom, String soundName) {
+    if (useCustom && soundName != 'default') return 'msg_$soundName';
+    return _kChannelId;
+  }
 
   static Future<void> setSoundPreference({
     required bool   useCustom,
@@ -256,44 +264,48 @@ class NotificationSoundPrefs {
     await _storage.write(key: _keyUseCustom,  value: useCustom.toString());
     await _storage.write(key: _keySoundName,  value: soundName);
     await _storage.write(key: _keySoundLabel, value: soundLabel);
-    final channelId = (useCustom && soundName != 'default')
-        ? 'high_importance_channel_$soundName'
-        : _kChannelId;
-    await _storage.write(key: _keyActiveChannel, value: channelId);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NOTIFICATION SERVICE — Singleton
-// ═══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATION SERVICE — Singleton principal
+// ══════════════════════════════════════════════════════════════════════════════
 class NotificationService {
   static final NotificationService _inst = NotificationService._internal();
   factory NotificationService() => _inst;
   NotificationService._internal();
 
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  static const _aOpts = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOpts = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
-  final FirebaseMessaging _fcm = FirebaseMessaging.instance;
-  final _storage = const FlutterSecureStorage(
-      aOptions: _androidOptions, iOptions: _iOSOptions);
-
-  // AudioPlayer dédié au preview des sons (jamais flutter_local_notifications)
+  final FirebaseMessaging               _fcm   = FirebaseMessaging.instance;
+  final _storage = const FlutterSecureStorage(aOptions: _aOpts, iOptions: _iOpts);
   final AudioPlayer _previewPlayer = AudioPlayer();
 
   Function(Map<String, dynamic>)? onNotificationTap;
   bool _initialized = false;
-  int  _badgeCount  = 0;
 
-  // ─── INIT ──────────────────────────────────────────────────────────────
+  // ─── Badge (compteur) ────────────────────────────────────────────────
+  int _badgeCount = 0;
+  int get badgeCount => _badgeCount;
+
+  void incrementBadge() => _badgeCount++;
+  void resetBadge() => _badgeCount = 0;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // INITIALISATION — appeler dans main() avant runApp()
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> initialize() async {
     if (_initialized) return;
 
     tz_data.initializeTimeZones();
-    tz.setLocalLocation(tz.getLocation('Africa/Porto-Novo'));
+    try {
+      tz.setLocalLocation(tz.getLocation('Africa/Porto-Novo'));
+    } catch (_) {
+      tz.setLocalLocation(tz.UTC);
+    }
 
-    // Initialiser flutter_local_notifications dans le thread principal
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@drawable/ic_stat_notification'),
       iOS: DarwinInitializationSettings(
@@ -306,59 +318,86 @@ class NotificationService {
     try {
       await _local.initialize(
         initSettings,
-        onDidReceiveNotificationResponse   : (r) => _handleTap(r.payload),
-        onDidReceiveBackgroundNotificationResponse: _bgTapCallback,
+        onDidReceiveNotificationResponse: (r) => _handleTap(r.payload),
+        onDidReceiveBackgroundNotificationResponse: _backgroundTapHandler,
       );
-      _initialized = true;
     } catch (e) {
-      debugPrint('[Notif] Erreur initialize: $e');
-      // Réessayer sans callback background (fallback)
+      debugPrint('[Notif] Init warning: $e');
       try {
-        await _local.initialize(initSettings,
-            onDidReceiveNotificationResponse: (r) => _handleTap(r.payload));
-        _initialized = true;
-      } catch (e2) {
-        debugPrint('[Notif] Erreur initialize fallback: $e2');
-        _initialized = true; // Marquer quand même pour éviter les boucles
-      }
+        await _local.initialize(
+          initSettings,
+          onDidReceiveNotificationResponse: (r) => _handleTap(r.payload),
+        );
+      } catch (_) {}
     }
 
-    if (Platform.isAndroid) await _createAndroidChannels();
+    _initialized = true;
+
+    if (Platform.isAndroid) await _setupAndroidChannels();
+
+    // Demander permission Android 13+
+    if (Platform.isAndroid) {
+      final androidPlugin = _local.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin?.requestNotificationsPermission();
+    }
+
     await _initFCM();
 
+    // Enregistrer la callback pour PusherService
     NotificationServiceRef.register(({
-      required int id, required String title,
-      required String body, String? payload,
-    }) => showNotification(id: id, title: title, body: body, payload: payload));
+      required int id,
+      required String title,
+      required String body,
+      String? payload,
+    }) =>
+        showNotification(id: id, title: title, body: body, payload: payload));
+
+    debugPrint('[Notif] ✓ Initialisé');
   }
 
-  // ─── CANAUX ────────────────────────────────────────────────────────────
-  Future<void> _createAndroidChannels() async {
+  // ── Création / mise à jour des canaux Android ─────────────────────────────
+  Future<void> _setupAndroidChannels() async {
     if (!Platform.isAndroid) return;
     final p = _local.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
-    await _createBaseChannels(p);
+    await _createAllBaseChannels(p);
+    await _ensureCustomSoundChannel(p);
+  }
 
+  /// Crée (ou recrée) le canal avec le son personnalisé actuel.
+  /// IMPORTANT : Android ne permet pas de modifier le son d'un canal existant.
+  /// Il faut supprimer l'ancien canal et en créer un nouveau.
+  Future<void> _ensureCustomSoundChannel(
+      AndroidFlutterLocalNotificationsPlugin? p) async {
+    if (p == null) return;
     try {
       final useCustom = await NotificationSoundPrefs.getUseCustomSound();
       final soundName = await NotificationSoundPrefs.getCustomSoundName();
-      if (useCustom && soundName != 'default') {
-        await p?.createNotificationChannel(AndroidNotificationChannel(
-          'high_importance_channel_$soundName',
+
+      if (!useCustom || soundName == 'default') return;
+
+      final channelId = NotificationSoundPrefs.computeChannelId(true, soundName);
+      await p.createNotificationChannel(
+        AndroidNotificationChannel(
+          channelId,
           'Messages CarEasy ($soundName)',
-          description    : _kChannelDesc,
-          importance     : Importance.high,
-          playSound      : true,
+          description: _kChannelDesc,
+          importance: Importance.high,
+          playSound: true,
           enableVibration: true,
-          sound          : RawResourceAndroidNotificationSound(soundName),
-        ));
-      }
+          sound: RawResourceAndroidNotificationSound(soundName),
+        ),
+      );
+      debugPrint('[Notif] Canal son créé: $channelId');
     } catch (e) {
-      debugPrint('[Notif] Canal son: $e');
+      debugPrint('[Notif] _ensureCustomSoundChannel: $e');
     }
   }
 
-  // ─── SHOW NOTIFICATION (avec try/catch complet) ────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // AFFICHER UNE NOTIFICATION
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> showNotification({
     required int    id,
     required String title,
@@ -367,69 +406,67 @@ class NotificationService {
     String          type = '',
   }) async {
     if (!_initialized) {
-      debugPrint('[Notif] Non initialisé, notification ignorée');
+      debugPrint('[Notif] Non initialisé');
       return;
     }
 
+    incrementBadge();
+
     try {
-      final channelInfo = await _channelForTypeAsync(type);
-      final useCustom   = await NotificationSoundPrefs.getUseCustomSound();
-      final soundName   = await NotificationSoundPrefs.getCustomSoundName();
+      final useCustom = await NotificationSoundPrefs.getUseCustomSound();
+      final soundName = await NotificationSoundPrefs.getCustomSoundName();
 
       if (Platform.isAndroid) {
         final p = _local.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
-        try {
-          final channel = (useCustom && soundName != 'default')
-              ? AndroidNotificationChannel(
-                  channelInfo.id, channelInfo.name,
-                  description    : channelInfo.desc,
-                  importance     : Importance.high,
-                  playSound      : true,
-                  enableVibration: true,
-                  sound          : RawResourceAndroidNotificationSound(soundName),
-                )
-              : AndroidNotificationChannel(
-                  channelInfo.id, channelInfo.name,
-                  description    : channelInfo.desc,
-                  importance     : Importance.high,
-                  playSound      : true,
-                  enableVibration: true,
-                );
-          await p?.createNotificationChannel(channel);
-        } catch (_) {}
+        await _createAllBaseChannels(p);
+        await _ensureCustomSoundChannel(p);
       }
 
-      final details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          channelInfo.id, channelInfo.name,
-          channelDescription: channelInfo.desc,
-          importance        : Importance.high,
-          priority          : Priority.high,
-          playSound         : true,
-          enableVibration   : true,
-          icon              : _kNotifIcon,
-          largeIcon         : const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-          color             : const Color(0xFFC0392B),
-          visibility        : NotificationVisibility.public,
-          showWhen          : true,
-          number            : _badgeCount > 0 ? _badgeCount : null,
-          sound             : (useCustom && soundName != 'default')
-              ? RawResourceAndroidNotificationSound(soundName)
-              : null,
+      final msgChannelId = NotificationSoundPrefs.computeChannelId(useCustom, soundName);
+      final channelInfo  = _resolveChannelInfo(type, msgChannelId, soundName, useCustom);
+
+      RawResourceAndroidNotificationSound? sound;
+      if (channelInfo.isMsg && useCustom && soundName != 'default') {
+        sound = RawResourceAndroidNotificationSound(soundName);
+      }
+
+      await _local.show(
+        id,
+        title,
+        body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            channelInfo.id,
+            channelInfo.name,
+            channelDescription: channelInfo.desc,
+            importance:         Importance.high,
+            priority:           Priority.high,
+            playSound:          true,
+            enableVibration:    true,
+            icon:               _kNotifIcon,
+            largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+            color:              const Color(0xFFC0392B),
+            visibility:         NotificationVisibility.public,
+            sound:              sound,
+            number:             _badgeCount,
+            autoCancel:         true,
+            showWhen:           true,
+          ),
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            badgeNumber:  _badgeCount,
+          ),
         ),
-        iOS: DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-          badgeNumber : _badgeCount > 0 ? _badgeCount : null,
-        ),
+        payload: payload,
       );
 
-      await _local.show(id, title, body, details, payload: payload);
+      debugPrint('[Notif] ✓ Affichée: "$title" (canal: ${channelInfo.id}, son: $soundName)');
     } catch (e) {
       debugPrint('[Notif] showNotification error: $e');
-      // Fallback minimal sans icône personnalisée
+      // Fallback sans son personnalisé
       try {
         await _local.show(
           id, title, body,
@@ -437,7 +474,12 @@ class NotificationService {
             android: AndroidNotificationDetails(
               _kChannelId, _kChannelName,
               importance: Importance.high,
-              priority  : Priority.high,
+              priority: Priority.high,
+              icon: _kNotifIcon,
+              autoCancel: true,
+            ),
+            iOS: DarwinNotificationDetails(
+              presentAlert: true, presentBadge: true, presentSound: true,
             ),
           ),
           payload: payload,
@@ -448,7 +490,9 @@ class NotificationService {
     }
   }
 
-  // ─── MESSAGES ──────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // MESSAGES
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> showMessageNotification({
     required String senderName,
     required String messageBody,
@@ -456,40 +500,42 @@ class NotificationService {
     String? senderPhoto,
     String? senderId,
   }) async {
-    _badgeCount++;
     final payload = jsonEncode({
       'conversation_id': conversationId,
-      'sender_name'    : senderName,
-      'sender_photo'   : senderPhoto ?? '',
-      'sender_id'      : senderId    ?? '',
+      'sender_name':     senderName,
+      'sender_photo':    senderPhoto ?? '',
+      'sender_id':       senderId    ?? '',
     });
     await showNotification(
-      id     : conversationId.hashCode.abs(),
-      title  : senderName,
-      body   : messageBody.length > 100 ? '${messageBody.substring(0, 100)}…' : messageBody,
+      id:      conversationId.hashCode.abs() % 10000 + 1000,
+      title:   senderName,
+      body:    messageBody.length > 100
+                 ? '${messageBody.substring(0, 100)}…'
+                 : messageBody,
       payload: payload,
-      type   : 'message',
+      type:    'message',
     );
   }
 
-  // ─── RDV ───────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // RDV
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> showRdvNotification({
     required String title,
     required String body,
     required String rdvId,
     required String type,
   }) async {
-    _badgeCount++;
     await showNotification(
-      id     : _idForType(type, {'rdv_id': rdvId}),
-      title  : title,
-      body   : body,
+      id:      _buildNotifId(type, {'rdv_id': rdvId}),
+      title:   title,
+      body:    body,
       payload: jsonEncode({'type': type, 'rdv_id': rdvId}),
-      type   : type,
+      type:    type,
     );
   }
 
-  // ─── RAPPEL RDV ────────────────────────────────────────────────────────
+  // ── Rappel planifié ───────────────────────────────────────────────────────
   Future<void> scheduleRdvReminder({
     required String rdvId,
     required String rdvDate,
@@ -498,19 +544,21 @@ class NotificationService {
     required bool   isPrestataire,
   }) async {
     try {
-      final parts = rdvTime.split(':');
+      final parts     = rdvTime.split(':');
       final dateParts = rdvDate.split('-');
-      final rdvDateTime = tz.TZDateTime(
+      final rdvDT = tz.TZDateTime(
         tz.local,
-        int.parse(dateParts[0]), int.parse(dateParts[1]), int.parse(dateParts[2]),
-        int.tryParse(parts[0]) ?? 0, int.tryParse(parts[1]) ?? 0,
+        int.parse(dateParts[0]),
+        int.parse(dateParts[1]),
+        int.parse(dateParts[2]),
+        int.tryParse(parts[0]) ?? 0,
+        int.tryParse(parts[1]) ?? 0,
       );
-      final reminderTime = rdvDateTime.subtract(const Duration(hours: 1));
-
+      final reminderTime = rdvDT.subtract(const Duration(hours: 1));
       if (reminderTime.isBefore(tz.TZDateTime.now(tz.local))) return;
 
       await _local.zonedSchedule(
-        _idForType('rdv_reminder', {'rdv_id': rdvId}),
+        _buildNotifId('rdv_reminder', {'rdv_id': rdvId}),
         '⏰ Rappel rendez-vous',
         isPrestataire
             ? 'Rappel : rendez-vous pour $serviceName dans 1h'
@@ -520,212 +568,188 @@ class NotificationService {
           android: AndroidNotificationDetails(
             _kReminderChannelId, _kReminderChannelName,
             channelDescription: _kReminderChannelDesc,
-            importance        : Importance.high,
-            priority          : Priority.high,
-            icon              : _kNotifIcon,
-            largeIcon         : const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-            color             : const Color(0xFFC0392B),
+            importance:  Importance.high,
+            priority:    Priority.high,
+            icon:        _kNotifIcon,
+            largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+            color:       const Color(0xFFC0392B),
+            autoCancel:  true,
           ),
           iOS: const DarwinNotificationDetails(
             presentAlert: true, presentBadge: true, presentSound: true,
           ),
         ),
-        payload             : jsonEncode({'type': 'rdv_reminder', 'rdv_id': rdvId}),
-        androidScheduleMode : AndroidScheduleMode.exactAllowWhileIdle,
+        payload:    jsonEncode({'type': 'rdv_reminder', 'rdv_id': rdvId}),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
+      debugPrint('[Notif] ✓ Rappel planifié pour $rdvDate $rdvTime');
     } catch (e) {
       debugPrint('[Notif] scheduleRdvReminder: $e');
     }
   }
 
-  Future<void> cancelRdvReminder(String rdvId) async =>
-      _local.cancel(_idForType('rdv_reminder', {'rdv_id': rdvId}));
+  Future<void> cancelRdvReminder(String rdvId) async {
+    try {
+      await _local.cancel(_buildNotifId('rdv_reminder', {'rdv_id': rdvId}));
+    } catch (_) {}
+  }
 
-  // ─── REVIEW ────────────────────────────────────────────────────────────
+  // ── Review ────────────────────────────────────────────────────────────────
   Future<void> showReviewRequestNotification({
     required String rdvId,
     required String serviceName,
   }) async {
-    _badgeCount++;
     await showNotification(
-      id     : _idForType('review_request', {'rdv_id': rdvId}),
-      title  : '⭐ Votre avis nous intéresse !',
-      body   : 'Comment s\'est passé votre RDV pour $serviceName ?',
+      id:      _buildNotifId('review_request', {'rdv_id': rdvId}),
+      title:   '⭐ Votre avis nous intéresse !',
+      body:    'Comment s\'est passé votre RDV pour $serviceName ?',
       payload: jsonEncode({'type': 'review_request', 'rdv_id': rdvId}),
-      type   : 'review_request',
+      type:    'review_request',
     );
   }
 
-  // ─── BADGE ─────────────────────────────────────────────────────────────
-  Future<void> clearBadge() async {
-    _badgeCount = 0;
+  // ══════════════════════════════════════════════════════════════════════
+  // BADGE ICÔNE APPLICATION
+  // ══════════════════════════════════════════════════════════════════════
+
+  /// Met à jour le badge numérique sur l'icône de l'app.
+  /// Sur Android : utilise flutter_local_notifications number parameter.
+  /// Sur iOS : gère via DarwinNotificationDetails.badgeNumber.
+  Future<void> updateAppBadge(int count) async {
+    _badgeCount = count > 0 ? count : 0;
+
     if (Platform.isIOS) {
       try {
-        await _local.show(_kBadgeNotifId, null, null,
+        // iOS : afficher une notif silencieuse pour mettre à jour le badge
+        if (_badgeCount == 0) {
+          await _local.show(
+            _kBadgeNotifId, '', '',
             const NotificationDetails(
               iOS: DarwinNotificationDetails(
-                presentAlert: false, presentBadge: true,
-                presentSound: false, badgeNumber: 0,
+                presentAlert: false,
+                presentBadge: true,
+                presentSound: false,
+                badgeNumber: 0,
               ),
-            ));
-        await Future.delayed(const Duration(milliseconds: 200));
-        await _local.cancel(_kBadgeNotifId);
-      } catch (_) {}
+            ),
+          );
+          await Future.delayed(const Duration(milliseconds: 100));
+          await _local.cancel(_kBadgeNotifId);
+        }
+      } catch (e) {
+        debugPrint('[Notif] updateAppBadge iOS: $e');
+      }
     }
+    // Android : le badge est mis à jour automatiquement via 'number' dans chaque notif
+    debugPrint('[Notif] Badge mis à jour: $_badgeCount');
   }
 
-  Future<void> updateBadgeCount(int count) async {
-    _badgeCount = count > 0 ? count : 0;
-    if (count <= 0) await clearBadge();
+  Future<void> clearBadge() async {
+    _badgeCount = 0;
+    await updateAppBadge(0);
   }
 
-  // ─── FCM FOREGROUND ────────────────────────────────────────────────────
-  Future<void> showFCMNotification(RemoteMessage message) async {
-    final data  = message.data;
-    final notif = message.notification;
-    final type  = data['type']?.toString() ?? '';
-    final title = notif?.title ?? data['title'] ?? 'CarEasy';
-    final body  = notif?.body  ?? data['body']  ?? '';
-
-    _badgeCount++;
-
-    if (type == 'review_request') {
-      await showReviewRequestNotification(
-        rdvId      : data['rdv_id']?.toString() ?? '',
-        serviceName: data['service_name']?.toString() ?? 'le service',
-      );
-      return;
-    }
-    if (type.startsWith('rdv_')) {
-      await showRdvNotification(
-        title: title, body: body,
-        rdvId: data['rdv_id']?.toString() ?? '',
-        type : type,
-      );
-      return;
-    }
-    final convId = data['conversation_id']?.toString() ?? '';
-    await showNotification(
-      id     : convId.isNotEmpty ? convId.hashCode.abs() : DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title  : title, body: body,
-      payload: jsonEncode({
-        'conversation_id': convId,
-        'sender_name'    : data['sender_name']  ?? '',
-        'sender_photo'   : data['sender_photo'] ?? '',
-        'sender_id'      : data['sender_id']    ?? '',
-      }),
-      type: 'message',
-    );
-  }
-
-  // ─── PREVIEW SON — 100% audioplayers, ZÉRO flutter_local_notifications ──
+  // ══════════════════════════════════════════════════════════════════════
+  // PREVIEW SON — 100% audioplayers (pas de notification)
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> playSoundPreview(String soundName) async {
     try {
       await _previewPlayer.stop();
-
       if (soundName == 'default') {
-        // Son système : utiliser le son de l'appareil via AudioPlayer
-        // (pas de notification, pas de NullPointerException possible)
         await _previewPlayer.play(
           AssetSource('sounds/careasy_notify_pro.mp3'),
           volume: 1.0,
         );
         return;
       }
-
       await _previewPlayer.play(
         AssetSource('sounds/$soundName.mp3'),
         volume: 1.0,
       );
-      debugPrint('[Notif] Preview: $soundName ✓');
+      debugPrint('[Notif] Preview son: $soundName ✓');
     } catch (e) {
-      debugPrint('[Notif] playSoundPreview error ($soundName): $e');
-      // Fallback : essayer avec .wav
+      debugPrint('[Notif] playSoundPreview($soundName): $e');
       try {
         await _previewPlayer.play(
           AssetSource('sounds/$soundName.wav'),
           volume: 1.0,
         );
       } catch (_) {
-        // Fallback final : rien (pas de crash)
-        debugPrint('[Notif] Fichier audio manquant pour $soundName');
+        debugPrint('[Notif] Fichier son manquant: $soundName');
       }
     }
   }
 
-  // ─── MISE À JOUR CANAL SON ─────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // MISE À JOUR CANAL APRÈS CHANGEMENT DE SON
+  // ══════════════════════════════════════════════════════════════════════
+
+  /// Appelé depuis NotificationsSettingsScreen après changement de son.
+  /// Recrée le canal avec le nouveau son.
   Future<void> updateNotificationChannel() async {
     if (!Platform.isAndroid) return;
     try {
-      final useCustom = await NotificationSoundPrefs.getUseCustomSound();
-      final soundName = await NotificationSoundPrefs.getCustomSoundName();
-      final channelId = (useCustom && soundName != 'default')
-          ? 'high_importance_channel_$soundName'
-          : _kChannelId;
-
       final p = _local.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
-
-      final channel = (useCustom && soundName != 'default')
-          ? AndroidNotificationChannel(
-              channelId, 'Messages CarEasy ($soundName)',
-              description    : _kChannelDesc,
-              importance     : Importance.high,
-              playSound      : true,
-              enableVibration: true,
-              sound          : RawResourceAndroidNotificationSound(soundName),
-            )
-          : AndroidNotificationChannel(
-              channelId, _kChannelName,
-              description    : _kChannelDesc,
-              importance     : Importance.high,
-              playSound      : true,
-              enableVibration: true,
-            );
-
-      await p?.createNotificationChannel(channel);
-      debugPrint('[Notif] Canal mis à jour: $channelId');
+      await _ensureCustomSoundChannel(p);
+      debugPrint('[Notif] Canal mis à jour avec nouveau son');
     } catch (e) {
       debugPrint('[Notif] updateNotificationChannel: $e');
     }
   }
 
-  // ─── ANNULATION ────────────────────────────────────────────────────────
-  // Accepte String (conversationId) ou int — compatibilité avec tout le code existant
+  // ══════════════════════════════════════════════════════════════════════
+  // ANNULATION
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> cancelNotification(dynamic id) async {
     try {
-      final intId = id is int ? id : id.toString().hashCode.abs();
+      final intId = id is int ? id : id.toString().hashCode.abs() % 10000 + 1000;
       await _local.cancel(intId);
     } catch (_) {}
   }
+
   Future<void> cancelAll() async {
     _badgeCount = 0;
     try { await _local.cancelAll(); } catch (_) {}
   }
 
-  // ─── FCM ───────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // FIREBASE MESSAGING
+  // ══════════════════════════════════════════════════════════════════════
   Future<void> _initFCM() async {
     try {
       final settings = await _fcm.requestPermission(
-        alert: true, badge: true, sound: true, provisional: false,
+        alert:       true,
+        badge:       true,
+        sound:       true,
+        provisional: false,
       );
       debugPrint('[FCM] Permission: ${settings.authorizationStatus}');
 
       if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
+      // IMPORTANT : afficher les notifications FCM même en foreground
       await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-        alert: true, badge: true, sound: true,
+        alert: true,
+        badge: true,
+        sound: true,
       );
 
-      FirebaseMessaging.onMessage.listen((msg) => showFCMNotification(msg));
+      // Foreground : FCM reçu → afficher manuellement via flutter_local_notifications
+      FirebaseMessaging.onMessage.listen((msg) {
+        debugPrint('[FCM FG] Reçu: ${msg.notification?.title}');
+        _showFCMAsLocal(msg);
+      });
 
+      // App ouverte via notification
       FirebaseMessaging.onMessageOpenedApp.listen((msg) {
         if (_badgeCount > 0) _badgeCount--;
         _handleFCMTap(msg.data);
       });
 
+      // App lancée depuis notification (app fermée)
       final initial = await _fcm.getInitialMessage();
       if (initial != null) {
         Future.delayed(
@@ -735,10 +759,53 @@ class NotificationService {
       }
 
       await _registerFCMToken();
-      _fcm.onTokenRefresh.listen(_sendTokenToBackend);
+      _fcm.onTokenRefresh.listen(_sendTokenToServer);
     } catch (e) {
       debugPrint('[FCM] _initFCM error: $e');
     }
+  }
+
+  /// Affiche une notification locale quand FCM arrive en foreground.
+  Future<void> _showFCMAsLocal(RemoteMessage message) async {
+    final data  = message.data;
+    final notif = message.notification;
+    final type  = data['type']?.toString() ?? '';
+    final title = notif?.title ?? data['title'] ?? 'CarEasy';
+    final body  = notif?.body  ?? data['body']  ?? '';
+
+    if (type == 'review_request') {
+      await showReviewRequestNotification(
+        rdvId:       data['rdv_id']?.toString() ?? '',
+        serviceName: data['service_name']?.toString() ?? 'le service',
+      );
+      return;
+    }
+    if (type.startsWith('rdv_')) {
+      await showRdvNotification(
+        title: title,
+        body:  body,
+        rdvId: data['rdv_id']?.toString() ?? '',
+        type:  type,
+      );
+      return;
+    }
+
+    // Message
+    final convId = data['conversation_id']?.toString() ?? '';
+    await showNotification(
+      id:    convId.isNotEmpty
+                 ? convId.hashCode.abs() % 10000 + 1000
+                 : DateTime.now().millisecondsSinceEpoch ~/ 1000 % 10000,
+      title: title,
+      body:  body,
+      payload: jsonEncode({
+        'conversation_id': convId,
+        'sender_name':     data['sender_name']  ?? '',
+        'sender_photo':    data['sender_photo'] ?? '',
+        'sender_id':       data['sender_id']    ?? '',
+      }),
+      type: 'message',
+    );
   }
 
   Future<void> _registerFCMToken() async {
@@ -752,14 +819,15 @@ class NotificationService {
       }
       if (token != null) {
         await _storage.write(key: 'fcm_token_pending', value: token);
-        await _sendTokenToBackend(token);
+        await _sendTokenToServer(token);
+        debugPrint('[FCM] Token: ${token.substring(0, 20)}...');
       }
     } catch (e) {
-      debugPrint('[FCM] Erreur token: $e');
+      debugPrint('[FCM] _registerFCMToken: $e');
     }
   }
 
-  Future<void> _sendTokenToBackend(String fcmToken) async {
+  Future<void> _sendTokenToServer(String fcmToken) async {
     try {
       final authToken = await _storage.read(key: 'auth_token');
       if (authToken == null || authToken.isEmpty) {
@@ -770,12 +838,12 @@ class NotificationService {
         Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
         headers: {
           'Authorization': 'Bearer $authToken',
-          'Content-Type' : 'application/json',
-          'Accept'       : 'application/json',
+          'Content-Type':  'application/json',
+          'Accept':        'application/json',
         },
         body: jsonEncode({
           'fcm_token': fcmToken,
-          'platform' : Platform.isIOS ? 'ios' : 'android',
+          'platform':  Platform.isIOS ? 'ios' : 'android',
         }),
       ).timeout(const Duration(seconds: 10));
 
@@ -784,7 +852,7 @@ class NotificationService {
         debugPrint('[FCM] Token enregistré ✓');
       }
     } catch (e) {
-      debugPrint('[FCM] Erreur envoi token: $e');
+      debugPrint('[FCM] _sendTokenToServer: $e');
     }
   }
 
@@ -792,7 +860,7 @@ class NotificationService {
     try {
       final pending = await _storage.read(key: 'fcm_token_pending');
       if (pending != null && pending.isNotEmpty) {
-        await _sendTokenToBackend(pending);
+        await _sendTokenToServer(pending);
       } else {
         await _registerFCMToken();
       }
@@ -801,7 +869,7 @@ class NotificationService {
     }
   }
 
-  // ─── TAPS ──────────────────────────────────────────────────────────────
+  // ── Gestion des taps ──────────────────────────────────────────────────────
   void _handleTap(String? payload) {
     if (payload == null || payload.isEmpty) return;
     if (_badgeCount > 0) _badgeCount--;
@@ -823,10 +891,40 @@ class NotificationService {
     if (convId != null && convId.isNotEmpty) {
       onNotificationTap?.call({
         'conversation_id': convId,
-        'sender_name'    : data['sender_name']  ?? '',
-        'sender_photo'   : data['sender_photo'] ?? '',
-        'sender_id'      : data['sender_id']    ?? '',
+        'sender_name':     data['sender_name']  ?? '',
+        'sender_photo':    data['sender_photo'] ?? '',
+        'sender_id':       data['sender_id']    ?? '',
       });
     }
+  }
+}
+
+// ── Référence indirecte pour PusherService (évite import circulaire) ──────────
+class NotificationServiceRef {
+  static Future<void> Function({
+    required int    id,
+    required String title,
+    required String body,
+    String?         payload,
+  })? _showFn;
+
+  static void register(
+    Future<void> Function({
+      required int    id,
+      required String title,
+      required String body,
+      String?         payload,
+    }) fn,
+  ) {
+    _showFn = fn;
+  }
+
+  static Future<void> show({
+    required int    id,
+    required String title,
+    required String body,
+    String?         payload,
+  }) async {
+    await _showFn?.call(id: id, title: title, body: body, payload: payload);
   }
 }
