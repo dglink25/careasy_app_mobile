@@ -1,15 +1,11 @@
-// lib/screens/notifications_settings_screen.dart
-// ═══════════════════════════════════════════════════════════════════════════
-// CORRECTIONS :
-//   ✅ Après changement de son → canal Android recréé IMMÉDIATEMENT
-//   ✅ Test du son via audioplayers (pas de notification)
-//   ✅ Enregistrement persistant des préférences
-// ═══════════════════════════════════════════════════════════════════════════
-
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import '../utils/constants.dart';
 import '../services/notification_service.dart';
 
@@ -30,6 +26,7 @@ class _NotificationsSettingsScreenState
   bool   _isLoading     = true;
   bool   _isSavingSound = false;
   String _playingSound  = '';
+  String? _customMp3Path;  // chemin du fichier MP3 uploadé par l'utilisateur
 
   bool _emailNotif  = true;
   bool _pushNotif   = true;
@@ -40,7 +37,7 @@ class _NotificationsSettingsScreenState
 
   String _selectedSound  = 'default';
   String _selectedLabel  = 'Système (défaut)';
-  String _selectedEmoji  = '🔕';
+  String _selectedEmoji  = '';
 
   @override
   void initState() {
@@ -51,6 +48,7 @@ class _NotificationsSettingsScreenState
   Future<void> _loadAll() async {
     final soundName  = await NotificationSoundPrefs.getCustomSoundName();
     final soundLabel = await NotificationSoundPrefs.getCustomSoundLabel();
+    final customMp3  = await NotificationSoundPrefs.getCustomMp3Path();
     final soundInfo  = NotificationSoundPrefs.availableSounds
         .firstWhere((s) => s['name'] == soundName,
             orElse: () => NotificationSoundPrefs.availableSounds.first);
@@ -82,7 +80,8 @@ class _NotificationsSettingsScreenState
       setState(() {
         _selectedSound = soundName;
         _selectedLabel = soundLabel;
-        _selectedEmoji = soundInfo['emoji'] ?? '🔕';
+        _selectedEmoji = soundInfo['emoji'] ?? '📱';
+        _customMp3Path = customMp3;
         _isLoading     = false;
       });
     }
@@ -117,20 +116,19 @@ class _NotificationsSettingsScreenState
     }
   }
 
-  /// Enregistre le son ET recrée le canal Android — appelé quand l'utilisateur
-  /// choisit un son dans le picker.
-  Future<void> _applySound(String name, String label, String emoji) async {
+  Future<void> _applySound(String name, String label, String emoji, {String? mp3Path}) async {
     if (!mounted) return;
     setState(() => _isSavingSound = true);
 
     // 1. Sauvegarder les préférences
     await NotificationSoundPrefs.setSoundPreference(
-      useCustom:  name != 'default',
-      soundName:  name,
-      soundLabel: label,
+      useCustom:    name != 'default',
+      soundName:    name,
+      soundLabel:   label,
+      customMp3Path: mp3Path,
     );
 
-    // 2. Recréer le canal Android avec le nouveau son
+    // 2. Recréer TOUS les canaux Android avec le nouveau son
     await NotificationService().updateNotificationChannel();
 
     // 3. Mettre à jour l'UI
@@ -139,6 +137,7 @@ class _NotificationsSettingsScreenState
         _selectedSound = name;
         _selectedLabel = label;
         _selectedEmoji = emoji;
+        _customMp3Path = mp3Path;
         _isSavingSound = false;
       });
     }
@@ -148,6 +147,46 @@ class _NotificationsSettingsScreenState
     await NotificationService().playSoundPreview(name);
 
     if (mounted) _snack('Son mis à jour : $label', Colors.green);
+  }
+
+  /// Permet à l'utilisateur d'uploader un fichier .mp3 depuis son téléphone.
+  Future<void> _pickCustomMp3() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['mp3'],
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final pickedFile = result.files.first;
+      final sourcePath = pickedFile.path;
+      if (sourcePath == null) return;
+
+      setState(() => _isSavingSound = true);
+
+      // Copier le fichier dans le répertoire de l'app pour un accès persistant
+      final appDir = await getApplicationDocumentsDirectory();
+      final soundsDir = Directory('${appDir.path}/custom_sounds');
+      if (!await soundsDir.exists()) await soundsDir.create(recursive: true);
+
+      final fileName = 'custom_notif_${DateTime.now().millisecondsSinceEpoch}.mp3';
+      final destPath = '${soundsDir.path}/$fileName';
+      await File(sourcePath).copy(destPath);
+
+      // Supprimer l'ancien fichier uploadé si différent
+      if (_customMp3Path != null && _customMp3Path != destPath) {
+        try { await File(_customMp3Path!).delete(); } catch (_) {}
+      }
+
+      final label = p.basenameWithoutExtension(pickedFile.name);
+      await _applySound(destPath, label, '🎵', mp3Path: destPath);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSavingSound = false);
+        _snack('Erreur lors de l\'import du fichier', Colors.red);
+      }
+    }
   }
 
   Future<void> _previewSound(String name, StateSetter setM) async {
@@ -213,15 +252,71 @@ class _NotificationsSettingsScreenState
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 8),
                     itemCount:
-                        NotificationSoundPrefs.availableSounds.length,
+                        NotificationSoundPrefs.availableSounds.length + 1, // +1 pour le bouton upload
                     separatorBuilder: (_, __) =>
                         const SizedBox(height: 6),
                     itemBuilder: (_, i) {
+                      // Dernier item = bouton "Importer un fichier MP3"
+                      if (i == NotificationSoundPrefs.availableSounds.length) {
+                        return Column(children: [
+                          const Divider(height: 20),
+                          Material(
+                            color: Colors.grey[50],
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _pickCustomMp3();
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 14),
+                                child: Row(children: [
+                                  Container(
+                                    width: 40, height: 40,
+                                    decoration: BoxDecoration(
+                                        color: AppConstants.primaryRed.withOpacity(0.1),
+                                        shape: BoxShape.circle),
+                                    child: const Icon(Icons.upload_file_rounded,
+                                        color: AppConstants.primaryRed, size: 22),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                      const Text('Importer un fichier MP3',
+                                          style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600)),
+                                      Text(
+                                        _customMp3Path != null
+                                            ? 'Actuel : ${_selectedSound.startsWith('/') ? _selectedLabel : 'aucun'}'
+                                            : 'Choisir depuis le téléphone',
+                                        style: TextStyle(
+                                            fontSize: 11, color: Colors.grey[500]),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ]),
+                                  ),
+                                  const Icon(Icons.chevron_right,
+                                      color: AppConstants.primaryRed),
+                                ]),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ]);
+                      }
+
                       final s     = NotificationSoundPrefs.availableSounds[i];
                       final name  = s['name']!;
                       final label = s['label']!;
-                      final emoji = s['emoji'] ?? '🔔';
-                      final isSel = _selectedSound == name;
+                      final emoji = s['emoji'] ?? '';
+                      // isSel: vrai seulement si ce son prédéfini est actif
+                      // (pas si un MP3 uploadé est sélectionné)
+                      final isSel = _selectedSound == name && !(_selectedSound.startsWith('/'));
                       final isPla = _playingSound  == name;
 
                       return Material(
