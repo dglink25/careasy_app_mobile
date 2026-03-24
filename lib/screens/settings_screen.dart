@@ -119,6 +119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _showCreateEntrepriseDialog();
     }
   }
+  
   void _showCreateEntrepriseDialog() {
     showDialog(
       context: context,
@@ -272,6 +273,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ─── LISTE DES PARAMÈTRES ─────────────────────────────────────────────────────
   Widget _buildSettingsList(BuildContext context, bool isSmallScreen) {
+    // Récupérer le rôle de l'utilisateur
+    final userRole = _userData?['role'] ?? '';
+    final isPrestataire = userRole == 'prestataire';
+    
     return Container(
       decoration: BoxDecoration(
         color: Colors.white, borderRadius: BorderRadius.circular(20),
@@ -287,9 +292,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildSettingsItem(
           icon: Icons.business, title: 'Mes entreprises', subtitle: 'Gérer vos entreprises',
           onTap: () => _navigateToMesEntreprises(context), isSmallScreen: isSmallScreen),
-        _buildSettingsItem(
-          icon: Icons.subscriptions_outlined, title: 'Plans & Abonnements', subtitle: 'Gérer votre abonnement',
-          onTap: () => _navigateToPlansAbonnement(context), isSmallScreen: isSmallScreen),
+        // ⭐ Condition : Afficher "Plans & Abonnements" uniquement si l'utilisateur est prestataire
+        if (isPrestataire)
+          _buildSettingsItem(
+            icon: Icons.subscriptions_outlined, title: 'Plans & Abonnements', subtitle: 'Gérer votre abonnement',
+            onTap: () => _navigateToPlansAbonnement(context), isSmallScreen: isSmallScreen),
         _buildDivider(),
 
         // ── Préférences ──
