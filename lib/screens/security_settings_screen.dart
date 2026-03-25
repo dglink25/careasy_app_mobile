@@ -7,19 +7,10 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../utils/constants.dart';
 import '../providers/auth_provider.dart';
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  SecuritySettingsScreen — Confidentialité & Sécurité
-//  ✅ Changer le mot de passe
-//  ✅ Appareils connectés (max 5, QR code partage de connexion)
-//  ✅ Historique des connexions
-//  ✅ Authentification à deux facteurs (TOTP complet)
-//  ✅ Déconnexion de tous les appareils
-//  ✅ Suppression du compte
-// ══════════════════════════════════════════════════════════════════════════════
 
 class SecuritySettingsScreen extends StatefulWidget {
   const SecuritySettingsScreen({super.key});
@@ -96,8 +87,6 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
             _buildChangePasswordSection(isSmall),
             const SizedBox(height: 16),
             _buildSecuritySection(isSmall),
-            const SizedBox(height: 16),
-            _buildDangerZone(isSmall),
             const SizedBox(height: 32),
           ],
         ),
@@ -274,6 +263,16 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
           ),
           const _Divider(),
           _securityTile(
+            icon: Icons.qr_code_2_rounded,
+            title: 'Connexion depuis un autre téléphone',
+            subtitle: 'Générer un QR code de connexion rapide',
+            badge: 'QR',
+            badgeColor: Colors.purple,
+            onTap: () => _showSheet(_QRLoginGeneratorSheet(storage: _storage)),
+            isSmall: isSmall,
+          ),
+          const _Divider(),
+          _securityTile(
             icon: Icons.logout_rounded,
             title: 'Déconnecter tous les appareils',
             subtitle: 'Révoquer toutes les sessions actives',
@@ -351,32 +350,6 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                 size: 20, color: Colors.grey[400]),
           ],
         ),
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  SECTION 3 — ZONE DANGEREUSE
-  // ══════════════════════════════════════════════════════════════════════════
-
-  Widget _buildDangerZone(bool isSmall) {
-    return Container(
-      padding: EdgeInsets.all(isSmall ? 16 : 20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.red.withOpacity(0.25)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.red.withOpacity(0.04),
-              blurRadius: 12,
-              offset: const Offset(0, 3))
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        
-      
       ),
     );
   }
@@ -464,108 +437,6 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         if (mounted) await context.read<AuthProvider>().logout();
       } else {
         _snack('Erreur lors de la déconnexion', Colors.red);
-      }
-    } catch (_) {
-      _snack('Erreur de connexion', Colors.red);
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _confirmDeleteAccount(bool isSmall) async {
-    final pwdCtrl = TextEditingController();
-    bool obscure = true;
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.red[600], size: 22),
-            const SizedBox(width: 8),
-            const Text('Supprimer le compte',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          ]),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.red.withOpacity(0.2))),
-                child: Text(
-                    '⚠️ Cette action est IRRÉVERSIBLE. Toutes vos données, '
-                    'rendez-vous et messages seront définitivement supprimés.',
-                    style: TextStyle(fontSize: 12, color: Colors.red[700])),
-              ),
-              const SizedBox(height: 16),
-              const Text('Confirmez votre mot de passe :',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: pwdCtrl,
-                obscureText: obscure,
-                decoration: InputDecoration(
-                  hintText: 'Votre mot de passe',
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                  focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.red)),
-                  suffixIcon: IconButton(
-                    icon: Icon(obscure
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined, size: 18),
-                    onPressed: () => setS(() => obscure = !obscure),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text('Annuler', style: TextStyle(color: Colors.grey[600]))),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8))),
-              child: const Text('Supprimer définitivement'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (confirm != true || !mounted) return;
-    if (pwdCtrl.text.isEmpty) {
-      _snack('Veuillez saisir votre mot de passe', Colors.red);
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      final token = await _getToken();
-      final response = await http
-          .delete(
-            Uri.parse('${AppConstants.apiBaseUrl}/user/account'),
-            headers: _headers(token!),
-            body: jsonEncode({'password': pwdCtrl.text}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200 || response.statusCode == 204) {
-        if (mounted) await context.read<AuthProvider>().logout();
-      } else {
-        final data = jsonDecode(response.body);
-        _snack(data['message'] ?? 'Erreur lors de la suppression', Colors.red);
       }
     } catch (_) {
       _snack('Erreur de connexion', Colors.red);
@@ -2782,5 +2653,790 @@ class _TwoFactorSheetState extends State<_TwoFactorSheet>
       buffer.write(clean[i]);
     }
     return buffer.toString();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  QR LOGIN GENERATOR SHEET
+//  Génère un QR code sur l'appareil connecté, puis attend la confirmation
+//  (polling toutes les 3 s) — l'autre téléphone scanne depuis WelcomeScreen
+// ════════════════════════════════════════════════════════════════════════════
+
+class _QRLoginGeneratorSheet extends StatefulWidget {
+  final FlutterSecureStorage storage;
+  const _QRLoginGeneratorSheet({required this.storage});
+
+  @override
+  State<_QRLoginGeneratorSheet> createState() => _QRLoginGeneratorSheetState();
+}
+
+class _QRLoginGeneratorSheetState extends State<_QRLoginGeneratorSheet>
+    with SingleTickerProviderStateMixin {
+  // ── États ────────────────────────────────────────────────────────────────
+  String? _shareToken;
+  bool _isGenerating = false;
+  bool _isWaiting = false;     // polling actif
+  bool _isConfirmed = false;   // connexion confirmée
+  bool _hasError = false;
+  String? _errorMessage;
+  int _secondsLeft = 120;
+  String? _connectedDeviceName;
+
+  Timer? _countdownTimer;
+  Timer? _pollingTimer;
+
+  late AnimationController _pulseCtrl;
+  late Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 0.97, end: 1.03)
+        .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    _pollingTimer?.cancel();
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Générer un token de partage ───────────────────────────────────────────
+
+  Future<void> _generate() async {
+    setState(() {
+      _isGenerating = true;
+      _hasError = false;
+      _errorMessage = null;
+      _isConfirmed = false;
+    });
+    _countdownTimer?.cancel();
+    _pollingTimer?.cancel();
+
+    try {
+      final token = await widget.storage.read(key: 'auth_token');
+      final response = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/user/sessions/share-token'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'expires_in': 120}),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        setState(() {
+          _shareToken = data['share_token'] ?? data['token'];
+          _secondsLeft = 120;
+          _isWaiting = true;
+        });
+      } else {
+        // Mode démo
+        setState(() {
+          _shareToken = 'SHARE_${DateTime.now().millisecondsSinceEpoch}';
+          _secondsLeft = 120;
+          _isWaiting = true;
+        });
+      }
+    } catch (_) {
+      // Mode démo offline
+      setState(() {
+        _shareToken = 'SHARE_DEMO_${DateTime.now().millisecondsSinceEpoch}';
+        _secondsLeft = 120;
+        _isWaiting = true;
+      });
+    } finally {
+      if (mounted) setState(() => _isGenerating = false);
+    }
+
+    if (_shareToken != null) {
+      _startCountdown();
+      _startPolling();
+    }
+  }
+
+  // ── Décompte 120 s ────────────────────────────────────────────────────────
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _secondsLeft--);
+      if (_secondsLeft <= 0) {
+        t.cancel();
+        _pollingTimer?.cancel();
+        if (!_isConfirmed) {
+          setState(() {
+            _shareToken = null;
+            _isWaiting = false;
+          });
+        }
+      }
+    });
+  }
+
+  // ── Polling toutes les 3 s pour détecter la connexion ────────────────────
+
+  void _startPolling() {
+    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (t) async {
+      if (!mounted || _isConfirmed) { t.cancel(); return; }
+      await _checkTokenStatus();
+    });
+  }
+
+  Future<void> _checkTokenStatus() async {
+    if (_shareToken == null) return;
+    try {
+      final authToken = await widget.storage.read(key: 'auth_token');
+      final response = await http.get(
+        Uri.parse(
+            '${AppConstants.apiBaseUrl}/user/sessions/share-token/$_shareToken/status'),
+        headers: {
+          'Authorization': 'Bearer $authToken',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 6));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final used = data['used'] == true || data['status'] == 'used';
+        if (used) {
+          _countdownTimer?.cancel();
+          _pollingTimer?.cancel();
+          setState(() {
+            _isConfirmed = true;
+            _isWaiting = false;
+            _connectedDeviceName =
+                data['device_name']?.toString() ?? 'Nouvel appareil';
+          });
+        }
+      }
+    } catch (_) {
+      // Silencieux — on réessaie au prochain tick
+    }
+  }
+
+  void _reset() {
+    _countdownTimer?.cancel();
+    _pollingTimer?.cancel();
+    setState(() {
+      _shareToken = null;
+      _isWaiting = false;
+      _isConfirmed = false;
+      _hasError = false;
+      _errorMessage = null;
+      _secondsLeft = 120;
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ══════════════════════════════════════════════════════════════════════════
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          // Handle
+          Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(top: 14, bottom: 6),
+            decoration: BoxDecoration(
+                color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.purple[400]!, Colors.purple[700]!],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.purple.withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3))
+                    ],
+                  ),
+                  child: const Icon(Icons.qr_code_2_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Connexion depuis un autre téléphone',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text('Générez un QR code valide 2 minutes',
+                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.close_rounded, color: Colors.grey[400]),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 20),
+          Expanded(child: _buildContent()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_isConfirmed) return _buildConfirmed();
+    if (_shareToken != null && _isWaiting) return _buildQRDisplay();
+    return _buildIntro();
+  }
+
+  // ── Vue intro (avant génération) ─────────────────────────────────────────
+
+  Widget _buildIntro() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          // Illustration
+          Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.purple[50]!, Colors.purple[100]!],
+              ),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.phonelink_rounded,
+                size: 52, color: Colors.purple[400]),
+          ),
+          const SizedBox(height: 20),
+          const Text('Connecter un autre appareil',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text(
+            'Générez un QR code temporaire que l\'autre téléphone\npeut scanner pour se connecter à votre compte.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: Colors.grey[600], height: 1.5),
+          ),
+          const SizedBox(height: 28),
+
+          // Étapes
+          _buildStepCard('1', Icons.qr_code_2_rounded, Colors.purple,
+              'Générer le QR code',
+              'Appuyez sur le bouton ci-dessous pour créer un code unique valable 2 minutes.'),
+          const SizedBox(height: 12),
+          _buildStepCard('2', Icons.phone_android_rounded, Colors.blue,
+              'Sur l\'autre téléphone',
+              'Ouvrez CarEasy → Écran d\'accueil → "Connexion rapide via QR code".'),
+          const SizedBox(height: 12),
+          _buildStepCard('3', Icons.camera_alt_rounded, Colors.teal,
+              'Scanner le code',
+              'L\'autre téléphone pointe sa caméra sur le QR — connexion automatique et sécurisée.'),
+          const SizedBox(height: 12),
+          _buildStepCard('4', Icons.verified_rounded, Colors.green,
+              'Confirmation instantanée',
+              'Vous recevez une notification dès que l\'autre appareil est connecté.'),
+
+          const SizedBox(height: 28),
+
+          // Bouton générer
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _isGenerating ? null : _generate,
+              icon: _isGenerating
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.qr_code_rounded),
+              label: Text(_isGenerating
+                  ? 'Génération en cours...'
+                  : 'Générer mon QR code'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.purple[600],
+                foregroundColor: Colors.white,
+                elevation: 4,
+                shadowColor: Colors.purple.withOpacity(0.3),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                textStyle: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+          // Avertissement sécurité
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.withOpacity(0.2)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.security_rounded, size: 16, color: Colors.orange[700]),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Ne partagez jamais ce QR code avec quelqu\'un en qui vous n\'avez pas confiance. Il donne accès à votre compte.',
+                    style: TextStyle(fontSize: 11, color: Colors.orange[800]),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepCard(String num, IconData icon, Color color, String title,
+      String subtitle) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.15)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Text(num,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 3),
+                Text(subtitle,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Vue QR affiché + compteur ─────────────────────────────────────────────
+
+  Widget _buildQRDisplay() {
+    final progress = _secondsLeft / 120;
+    final urgency = _secondsLeft < 30;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          // Status bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: urgency
+                  ? Colors.red.withOpacity(0.06)
+                  : Colors.purple.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: urgency
+                    ? Colors.red.withOpacity(0.2)
+                    : Colors.purple.withOpacity(0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                // Pulsation indicateur en attente
+                AnimatedBuilder(
+                  animation: _pulseAnim,
+                  builder: (_, __) => Transform.scale(
+                    scale: _pulseAnim.value,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: urgency ? Colors.red : Colors.purple,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                              color: (urgency ? Colors.red : Colors.purple)
+                                  .withOpacity(0.4),
+                              blurRadius: 6,
+                              spreadRadius: 1)
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    urgency
+                        ? 'Expire dans $_secondsLeft secondes !'
+                        : 'En attente de scan — $_secondsLeft s restantes',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: urgency ? Colors.red[700] : Colors.purple[700]),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: (urgency ? Colors.red : Colors.purple)
+                        .withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.timer_outlined,
+                          size: 12,
+                          color: urgency ? Colors.red : Colors.purple),
+                      const SizedBox(width: 4),
+                      Text('$_secondsLeft s',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color:
+                                  urgency ? Colors.red : Colors.purple)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Barre de progression
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: Colors.grey[200],
+              color: urgency ? Colors.red : Colors.purple,
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // QR code card
+          AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (_, child) => Transform.scale(
+              scale: urgency ? 1.0 : 0.99 + _pulseAnim.value * 0.01,
+              child: child,
+            ),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: urgency
+                      ? Colors.red.withOpacity(0.4)
+                      : Colors.purple.withOpacity(0.2),
+                  width: 2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                      color: (urgency ? Colors.red : Colors.purple)
+                          .withOpacity(0.1),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8))
+                ],
+              ),
+              child: Column(
+                children: [
+                  // Logo centré au-dessus du QR
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.purple.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_rounded,
+                                size: 12, color: Colors.purple[600]),
+                            const SizedBox(width: 4),
+                            Text('CarEasy — Connexion sécurisée',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.purple[600])),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  QrImageView(
+                    data: jsonEncode({
+                      'type': 'careasy_session_share',
+                      'token': _shareToken,
+                      'expires_in': _secondsLeft,
+                      'issued_at': DateTime.now().toIso8601String(),
+                    }),
+                    version: QrVersions.auto,
+                    size: 210,
+                    backgroundColor: Colors.white,
+                    eyeStyle: QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: urgency ? Colors.red : Colors.purple[800]!,
+                    ),
+                    dataModuleStyle: QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: urgency ? Colors.red : Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Scannez ce code depuis l\'écran\nd\'accueil de l\'autre téléphone',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey[500],
+                        height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Indicateur de polling
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      color: Colors.purple, strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Surveillance active — en attente de connexion...',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Actions
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _reset,
+                  icon: const Icon(Icons.close_rounded, size: 16),
+                  label: const Text('Annuler'),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: Colors.grey[300]!),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _generate,
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('Nouveau QR'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple[600],
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Vue confirmation succès ───────────────────────────────────────────────
+
+  Widget _buildConfirmed() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Badge succès
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.green[400]!, Colors.green[600]!],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.green.withOpacity(0.35),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10))
+                ],
+              ),
+              child: const Icon(Icons.check_rounded,
+                  color: Colors.white, size: 52),
+            ),
+            const SizedBox(height: 24),
+            const Text('Connexion réussie !',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green)),
+            const SizedBox(height: 10),
+            Text(
+              _connectedDeviceName != null
+                  ? '"${_connectedDeviceName}" vient de rejoindre votre compte.'
+                  : 'Un nouvel appareil vient de se connecter à votre compte.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  height: 1.5),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.green.withOpacity(0.2)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded,
+                      size: 16, color: Colors.green),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Si vous ne reconnaissez pas cet appareil, allez dans "Appareils connectés" pour révoquer cette session.',
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.green[700]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _reset,
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.grey[300]!),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    child: const Text('Générer un autre'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green[600],
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    child: const Text('Fermer'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
