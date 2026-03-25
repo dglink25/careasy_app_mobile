@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ══════════════════════════════════════════════════════
-         PERMISSIONS
-    ══════════════════════════════════════════════════════ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -41,9 +38,6 @@
     <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_READ"/>
     <uses-permission android:name="me.everything.badger.permission.BADGE_COUNT_WRITE"/>
 
-    <!-- ══════════════════════════════════════════════════════
-         QUERIES (Android 11+ package visibility)
-    ══════════════════════════════════════════════════════ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -65,9 +59,6 @@
         <package android:name="com.whatsapp.w4b" />
     </queries>
 
-    <!-- ══════════════════════════════════════════════════════
-         APPLICATION
-    ══════════════════════════════════════════════════════ -->
     <application
         android:usesCleartextTraffic="true"
         android:label="CarEasy"
@@ -91,31 +82,18 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
-            <!-- ── Icône de la notification dans la barre de statut ────────
-                 Fichier : android/app/src/main/res/drawable/ic_stat_notification.png
-                 DOIT être monochrome blanc sur fond transparent (Android 5+)
-                 Tailles recommandées :
-                   mdpi    : 24×24 px
-                   hdpi    : 36×36 px
-                   xhdpi   : 48×48 px
-                   xxhdpi  : 72×72 px
-                   xxxhdpi : 96×96 px
-            ─────────────────────────────────────────────────────────────── -->
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_icon"
                 android:resource="@drawable/ic_stat_notification" />
 
-            <!-- Couleur de fond de l'icône de notification
-                 Fichier : android/app/src/main/res/values/colors.xml
-                 Ajouter : <color name="notification_color">#C0392B</color>
-            -->
+    
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_color"
                 android:resource="@color/notification_color" />
 
             <meta-data
                 android:name="com.google.firebase.messaging.default_notification_channel_id"
-                android:value="high_importance_channel" />
+                android:value="careasy_default" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
