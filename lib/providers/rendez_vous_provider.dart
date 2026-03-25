@@ -7,7 +7,6 @@ import '../services/rendez_vous_service.dart';
 class RendezVousProvider extends ChangeNotifier {
   final _service = RendezVousService();
 
-  // ── State ─────────────────────────────────────────────────────────────────
   List<RendezVousModel> _rendezVous = [];
   List<RendezVousModel> get rendezVous => _rendezVous;
 
@@ -20,21 +19,18 @@ class RendezVousProvider extends ChangeNotifier {
   RendezVousModel? _selected;
   RendezVousModel? get selected => _selected;
 
-  String _filter = 'all'; // all | pending | confirmed | cancelled | completed
+  String _filter = 'all';
   String get filter => _filter;
 
-  // ── Computed ──────────────────────────────────────────────────────────────
   List<RendezVousModel> get filtered {
     if (_filter == 'all') return _rendezVous;
     return _rendezVous.where((r) => r.status == _filter).toList();
   }
 
-  int get countPending   => _rendezVous.where((r) => r.isPending).length;
+  int get countPending => _rendezVous.where((r) => r.isPending).length;
   int get countConfirmed => _rendezVous.where((r) => r.isConfirmed).length;
   int get countCancelled => _rendezVous.where((r) => r.isCancelled).length;
   int get countCompleted => _rendezVous.where((r) => r.isCompleted).length;
-
-  // ── Actions ───────────────────────────────────────────────────────────────
 
   void setFilter(String f) {
     _filter = f;
@@ -80,19 +76,19 @@ class RendezVousProvider extends ChangeNotifier {
     required String startTime,
     required String endTime,
     String? clientNotes,
-    String? phone,                 // ← AJOUT
+    String? phone,
   }) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
     try {
       final rdv = await _service.createRendezVous(
-        serviceId  : serviceId,
-        date       : date,
-        startTime  : startTime,
-        endTime    : endTime,
+        serviceId: serviceId,
+        date: date,
+        startTime: startTime,
+        endTime: endTime,
         clientNotes: clientNotes,
-        phone      : phone,        // ← AJOUT
+        phone: phone,
       );
       _rendezVous.insert(0, rdv);
       _isLoading = false;
@@ -118,7 +114,6 @@ class RendezVousProvider extends ChangeNotifier {
     return _performAction(id, () => _service.completeRendezVous(id));
   }
 
-  /// Met à jour l'item dans la liste + l'item sélectionné
   Future<bool> _performAction(
       String id, Future<RendezVousModel> Function() action) async {
     _error = null;
@@ -137,11 +132,81 @@ class RendezVousProvider extends ChangeNotifier {
     }
   }
 
-  /// Appelé par les notifications Pusher / FCM pour mettre à jour un RDV live
+  Future<bool> submitReview({
+    required String rdvId,
+    required int rating,
+    String? comment,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final updatedRdv = await _service.submitReview(
+        rdvId: rdvId,
+        rating: rating,
+        comment: comment,
+      );
+
+      final idx = _rendezVous.indexWhere((r) => r.id == rdvId);
+      if (idx != -1) {
+        _rendezVous[idx] = updatedRdv;
+      }
+
+      if (_selected?.id == rdvId) {
+        _selected = updatedRdv;
+      }
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> reportReview({
+    required String rdvId,
+    required String reason,
+    String? details,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final updatedRdv = await _service.reportReview(
+        rdvId: rdvId,
+        reason: reason,
+        details: details,
+      );
+
+      final idx = _rendezVous.indexWhere((r) => r.id == rdvId);
+      if (idx != -1) {
+        _rendezVous[idx] = updatedRdv;
+      }
+
+      if (_selected?.id == rdvId) {
+        _selected = updatedRdv;
+      }
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   void updateFromNotification(Map<String, dynamic> data) {
     final rdvId = data['rdv_id']?.toString();
     if (rdvId == null) return;
-    // Recharger le RDV concerné depuis l'API
     _service.fetchRendezVous(rdvId).then((updated) {
       final idx = _rendezVous.indexWhere((r) => r.id == rdvId);
       if (idx != -1) {

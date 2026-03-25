@@ -12,7 +12,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 import '../utils/constants.dart';
 
-const String _kFcmManifestChannelId = 'high_importance_channel'; // pour FCM background OS
+const String _kFcmManifestChannelId = 'high_importance_channel';
 const String _kChannelPrefix        = 'careasy';
 const String _kChannelName          = 'Notifications CarEasy';
 const String _kChannelDesc          = 'Notifications de CarEasy';
@@ -27,16 +27,13 @@ String _channelIdForSound(String soundName) {
   return '${_kChannelPrefix}_$soundName';
 }
 
-
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-
   if (message.notification != null) {
     debugPrint('[FCM BG] Notif affichée par OS: ${message.notification?.title}');
     return;
   }
 
-  // Data-only → on affiche manuellement avec le son personnalisé
   debugPrint('[FCM BG] Data-only message reçu...');
   try {
     const storage = FlutterSecureStorage(
@@ -53,15 +50,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
     final p = plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
-
-    // Créer le canal avec le bon son si inexistant
     await _ensureChannelExists(p, channelId, soundName);
 
     final data  = message.data;
     final title = data['title']?.toString() ?? 'CarEasy';
     final body  = data['body']?.toString()  ?? 'Nouvelle notification';
 
-    // Son à passer dans AndroidNotificationDetails
     final AndroidNotificationSound? sound = _buildSound(soundName);
 
     await plugin.show(
@@ -75,7 +69,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
           importance:      Importance.high,
           priority:        Priority.high,
           playSound:       true,
-          sound:           sound,       // ← son personnalisé
+          sound:           sound,
           enableVibration: true,
           icon:            _kSmallIcon,
           largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
@@ -89,7 +83,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ),
       payload: jsonEncode(data),
     );
-    debugPrint('[FCM BG] Notif affichée | canal: $channelId | son: $soundName');
   } catch (e) {
     debugPrint('[FCM BG] Erreur: $e');
   }
@@ -100,9 +93,8 @@ void _onBgNotifTap(NotificationResponse response) {
   debugPrint('[Notif BG Tap] payload: ${response.payload}');
 }
 
-
 AndroidNotificationSound? _buildSound(String soundName) {
-  if (soundName == 'default') return null; // → son système du téléphone
+  if (soundName == 'default') return null;
   if (soundName.startsWith('/')) {
     return UriAndroidNotificationSound('file://$soundName');
   }
@@ -118,7 +110,7 @@ Future<void> _ensureChannelExists(
   try {
     final existing = await p.getNotificationChannels() ?? [];
     final alreadyExists = existing.any((ch) => ch.id == channelId);
-    if (alreadyExists) return; // déjà créé avec le bon son
+    if (alreadyExists) return;
 
     await p.createNotificationChannel(AndroidNotificationChannel(
       channelId, _kChannelName,
@@ -128,13 +120,12 @@ Future<void> _ensureChannelExists(
       enableVibration: true,
       sound:           _buildSound(soundName),
     ));
-    debugPrint('[NotifService] Canal créé: $channelId (son: $soundName)');
   } catch (e) {
     debugPrint('[NotifService] _ensureChannelExists: $e');
   }
 }
 
-
+// ─── Préférences de son ───────────────────────────────────────────────────────
 class NotificationSoundPrefs {
   static const _storage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -157,13 +148,10 @@ class NotificationSoundPrefs {
 
   static Future<bool>   getUseCustomSound()  async =>
       (await _storage.read(key: _keyUseCustom)) == 'true';
-
   static Future<String> getCustomSoundName() async =>
       (await _storage.read(key: _keySoundName)) ?? 'default';
-
   static Future<String> getCustomSoundLabel() async =>
       (await _storage.read(key: _keySoundLabel)) ?? 'Son du téléphone (défaut)';
-
   static Future<String?> getCustomMp3Path() async =>
       _storage.read(key: _keyCustomMp3);
 
@@ -184,6 +172,7 @@ class NotificationSoundPrefs {
   }
 }
 
+
 class NotificationService {
   static final NotificationService _inst = NotificationService._internal();
   factory NotificationService() => _inst;
@@ -197,12 +186,15 @@ class NotificationService {
   final _storage = const FlutterSecureStorage(aOptions: _aOpts, iOptions: _iOpts);
   final AudioPlayer _previewPlayer = AudioPlayer();
 
+  // ── Callback de navigation (défini dans main.dart) ─────────────────────────
+  // Appelé quand l'utilisateur tape sur une notification locale
   Function(Map<String, dynamic>)? onNotificationTap;
 
   bool _initialized = false;
   int  _badgeCount  = 0;
   int  get badgeCount => _badgeCount;
 
+  // ── INITIALISATION ─────────────────────────────────────────────────────────
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -231,7 +223,6 @@ class NotificationService {
     _initialized = true;
 
     if (Platform.isAndroid) {
-      // Créer le canal pour le son actuellement sélectionné
       await _setupCurrentChannel();
       await _local
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
@@ -248,7 +239,6 @@ class NotificationService {
     debugPrint('[NotifService] Initialisé');
   }
 
-
   Future<void> _setupCurrentChannel() async {
     final p = _local.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
@@ -257,23 +247,18 @@ class NotificationService {
     final soundName = await NotificationSoundPrefs.getCustomSoundName();
     final activeId  = _channelIdForSound(soundName);
 
-    // Supprimer les anciens canaux 'careasy_*' obsolètes
     try {
       final existing = await p.getNotificationChannels() ?? [];
       for (final ch in existing) {
         if (ch.id.startsWith(_kChannelPrefix) && ch.id != activeId) {
           await p.deleteNotificationChannel(ch.id);
-          debugPrint('[NotifService] Canal obsolète supprimé: ${ch.id}');
         }
       }
     } catch (_) {}
 
-    // Créer le canal actif si nécessaire
     await _ensureChannelExists(p, activeId, soundName);
   }
 
-  /// Appelé par NotificationsSettingsScreen après un changement de son.
-  /// Crée le nouveau canal (l'ancien est supprimé au prochain démarrage ou ici).
   Future<void> updateNotificationChannel() async {
     if (!Platform.isAndroid) return;
     final p = _local.resolvePlatformSpecificImplementation<
@@ -283,54 +268,44 @@ class NotificationService {
     final soundName = await NotificationSoundPrefs.getCustomSoundName();
     final activeId  = _channelIdForSound(soundName);
 
-    // Supprimer les anciens canaux 'careasy_*' sauf le nouveau
     try {
       final existing = await p.getNotificationChannels() ?? [];
       for (final ch in existing) {
         if (ch.id.startsWith(_kChannelPrefix) && ch.id != activeId) {
           await p.deleteNotificationChannel(ch.id);
-          debugPrint('[NotifService] Canal supprimé: ${ch.id}');
         }
       }
     } catch (_) {}
 
-    // Forcer la recréation du canal actif
-    // (supprimer d'abord au cas où il existait déjà avec un mauvais son)
-    try {
-      await p.deleteNotificationChannel(activeId);
-    } catch (_) {}
-
+    try { await p.deleteNotificationChannel(activeId); } catch (_) {}
     await _ensureChannelExists(p, activeId, soundName);
-    debugPrint('[NotifService] Canal mis à jour: $activeId (son: $soundName)');
   }
 
+  // ── FIREBASE MESSAGING ─────────────────────────────────────────────────────
   Future<void> _initFCM() async {
     try {
       final settings = await _fcm.requestPermission(
         alert: true, badge: true, sound: true, provisional: false,
       );
-      debugPrint('[FCM] Permission: ${settings.authorizationStatus}');
       if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
-      // iOS : afficher les notifs FCM en foreground
       await _fcm.setForegroundNotificationPresentationOptions(
         alert: true, badge: true, sound: true,
       );
 
-      // FOREGROUND : l'app est ouverte → FCM ne montre rien automatiquement
-      // On affiche via flutter_local_notifications avec le son personnalisé
+      // Foreground FCM → afficher avec son personnalisé
       FirebaseMessaging.onMessage.listen((msg) {
         debugPrint('[FCM FG] ${msg.notification?.title ?? msg.data['title']}');
         _showFcmAsLocal(msg);
       });
 
-      // BACKGROUND TAP : l'app était en arrière-plan
+      // Background tap
       FirebaseMessaging.onMessageOpenedApp.listen((msg) {
         debugPrint('[FCM] App ouverte depuis notif background');
         _handleFcmTap(msg.data);
       });
 
-      // TERMINATED TAP : l'app était fermée
+      // Terminated tap
       final initial = await _fcm.getInitialMessage();
       if (initial != null) {
         Future.delayed(
@@ -346,7 +321,6 @@ class NotificationService {
     }
   }
 
-  /// FCM reçu en foreground → afficher avec le son personnalisé
   Future<void> _showFcmAsLocal(RemoteMessage message) async {
     final data  = message.data;
     final notif = message.notification;
@@ -358,8 +332,16 @@ class NotificationService {
     final rdvId  = data['rdv_id']?.toString() ?? '';
     final convId = data['conversation_id']?.toString() ?? '';
 
+    // Routage par type
     if (type == 'review_request') {
       await showReviewRequestNotification(
+        rdvId:       rdvId,
+        serviceName: data['service_name']?.toString() ?? 'le service',
+      );
+      return;
+    }
+    if (type == 'rdv_complete_reminder') {
+      await showRdvCompleteReminder(
         rdvId:       rdvId,
         serviceName: data['service_name']?.toString() ?? 'le service',
       );
@@ -369,7 +351,7 @@ class NotificationService {
       await showRdvNotification(title: title, body: body, rdvId: rdvId, type: type);
       return;
     }
-    // Message ou autre
+    // Message
     await showNotification(
       id: convId.isNotEmpty
           ? convId.hashCode.abs() % 10000 + 1000
@@ -446,6 +428,7 @@ class NotificationService {
     }
   }
 
+  // ── AFFICHAGE DE NOTIFICATION ──────────────────────────────────────────────
   Future<void> showNotification({
     required int    id,
     required String title,
@@ -462,7 +445,6 @@ class NotificationService {
       final channelId = _channelIdForSound(soundName);
       final sound     = _buildSound(soundName);
 
-      // S'assurer que le canal existe avec le bon son
       final p = _local.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (Platform.isAndroid) {
@@ -480,7 +462,7 @@ class NotificationService {
             importance:      Importance.high,
             priority:        Priority.high,
             playSound:       true,
-            sound:           sound,          // ← son personnalisé (null = son système)
+            sound:           sound,
             enableVibration: true,
             icon:            _kSmallIcon,
             largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
@@ -499,10 +481,9 @@ class NotificationService {
         ),
         payload: payload,
       );
-      debugPrint('[NotifService] ✅ "$title" | canal: $channelId | son: $soundName');
+      debugPrint('[NotifService] ✅ "$title"');
     } catch (e) {
       debugPrint('[NotifService] showNotification error: $e');
-      // Fallback minimal
       try {
         await _local.show(
           id, title, body,
@@ -525,6 +506,7 @@ class NotificationService {
     }
   }
 
+  // ── NOTIFICATION MESSAGE ───────────────────────────────────────────────────
   Future<void> showMessageNotification({
     required String senderName,
     required String messageBody,
@@ -546,6 +528,7 @@ class NotificationService {
     );
   }
 
+  // ── NOTIFICATION RDV (statut changé) ──────────────────────────────────────
   Future<void> showRdvNotification({
     required String title,
     required String body,
@@ -566,13 +549,31 @@ class NotificationService {
   }) async {
     await showNotification(
       id:      _buildNotifId('review_request', {'rdv_id': rdvId}),
-      title:   '⭐ Votre avis nous intéresse !',
-      body:    "Comment s'est passé votre RDV pour $serviceName ?",
-      payload: jsonEncode({'type': 'review_request', 'rdv_id': rdvId}),
+      title:   'Comment s\'est passé votre RDV ?',
+      body:    'Notez "$serviceName" et partagez votre expérience !',
+      payload: jsonEncode({
+        'type':   'review_request',
+        'rdv_id': rdvId,
+      }),
     );
   }
 
-  // ── Rappel planifié ────────────────────────────────────────────────────────
+  // Envoyée 1h après la fin du RDV
+  Future<void> showRdvCompleteReminder({
+    required String rdvId,
+    required String serviceName,
+  }) async {
+    await showNotification(
+      id:      _buildNotifId('rdv_complete_reminder', {'rdv_id': rdvId}),
+      title:   'Rendez-vous terminé ?',
+      body:    'N\'oubliez pas de marquer "$serviceName" comme terminé.',
+      payload: jsonEncode({
+        'type':   'rdv_complete_reminder',
+        'rdv_id': rdvId,
+      }),
+    );
+  }
+
   Future<void> scheduleRdvReminder({
     required String rdvId,
     required String rdvDate,
@@ -591,9 +592,101 @@ class NotificationService {
         int.tryParse(parts[0]) ?? 0,
         int.tryParse(parts[1]) ?? 0,
       );
-      final reminderTime = rdvDT.subtract(const Duration(hours: 1));
-      if (reminderTime.isBefore(tz.TZDateTime.now(tz.local))) {
-        debugPrint('[NotifService] Rappel ignoré (heure passée)');
+
+      final now = tz.TZDateTime.now(tz.local);
+
+      // ── Rappel 1h AVANT le début ───────────────────────────────────────
+      final reminderBefore = rdvDT.subtract(const Duration(hours: 1));
+      if (reminderBefore.isAfter(now)) {
+        final soundName = await NotificationSoundPrefs.getCustomSoundName();
+        final channelId = _channelIdForSound(soundName);
+        final sound     = _buildSound(soundName);
+
+        final p = _local.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        if (Platform.isAndroid) {
+          await _ensureChannelExists(p, channelId, soundName);
+        }
+
+        await _local.zonedSchedule(
+          _buildNotifId('rdv_reminder_before', {'rdv_id': rdvId}),
+          '⏰ Rappel rendez-vous',
+          isPrestataire
+              ? 'Votre client arrive pour "$serviceName" dans 1 heure !'
+              : 'Votre rendez-vous pour "$serviceName" commence dans 1 heure !',
+          reminderBefore,
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              channelId, _kChannelName,
+              channelDescription: _kChannelDesc,
+              importance: Importance.high,
+              priority:   Priority.high,
+              playSound:  true,
+              sound:      sound,
+              icon:       _kSmallIcon,
+              largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+              color:      const Color(0xFFC0392B),
+              autoCancel: true,
+            ),
+            iOS: const DarwinNotificationDetails(
+              presentAlert: true, presentBadge: true, presentSound: true,
+            ),
+          ),
+          payload: jsonEncode({
+            'type':   'rdv_reminder',
+            'rdv_id': rdvId,
+          }),
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+        );
+        debugPrint('[NotifService] ✅ Rappel AVANT planifié: $rdvDate $rdvTime');
+      } else {
+        debugPrint('[NotifService] Rappel AVANT ignoré (heure passée)');
+      }
+
+      // ── Rappel 1h APRÈS la fin (PRESTATAIRE uniquement) ─────────────────
+      // Envoyé pour rappeler au prestataire de marquer le RDV comme terminé
+      if (isPrestataire) {
+        await scheduleCompleteReminder(
+          rdvId:       rdvId,
+          rdvDate:     rdvDate,
+          rdvEndTime:  rdvTime, // La fin = heure de début si pas d'heure de fin connue ici
+          serviceName: serviceName,
+        );
+      }
+
+    } catch (e) {
+      debugPrint('[NotifService] scheduleRdvReminder: $e');
+    }
+  }
+
+  // ── RAPPEL APRÈS FIN DE RDV pour le prestataire ────────────────────────────
+  // Planifié 1h après l'heure de FIN du RDV
+  Future<void> scheduleCompleteReminder({
+    required String rdvId,
+    required String rdvDate,
+    required String rdvEndTime,   // heure de FIN (ex: "15:30")
+    required String serviceName,
+  }) async {
+    try {
+      final parts     = rdvEndTime.split(':');
+      final dateParts = rdvDate.split('-');
+      final endDT = tz.TZDateTime(
+        tz.local,
+        int.parse(dateParts[0]),
+        int.parse(dateParts[1]),
+        int.parse(dateParts[2]),
+        int.tryParse(parts[0]) ?? 0,
+        int.tryParse(parts[1]) ?? 0,
+      );
+
+      // 1h après la fin
+      final reminderAfter = endDT.add(const Duration(hours: 1));
+      final now = tz.TZDateTime.now(tz.local);
+
+      if (!reminderAfter.isAfter(now)) {
+        debugPrint('[NotifService] Rappel APRÈS ignoré (heure passée)');
         return;
       }
 
@@ -601,7 +694,6 @@ class NotificationService {
       final channelId = _channelIdForSound(soundName);
       final sound     = _buildSound(soundName);
 
-      // S'assurer que le canal existe
       final p = _local.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
       if (Platform.isAndroid) {
@@ -609,12 +701,10 @@ class NotificationService {
       }
 
       await _local.zonedSchedule(
-        _buildNotifId('rdv_reminder', {'rdv_id': rdvId}),
-        '⏰ Rappel rendez-vous',
-        isPrestataire
-            ? 'Rappel : rendez-vous pour $serviceName dans 1h'
-            : 'Votre rendez-vous pour $serviceName commence dans 1 heure !',
-        reminderTime,
+        _buildNotifId('rdv_complete_reminder', {'rdv_id': rdvId}),
+        '✅ Rendez-vous terminé ?',
+        'N\'oubliez pas de marquer "$serviceName" comme terminé.',
+        reminderAfter,
         NotificationDetails(
           android: AndroidNotificationDetails(
             channelId, _kChannelName,
@@ -632,23 +722,47 @@ class NotificationService {
             presentAlert: true, presentBadge: true, presentSound: true,
           ),
         ),
-        payload: jsonEncode({'type': 'rdv_reminder', 'rdv_id': rdvId}),
+        payload: jsonEncode({
+          'type':   'rdv_complete_reminder',
+          'rdv_id': rdvId,
+        }),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
-      debugPrint('[NotifService] ✅ Rappel planifié: $rdvDate $rdvTime | son: $soundName');
+      debugPrint('[NotifService] ✅ Rappel APRÈS planifié: $rdvDate $rdvEndTime + 1h');
     } catch (e) {
-      debugPrint('[NotifService] scheduleRdvReminder: $e');
+      debugPrint('[NotifService] scheduleCompleteReminder: $e');
     }
   }
 
+  // ── Annuler les rappels d'un RDV ──────────────────────────────────────────
   Future<void> cancelRdvReminder(String rdvId) async {
     try {
-      await _local.cancel(_buildNotifId('rdv_reminder', {'rdv_id': rdvId}));
-    } catch (_) {}
+      await _local.cancel(_buildNotifId('rdv_reminder_before',    {'rdv_id': rdvId}));
+      await _local.cancel(_buildNotifId('rdv_complete_reminder',  {'rdv_id': rdvId}));
+      debugPrint('[NotifService] Rappels annulés pour RDV $rdvId');
+    } catch (e) {
+      debugPrint('[NotifService] cancelRdvReminder: $e');
+    }
   }
 
+  // ─── Méthode de compatibilité (ancien nom) ────────────────────────────────
+  Future<void> scheduleRdvReminderCompat({
+    required String rdvId,
+    required String rdvDate,
+    required String rdvTime,
+    required String serviceName,
+    required bool   isPrestataire,
+  }) => scheduleRdvReminder(
+    rdvId:        rdvId,
+    rdvDate:      rdvDate,
+    rdvTime:      rdvTime,
+    serviceName:  serviceName,
+    isPrestataire: isPrestataire,
+  );
+
+  // ── Badge ─────────────────────────────────────────────────────────────────
   Future<void> updateAppBadge(int count) async {
     _badgeCount = count > 0 ? count : 0;
     if (Platform.isIOS && _initialized) {
@@ -676,22 +790,19 @@ class NotificationService {
 
   Future<void> clearBadge() async => updateAppBadge(0);
 
-
+  // ── Aperçu son ────────────────────────────────────────────────────────────
   Future<void> playSoundPreview(String soundName) async {
     try {
       await _previewPlayer.stop();
 
       if (soundName == 'default') {
-        // Pour le son système : envoyer une vraie notification silencieuse
-        // qui laisse l'OS jouer son propre son de notification.
-        // On utilise le canal careasy_default (sans son forcé → son système).
         final p = _local.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
         if (Platform.isAndroid) {
           await _ensureChannelExists(p, 'careasy_default', 'default');
         }
         await _local.show(
-          88888, // ID fixe pour la preview
+          88888,
           'Aperçu son',
           'Son système par défaut du téléphone',
           const NotificationDetails(
@@ -701,7 +812,7 @@ class NotificationService {
               importance:      Importance.high,
               priority:        Priority.high,
               playSound:       true,
-              sound:           null, // → son système
+              sound:           null,
               enableVibration: false,
               icon:            _kSmallIcon,
               autoCancel:      true,
@@ -712,29 +823,25 @@ class NotificationService {
             ),
           ),
         );
-        debugPrint('[NotifService] Preview: son système du téléphone');
         return;
       }
 
-      // Son uploadé (chemin absolu)
       if (soundName.startsWith('/')) {
         await _previewPlayer.play(DeviceFileSource(soundName), volume: 1.0);
-        debugPrint('[NotifService] Preview: fichier $soundName');
         return;
       }
 
-      // Son prédéfini dans assets/sounds/
       try {
         await _previewPlayer.play(AssetSource('sounds/$soundName.mp3'), volume: 1.0);
       } catch (_) {
         await _previewPlayer.play(AssetSource('sounds/$soundName.wav'), volume: 1.0);
       }
-      debugPrint('[NotifService] Preview: $soundName');
     } catch (e) {
       debugPrint('[NotifService] playSoundPreview($soundName): $e');
     }
   }
 
+  // ── Annuler une notification ──────────────────────────────────────────────
   Future<void> cancelNotification(dynamic id) async {
     try {
       final intId = id is int ? id : id.toString().hashCode.abs() % 10000 + 1000;
@@ -747,26 +854,40 @@ class NotificationService {
     try { await _local.cancelAll(); } catch (_) {}
   }
 
+  // ── GESTION DES TAPS ──────────────────────────────────────────────────────
+  // Appelé quand l'utilisateur tape sur une notification locale
   void _handleLocalTap(String? payload) {
     if (payload == null || payload.isEmpty) return;
     if (_badgeCount > 0) _badgeCount--;
+
     try {
-      onNotificationTap?.call(jsonDecode(payload) as Map<String, dynamic>);
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      debugPrint('[NotifService] Tap → type=${data['type']} rdv_id=${data['rdv_id']}');
+      onNotificationTap?.call(data);
     } catch (_) {
       onNotificationTap?.call({'conversation_id': payload});
     }
   }
 
+  // Appelé quand l'utilisateur tape sur une notif FCM (background/terminated)
   void _handleFcmTap(Map<String, dynamic> data) {
     final type  = data['type']?.toString() ?? '';
     final rdvId = data['rdv_id']?.toString() ?? '';
-    if (type == 'review_request' || type.startsWith('rdv_') || rdvId.isNotEmpty) {
+
+    debugPrint('[NotifService] FCM Tap → type=$type rdv_id=$rdvId');
+
+    if (type == 'review_request'      ||
+        type == 'rdv_complete_reminder'||
+        type.startsWith('rdv_')       ||
+        rdvId.isNotEmpty) {
       onNotificationTap?.call({'type': type, 'rdv_id': rdvId});
       return;
     }
+
     final convId = data['conversation_id']?.toString() ?? '';
     if (convId.isNotEmpty) {
       onNotificationTap?.call({
+        'type':            'message',
         'conversation_id': convId,
         'sender_name':     data['sender_name']  ?? '',
         'sender_photo':    data['sender_photo'] ?? '',
@@ -776,19 +897,24 @@ class NotificationService {
   }
 }
 
-// ─── Helpers internes ────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 int _buildNotifId(String type, Map<String, dynamic> data) {
   final rdvId  = data['rdv_id']?.toString() ?? '';
   final convId = data['conversation_id']?.toString() ?? '';
-  if (type == 'rdv_reminder')   return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 30000).abs();
-  if (type == 'review_request') return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 40000).abs();
-  if (type.startsWith('rdv_'))  return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 20000).abs();
-  return convId.isNotEmpty
-      ? convId.hashCode.abs() % 10000 + 1000
-      : DateTime.now().millisecondsSinceEpoch ~/ 1000 % 10000;
+
+  switch (type) {
+    case 'rdv_reminder_before':    return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 30000).abs();
+    case 'rdv_complete_reminder':  return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 35000).abs();
+    case 'review_request':         return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 40000).abs();
+    default:
+      if (type.startsWith('rdv_')) return ((rdvId.isNotEmpty ? rdvId.hashCode : 0) + 20000).abs();
+      return convId.isNotEmpty
+          ? convId.hashCode.abs() % 10000 + 1000
+          : DateTime.now().millisecondsSinceEpoch ~/ 1000 % 10000;
+  }
 }
 
-
+// ─── Référence statique (accès depuis Pusher sans import circulaire) ──────────
 class NotificationServiceRef {
   static Future<void> Function({
     required int    id,

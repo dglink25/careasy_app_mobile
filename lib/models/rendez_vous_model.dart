@@ -22,6 +22,9 @@ class RendezVousModel {
   final Map<String, dynamic>? client;
   final Map<String, dynamic>? prestataire;
   final Map<String, dynamic>? entreprise;
+  
+  // Nouveau: relation review
+  final Map<String, dynamic>? review;
 
   const RendezVousModel({
     required this.id,
@@ -43,6 +46,7 @@ class RendezVousModel {
     this.client,
     this.prestataire,
     this.entreprise,
+    this.review,
   });
 
   factory RendezVousModel.fromJson(Map<String, dynamic> json) {
@@ -66,6 +70,7 @@ class RendezVousModel {
       client         : json['client']   is Map ? Map<String, dynamic>.from(json['client']   as Map) : null,
       prestataire    : json['prestataire'] is Map ? Map<String, dynamic>.from(json['prestataire'] as Map) : null,
       entreprise     : json['entreprise'] is Map ? Map<String, dynamic>.from(json['entreprise'] as Map) : null,
+      review         : json['review']  is Map ? Map<String, dynamic>.from(json['review']   as Map) : null,
     );
   }
 
@@ -80,6 +85,12 @@ class RendezVousModel {
   bool get isCancelled => status == 'cancelled';
   bool get isCompleted => status == 'completed';
   bool get canBeCancelled => status == 'pending' || status == 'confirmed';
+  
+  // Nouveau: vérifier si le rendez-vous a déjà été noté
+  bool get hasReview => review != null;
+  int? get reviewRating => review?['rating'] as int?;
+  String? get reviewComment => review?['comment']?.toString();
+  bool? get reviewReported => review?['reported'] as bool?;
 
   String get serviceName   => service?['name']?.toString()   ?? '—';
   String get entrepriseName => entreprise?['name']?.toString() ?? '—';
@@ -114,7 +125,6 @@ class RendezVousModel {
   String get timeRange => '$startTime – $endTime';
 }
 
-// ── Modèle pour un créneau disponible ────────────────────────────────────────
 class TimeSlot {
   final String start;
   final String end;
