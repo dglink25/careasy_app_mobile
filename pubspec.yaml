@@ -83,6 +83,7 @@ dependencies:
   share_plus: ^7.2.1
   path: ^1.9.0
   lottie: ^2.7.0  # Pour les animations
+  qr_flutter: ^4.1.0
 
  
 
