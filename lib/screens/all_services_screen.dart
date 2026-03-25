@@ -7,14 +7,13 @@ import 'dart:async';
 import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
 import 'package:careasy_app_mobile/screens/home_screen.dart';
 
-// ─────────────────────────────────────────────
-//  Enum pour les options de tri
-// ─────────────────────────────────────────────
+
 enum SortOption {
   newest,
   priceAsc,
   priceDesc,
   nameAsc,
+  topRated, 
 }
 
 extension SortOptionLabel on SortOption {
@@ -28,6 +27,7 @@ extension SortOptionLabel on SortOption {
         return 'Prix décroissant';
       case SortOption.nameAsc:
         return 'Nom (A → Z)';
+      case SortOption.topRated:  return 'Mieux recommandé';
     }
   }
 
@@ -41,6 +41,7 @@ extension SortOptionLabel on SortOption {
         return Icons.arrow_downward;
       case SortOption.nameAsc:
         return Icons.sort_by_alpha;
+      case SortOption.topRated:  return Icons.star;  
     }
   }
 }
@@ -190,6 +191,7 @@ class _AllServicesScreenState extends State<AllServicesScreen> {
     }
 
     // 3. Tri
+
     list.sort((a, b) {
       switch (_sortOption) {
         case SortOption.priceAsc:
@@ -208,10 +210,13 @@ class _AllServicesScreenState extends State<AllServicesScreen> {
           return pb.compareTo(pa);
         case SortOption.nameAsc:
           return (a['name'] ?? '').toString().compareTo(
-                (b['name'] ?? '').toString(),
-              );
+                (b['name'] ?? '').toString());
+        case SortOption.topRated: // ⭐ NOUVEAU
+          final ra = (a['total_stars'] ?? 0) as int;
+          final rb = (b['total_stars'] ?? 0) as int;
+          return rb.compareTo(ra);
         case SortOption.newest:
-          return 0; // ordre API (déjà desc)
+          return 0;
       }
     });
 

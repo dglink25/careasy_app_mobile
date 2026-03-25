@@ -77,4 +77,40 @@ class _StarRatingState extends State<StarRating> {
       ),
     );
   }
+
+
+  /// Affiche les étoiles + le nombre d'avis
+  Widget _buildStarRating(Map<String, dynamic> service) {
+    final totalReviews = (service['total_reviews'] ?? 0) as int;
+    final averageRating = service['average_rating'];
+
+    if (totalReviews == 0) return const SizedBox.shrink();
+
+    final double avg = averageRating != null
+        ? double.tryParse(averageRating.toString()) ?? 0.0
+        : 0.0;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Étoiles
+        ...List.generate(5, (i) {
+          if (i < avg.floor()) {
+            return const Icon(Icons.star, size: 13, color: Colors.amber);
+          } else if (i < avg && (avg - avg.floor()) >= 0.5) {
+            return const Icon(Icons.star_half, size: 13, color: Colors.amber);
+          } else {
+            return Icon(Icons.star_border, size: 13, color: Colors.grey[400]);
+          }
+        }),
+        const SizedBox(width: 4),
+        Text(
+          '$avg ($totalReviews)',
+          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+        ),
+      ],
+    );
+  }
+
+
 }
