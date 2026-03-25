@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:careasy_app_mobile/utils/constants.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -19,7 +20,9 @@ class EditServiceScreen extends StatefulWidget {
 
 class _EditServiceScreenState extends State<EditServiceScreen>
     with TickerProviderStateMixin {
-  final _storage = const FlutterSecureStorage();
+  static const _aOpts = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOpts = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  final _storage = const FlutterSecureStorage(aOptions: _aOpts, iOptions: _iOpts);
   final _pageController = PageController();
   int _currentStep = 0;
   bool _isSubmitting = false;
@@ -242,8 +245,8 @@ class _EditServiceScreenState extends State<EditServiceScreen>
         return;
       }
       
-      print('Token utilisé pour update: $token');
-      print('Service ID: ${widget.service['id']}');
+      debugPrint('Token lu (${token.length} chars): ${token.substring(0, 20)}...');
+      debugPrint('Service ID: ${widget.service['id']}');
       
       // Construction des données
       final Map<String, dynamic> data = {};
@@ -251,6 +254,8 @@ class _EditServiceScreenState extends State<EditServiceScreen>
       data['name'] = _nameCtrl.text.trim();
       if (_descCtrl.text.trim().isNotEmpty) {
         data['descriptions'] = _descCtrl.text.trim();
+      } else {
+        data['descriptions'] = '';
       }
       data['is_price_on_request'] = _isPriceOnRequest;
       
@@ -261,8 +266,12 @@ class _EditServiceScreenState extends State<EditServiceScreen>
         data['has_promo'] = _hasPromo;
         if (_hasPromo && _promoCtrl.text.isNotEmpty) {
           data['price_promo'] = double.parse(_promoCtrl.text.trim());
+        } else {
+          data['price_promo'] = null;
         }
       } else {
+        data['price'] = null;
+        data['price_promo'] = null;
         data['has_promo'] = false;
       }
       
@@ -290,21 +299,21 @@ class _EditServiceScreenState extends State<EditServiceScreen>
         data['deleted_medias'] = _deletedMediaUrls;
       }
       
-      print('Données envoyées: ${jsonEncode(data)}');
+      debugPrint('Données envoyées: ${jsonEncode(data)}');
       
-      // Envoi de la requête PUT
+      // Envoi de la requête PUT avec timeout
       final response = await http.put(
-        Uri.parse('${AppConstants.apiBaseUrl}/services/${widget.service['id']}'),
+        Uri.parse('${AppConstants.apiBaseUrl}/servicesMobile/${widget.service['id']}'),
         headers: {
           'Authorization': 'Bearer $token',
           'Accept': 'application/json',
           'Content-Type': 'application/json',
         },
         body: jsonEncode(data),
-      );
+      ).timeout(const Duration(seconds: 30));
       
-      print('Status code: ${response.statusCode}');
-      print('Response body: ${response.body}');
+      debugPrint('Status code: ${response.statusCode}');
+      debugPrint('Response body: ${response.body}');
       
       if (response.statusCode == 200 || response.statusCode == 201) {
         if (mounted) {
@@ -318,22 +327,35 @@ class _EditServiceScreenState extends State<EditServiceScreen>
           Navigator.pop(context, true);
         }
       } else if (response.statusCode == 401) {
+        // Token invalide côté serveur → afficher le body pour diagnostic
+        debugPrint('[401] Body: ${response.body}');
         _showError('Session expirée. Veuillez vous reconnecter.');
-      } else {
+      } else if (response.statusCode == 422) {
         try {
-          final errorData = jsonDecode(response.body);
-          String errorMsg = errorData['message'] ?? 'Erreur lors de la mise à jour';
+          final errorData = jsonDecode(response.body) as Map<String, dynamic>;
+          String errorMsg = 'Erreur de validation';
           if (errorData['errors'] != null) {
             final errors = errorData['errors'] as Map;
-            errorMsg = errors.values.first[0];
+            errorMsg = errors.values.first[0].toString();
+          } else if (errorData['message'] != null) {
+            errorMsg = errorData['message'].toString();
           }
           _showError(errorMsg);
+        } catch (_) {
+          _showError('Erreur de validation (${response.statusCode})');
+        }
+      } else {
+        try {
+          final errorData = jsonDecode(response.body) as Map<String, dynamic>;
+          _showError(errorData['message']?.toString() ?? 'Erreur ${response.statusCode}');
         } catch (_) {
           _showError('Erreur ${response.statusCode}');
         }
       }
+    } on TimeoutException {
+      _showError('La requête a expiré. Vérifiez votre connexion.');
     } catch (e) {
-      print('Erreur: $e');
+      debugPrint('Erreur _submit: $e');
       _showError('Erreur de connexion : $e');
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
