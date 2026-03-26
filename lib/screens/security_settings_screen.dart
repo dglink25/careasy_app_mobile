@@ -87,6 +87,8 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
             _buildChangePasswordSection(isSmall),
             const SizedBox(height: 16),
             _buildSecuritySection(isSmall),
+            const SizedBox(height: 16),
+            _buildDangerZone(isSmall),
             const SizedBox(height: 32),
           ],
         ),
@@ -354,6 +356,32 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
     );
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SECTION 3 — ZONE DANGEREUSE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildDangerZone(bool isSmall) {
+    return Container(
+      padding: EdgeInsets.all(isSmall ? 16 : 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.red.withOpacity(0.25)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.red.withOpacity(0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 3))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        
+      
+      ),
+    );
+  }
+
   Future<void> _changePassword() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isChangingPassword = true);
@@ -437,6 +465,108 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
         if (mounted) await context.read<AuthProvider>().logout();
       } else {
         _snack('Erreur lors de la déconnexion', Colors.red);
+      }
+    } catch (_) {
+      _snack('Erreur de connexion', Colors.red);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _confirmDeleteAccount(bool isSmall) async {
+    final pwdCtrl = TextEditingController();
+    bool obscure = true;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red[600], size: 22),
+            const SizedBox(width: 8),
+            const Text('Supprimer le compte',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.red.withOpacity(0.2))),
+                child: Text(
+                    '⚠️ Cette action est IRRÉVERSIBLE. Toutes vos données, '
+                    'rendez-vous et messages seront définitivement supprimés.',
+                    style: TextStyle(fontSize: 12, color: Colors.red[700])),
+              ),
+              const SizedBox(height: 16),
+              const Text('Confirmez votre mot de passe :',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: pwdCtrl,
+                obscureText: obscure,
+                decoration: InputDecoration(
+                  hintText: 'Votre mot de passe',
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Colors.red)),
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined, size: 18),
+                    onPressed: () => setS(() => obscure = !obscure),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text('Annuler', style: TextStyle(color: Colors.grey[600]))),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8))),
+              child: const Text('Supprimer définitivement'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+    if (pwdCtrl.text.isEmpty) {
+      _snack('Veuillez saisir votre mot de passe', Colors.red);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final token = await _getToken();
+      final response = await http
+          .delete(
+            Uri.parse('${AppConstants.apiBaseUrl}/user/account'),
+            headers: _headers(token!),
+            body: jsonEncode({'password': pwdCtrl.text}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        if (mounted) await context.read<AuthProvider>().logout();
+      } else {
+        final data = jsonDecode(response.body);
+        _snack(data['message'] ?? 'Erreur lors de la suppression', Colors.red);
       }
     } catch (_) {
       _snack('Erreur de connexion', Colors.red);

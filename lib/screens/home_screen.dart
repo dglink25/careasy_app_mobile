@@ -796,7 +796,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final isPromoActive = service['is_promo_active'] ?? false;
     final medias        = service['medias'] is List ? service['medias'] : [];
     final curIdx        = _currentImageIndex[index] ?? 0;
-
+aa
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       child: Card(

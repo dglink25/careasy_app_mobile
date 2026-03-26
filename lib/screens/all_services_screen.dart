@@ -692,6 +692,11 @@ class _AllServicesScreenState extends State<AllServicesScreen> {
 
                     const SizedBox(height: 3),
 
+                    // ── Étoiles ─────────────────────────────────
+                    _buildStarRow(service),
+
+                    const SizedBox(height: 3),
+
                     // Horaires
                     Row(
                       children: [
@@ -808,6 +813,38 @@ class _AllServicesScreenState extends State<AllServicesScreen> {
         ),
       ),
     );
+  }
+
+  // ── Ligne d'étoiles ──────────────────────────────────────────────────────
+  Widget _buildStarRow(Map<String, dynamic> service) {
+    final totalReviews  = (service['total_reviews']  as num? ?? 0).toInt();
+    final averageRating = service['average_rating'];
+
+    if (totalReviews == 0 || averageRating == null) {
+      return Row(children: [
+        ...List.generate(5, (_) => Icon(Icons.star_border_rounded, size: 11, color: Colors.grey[350])),
+        const SizedBox(width: 4),
+        Text('Pas encore noté',
+            style: TextStyle(fontSize: 10, color: Colors.grey[400])),
+      ]);
+    }
+
+    final avg   = (averageRating as num).toDouble();
+    final full  = avg.floor();
+    final half  = (avg - full) >= 0.4;
+    final empty = 5 - full - (half ? 1 : 0);
+
+    return Row(children: [
+      ...List.generate(full,  (_) => const Icon(Icons.star_rounded,        size: 11, color: Color(0xFFF59E0B))),
+      if (half)                       const Icon(Icons.star_half_rounded,   size: 11, color: Color(0xFFF59E0B)),
+      ...List.generate(empty, (_) => const Icon(Icons.star_border_rounded, size: 11, color: Color(0xFFF59E0B))),
+      const SizedBox(width: 4),
+      Text('${avg.toStringAsFixed(1)} ($totalReviews)',
+          style: const TextStyle(
+              fontSize: 10,
+              color: Color(0xFFF59E0B),
+              fontWeight: FontWeight.w600)),
+    ]);
   }
 
   Widget _imagePlaceholder() {

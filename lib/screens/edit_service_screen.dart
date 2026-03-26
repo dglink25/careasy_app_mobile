@@ -235,86 +235,92 @@ class _EditServiceScreenState extends State<EditServiceScreen>
   Future<void> _submit() async {
     if (!_validateStep()) return;
     setState(() => _isSubmitting = true);
-    
+
     try {
       final token = await _storage.read(key: 'auth_token');
-      
+
       if (token == null || token.isEmpty) {
         _showError('Session expirée. Veuillez vous reconnecter.');
         setState(() => _isSubmitting = false);
         return;
       }
-      
-      debugPrint('Token lu (${token.length} chars): ${token.substring(0, 20)}...');
+
       debugPrint('Service ID: ${widget.service['id']}');
-      
-      // Construction des données
-      final Map<String, dynamic> data = {};
-      
-      data['name'] = _nameCtrl.text.trim();
-      if (_descCtrl.text.trim().isNotEmpty) {
-        data['descriptions'] = _descCtrl.text.trim();
-      } else {
-        data['descriptions'] = '';
-      }
-      data['is_price_on_request'] = _isPriceOnRequest;
-      
-      if (!_isPriceOnRequest) {
-        if (_priceCtrl.text.isNotEmpty) {
-          data['price'] = double.parse(_priceCtrl.text.trim());
-        }
-        data['has_promo'] = _hasPromo;
-        if (_hasPromo && _promoCtrl.text.isNotEmpty) {
-          data['price_promo'] = double.parse(_promoCtrl.text.trim());
-        } else {
-          data['price_promo'] = null;
-        }
-      } else {
-        data['price'] = null;
-        data['price_promo'] = null;
-        data['has_promo'] = false;
-      }
-      
-      if (_selectedDomaineId != null) {
-        data['domaine_id'] = int.parse(_selectedDomaineId!);
-      }
-      
-      data['is_always_open'] = _isAlwaysOpen;
-      
-      if (!_isAlwaysOpen) {
-        final Map<String, Map<String, dynamic>> schedule = {};
-        for (final day in _daysOrder) {
-          schedule[day] = {
-            'is_open': _dayOpen[day]!,
-          };
-          if (_dayOpen[day]!) {
-            schedule[day]!['start'] = _dayStart[day]!.text;
-            schedule[day]!['end'] = _dayEnd[day]!.text;
-          }
-        }
-        data['schedule'] = schedule;
-      }
-      
-      if (_deletedMediaUrls.isNotEmpty) {
-        data['deleted_medias'] = _deletedMediaUrls;
-      }
-      
-      debugPrint('Données envoyées: ${jsonEncode(data)}');
-      
-      // Envoi de la requête PUT avec timeout
-      final response = await http.put(
-        Uri.parse('${AppConstants.apiBaseUrl}/servicesMobile/${widget.service['id']}'),
-        headers: {
+
+      // ── Multipart request (obligatoire pour les fichiers) ──────────────────
+      final uri = Uri.parse(
+          '${AppConstants.apiBaseUrl}/servicesMobile/${widget.service['id']}');
+
+      // Laravel ne supporte pas PUT multipart nativement → POST + _method=PUT
+      final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll({
           'Authorization': 'Bearer $token',
           'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(data),
-      ).timeout(const Duration(seconds: 30));
-      
+        })
+        ..fields['_method'] = 'PUT'; // Laravel method spoofing
+
+      // ── Champs texte ───────────────────────────────────────────────────────
+      request.fields['name'] = _nameCtrl.text.trim();
+      request.fields['descriptions'] = _descCtrl.text.trim();
+      request.fields['is_price_on_request'] = _isPriceOnRequest ? '1' : '0';
+
+      if (!_isPriceOnRequest) {
+        if (_priceCtrl.text.trim().isNotEmpty) {
+          request.fields['price'] = _priceCtrl.text.trim();
+        }
+        request.fields['has_promo'] = _hasPromo ? '1' : '0';
+        if (_hasPromo && _promoCtrl.text.trim().isNotEmpty) {
+          request.fields['price_promo'] = _promoCtrl.text.trim();
+        }
+      } else {
+        request.fields['has_promo'] = '0';
+      }
+
+      if (_selectedDomaineId != null) {
+        request.fields['domaine_id'] = _selectedDomaineId!;
+      }
+
+      request.fields['is_always_open'] = _isAlwaysOpen ? '1' : '0';
+
+      // ── Horaires (schedule[day][key]=val) ──────────────────────────────────
+      if (!_isAlwaysOpen) {
+        for (final day in _daysOrder) {
+          final isOpen = _dayOpen[day]! ? '1' : '0';
+          request.fields['schedule[$day][is_open]'] = isOpen;
+          if (_dayOpen[day]!) {
+            request.fields['schedule[$day][start]'] = _dayStart[day]!.text;
+            request.fields['schedule[$day][end]'] = _dayEnd[day]!.text;
+          }
+        }
+      }
+
+      // ── Photos supprimées ──────────────────────────────────────────────────
+      for (int i = 0; i < _deletedMediaUrls.length; i++) {
+        request.fields['deleted_medias[$i]'] = _deletedMediaUrls[i];
+      }
+
+      // ── Nouvelles photos ───────────────────────────────────────────────────
+      for (int i = 0; i < _newMediaFiles.length; i++) {
+        final file = _newMediaFiles[i];
+        final ext = file.path.split('.').last.toLowerCase();
+        final mimeType = ext == 'png' ? 'image/png' : 'image/jpeg';
+        final multipartFile = await http.MultipartFile.fromPath(
+          'medias[$i]',
+          file.path,
+          contentType: MediaType('image', ext == 'png' ? 'png' : 'jpeg'),
+        );
+        request.files.add(multipartFile);
+      }
+
+      debugPrint('Champs envoyés: ${request.fields}');
+      debugPrint('Fichiers envoyés: ${request.files.length}');
+
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      final response = await http.Response.fromStream(streamed);
+
       debugPrint('Status code: ${response.statusCode}');
       debugPrint('Response body: ${response.body}');
-      
+
       if (response.statusCode == 200 || response.statusCode == 201) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -327,7 +333,6 @@ class _EditServiceScreenState extends State<EditServiceScreen>
           Navigator.pop(context, true);
         }
       } else if (response.statusCode == 401) {
-        // Token invalide côté serveur → afficher le body pour diagnostic
         debugPrint('[401] Body: ${response.body}');
         _showError('Session expirée. Veuillez vous reconnecter.');
       } else if (response.statusCode == 422) {
@@ -347,7 +352,8 @@ class _EditServiceScreenState extends State<EditServiceScreen>
       } else {
         try {
           final errorData = jsonDecode(response.body) as Map<String, dynamic>;
-          _showError(errorData['message']?.toString() ?? 'Erreur ${response.statusCode}');
+          _showError(
+              errorData['message']?.toString() ?? 'Erreur ${response.statusCode}');
         } catch (_) {
           _showError('Erreur ${response.statusCode}');
         }
