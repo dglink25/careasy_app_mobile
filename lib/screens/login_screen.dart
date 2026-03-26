@@ -6,7 +6,7 @@ import 'package:careasy_app_mobile/screens/google_auth_screen.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
+import 'forgot_password_screen.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -224,58 +224,9 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   }
 
   void _showForgotPasswordDialog() {
-    final TextEditingController emailController = TextEditingController();
-    
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text(
-            'Mot de passe oublié',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Entrez votre email pour recevoir un lien de réinitialisation',
-                style: TextStyle(fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: emailController,
-                decoration: InputDecoration(
-                  hintText: 'Votre email',
-                  prefixIcon: const Icon(Icons.email_outlined),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                keyboardType: TextInputType.emailAddress,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Annuler'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (emailController.text.isNotEmpty) {
-                  Navigator.pop(context);
-                  _showSnackBar('Email envoyé ! Vérifiez votre boîte de réception', Colors.green);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Envoyer'),
-            ),
-          ],
-        );
-      },
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
     );
   }
 

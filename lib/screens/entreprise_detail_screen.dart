@@ -3,6 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:careasy_app_mobile/utils/constants.dart';
 import 'package:careasy_app_mobile/screens/service_detail_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
+import 'dart:io';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 
 class EntrepriseDetailScreen extends StatefulWidget {
   final Map<String, dynamic> entreprise;
@@ -19,6 +24,7 @@ class _EntrepriseDetailScreenState extends State<EntrepriseDetailScreen>
   late TabController _tabController;
   late PageController _galleryController;
   int _currentGalleryIndex = 0;
+  bool _isSharing = false;
 
   @override
   void initState() {
@@ -92,25 +98,119 @@ class _EntrepriseDetailScreenState extends State<EntrepriseDetailScreen>
     _showError('Impossible d\'ouvrir Google Maps');
   }
 
+  // Fonction de partage améliorée comme dans service_detail_screen
   Future<void> _share() async {
-    final name = widget.entreprise['name'] ?? '';
-    final address = widget.entreprise['google_formatted_address'] ??
-        widget.entreprise['siege'] ??
-        '';
-    final phone = widget.entreprise['call_phone'] ?? '';
-    final text =
-        '📍 $name\n🏠 $address\n📞 $phone\n\nTrouvé sur CarEasy 🚗';
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Infos copiées dans le presse-papiers !'),
-          behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          backgroundColor: Colors.green[700],
-        ),
-      );
+    if (_isSharing) return;
+    setState(() => _isSharing = true);
+    
+    try {
+      final entrepriseName = widget.entreprise['name'] ?? 'Entreprise';
+      final address = widget.entreprise['google_formatted_address'] ??
+          widget.entreprise['siege'] ??
+          'Adresse non renseignée';
+      final phone = widget.entreprise['call_phone'] ?? '';
+      final whatsapp = widget.entreprise['whatsapp_phone'] ?? '';
+      final email = widget.entreprise['email'] ?? '';
+      final description = widget.entreprise['description']?.toString() ?? '';
+      
+      // Récupération des domaines d'activité
+      final domaines = widget.entreprise['domaines'] as List? ?? [];
+      String domainesText = '';
+      if (domaines.isNotEmpty) {
+        domainesText = '\nDomaines d\'activité :\n';
+        for (var domaine in domaines) {
+          domainesText += '• ${domaine['name']}\n';
+        }
+      }
+      
+      // Récupération des services
+      final services = widget.entreprise['services'] as List? ?? [];
+      String servicesText = '';
+      if (services.isNotEmpty) {
+        servicesText = '\nServices proposés (${services.length}) :\n';
+        for (var service in services.take(5)) {
+          servicesText += '• ${service['name']}\n';
+        }
+        if (services.length > 5) {
+          servicesText += '... et ${services.length - 5} autres services\n';
+        }
+      }
+      
+      // Informations légales
+      final ifu = widget.entreprise['ifu_number']?.toString() ?? '';
+      final rccm = widget.entreprise['rccm_number']?.toString() ?? '';
+      
+      String legalText = '';
+      if (ifu.isNotEmpty || rccm.isNotEmpty) {
+        legalText = '\nInformations légales :\n';
+        if (ifu.isNotEmpty) legalText += 'IFU : $ifu\n';
+        if (rccm.isNotEmpty) legalText += 'RCCM : $rccm\n';
+      }
+      
+      // Contact
+      String contactText = '';
+      if (phone.isNotEmpty) contactText += '\n📞 Téléphone : $phone';
+      if (whatsapp.isNotEmpty) contactText += '\n💬 WhatsApp : $whatsapp';
+      if (email.isNotEmpty) contactText += '\n✉️ Email : $email';
+      
+      final shareText = '''
+$entrepriseName
+
+
+📍 Adresse : $address
+$domainesText
+$servicesText
+$legalText
+${description.isNotEmpty ? '📝 À propos :\n$description\n' : ''}
+📱 Contact :$contactText
+
+--- Trouvé sur CarEasy ---
+Téléchargez l'application : https://careasy.app/download
+      '''.trim();
+      
+      // Téléchargement du logo pour le partage
+      final logo = widget.entreprise['logo']?.toString() ?? '';
+      XFile? imageFile;
+      
+      if (logo.isNotEmpty) {
+        try {
+          final imageUrl = logo;
+          final uri = Uri.parse(imageUrl);
+          final response = await http.get(uri);
+          
+          if (response.statusCode == 200) {
+            final tempDir = await getTemporaryDirectory();
+            final filePath = '${tempDir.path}/entreprise_share_${DateTime.now().millisecondsSinceEpoch}.jpg';
+            final file = File(filePath);
+            await file.writeAsBytes(response.bodyBytes);
+            imageFile = XFile(filePath);
+          }
+        } catch (e) {
+          debugPrint('Erreur téléchargement logo: $e');
+        }
+      }
+      
+      if (imageFile != null) {
+        await Share.shareXFiles([imageFile], text: shareText, subject: entrepriseName);
+        final file = File(imageFile.path);
+        if (await file.exists()) await file.delete();
+      } else {
+        await Share.share(shareText, subject: entrepriseName);
+      }
+      
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur lors du partage: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSharing = false);
     }
   }
 
@@ -179,10 +279,25 @@ class _EntrepriseDetailScreenState extends State<EntrepriseDetailScreen>
                   color: Colors.black.withOpacity(0.3),
                   shape: BoxShape.circle,
                 ),
-                child: IconButton(
-                  icon: const Icon(Icons.share, color: Colors.white),
-                  onPressed: _share,
-                ),
+                child: _isSharing
+                    ? const SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.share, color: Colors.white),
+                        onPressed: _share,
+                      ),
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -844,7 +959,15 @@ class _EntrepriseDetailScreenState extends State<EntrepriseDetailScreen>
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: _share,
-              icon: const Icon(Icons.share),
+              icon: _isSharing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(Icons.share),
               label: const Text('Partager cette entreprise'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppConstants.primaryRed,
