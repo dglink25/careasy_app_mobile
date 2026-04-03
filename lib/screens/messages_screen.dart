@@ -1,4 +1,3 @@
-// lib/screens/messages_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -20,6 +19,7 @@ import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.d
 import '../providers/rendez_vous_provider.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
+import 'carai_screen.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -242,6 +242,7 @@ class _MessagesScreenState extends State<MessagesScreen>
           ? _buildSearchResults()
           : _buildMessagesTab(),
       bottomNavigationBar: const AppBottomNav(currentIndex: 1),
+      floatingActionButton: const CarAIFab(),
     );
   }
 

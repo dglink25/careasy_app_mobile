@@ -28,7 +28,8 @@ import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 import '../widgets/notification_bell.dart';
 import 'welcome_screen.dart';
 import 'chat_screen.dart';
-import 'rendez_vous/create_rendez_vous_screen.dart'; // ← AJOUT pour la redirection
+import 'rendez_vous/create_rendez_vous_screen.dart'; 
+import 'carai_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -662,6 +663,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ],
                     ),
             ),
+
+      floatingActionButton: const CarAIFab(),  
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
 
       bottomNavigationBar: Container(
         decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, -5))]),

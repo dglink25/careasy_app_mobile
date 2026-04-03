@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../providers/notification_provider.dart';
 import '../utils/constants.dart';
+import 'carai_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -75,6 +76,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           );
         },
       ),
+      floatingActionButton: const CarAIFab(),
     );
   }
 

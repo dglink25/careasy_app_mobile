@@ -8,6 +8,7 @@ import '../../models/rendez_vous_model.dart';
 import '../../utils/constants.dart';
 import '../../widgets/app_bottom_nav.dart';
 import 'rendez_vous_detail_screen.dart';
+import '../carai_screen.dart';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 const Color _kRed = AppConstants.primaryRed;
@@ -218,6 +219,7 @@ class _RendezVousListScreenState extends State<RendezVousListScreen>
           );
         },
       ),
+      floatingActionButton: const CarAIFab(),
     );
   }
 

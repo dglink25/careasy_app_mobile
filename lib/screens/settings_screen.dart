@@ -16,6 +16,7 @@ import 'edit_profile_screen.dart';
 import 'welcome_screen.dart';
 import 'home_screen.dart';
 import 'messages_screen.dart';
+import 'carai_screen.dart';
 
 import 'notifications_settings_screen.dart' as notifications;
 import 'security_settings_screen.dart' as security;
@@ -103,8 +104,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed))
           : _buildContent(context, size, isSmallScreen, isTablet),
 
-      // ⭐ Bottom navigation bar partagée — identique à home_screen
+     
       bottomNavigationBar: const AppBottomNav(currentIndex: 4),
+      floatingActionButton: const CarAIFab(),
     );
   }
 
