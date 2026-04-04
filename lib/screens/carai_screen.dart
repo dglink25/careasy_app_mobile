@@ -8,11 +8,11 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import '../utils/constants.dart';
 
-// ─── Modèles ────────────────────────────────────────────────────────────────
+// ─── Modèles ─────────────────────────────────────────────────────────────────
 
 class _CarAIMessage {
   final String id;
-  final String role; // 'user' | 'assistant'
+  final String role;
   final String content;
   final List<Map<String, dynamic>> services;
   final List<String> suggestions;
@@ -54,7 +54,23 @@ class _CarAIMessage {
       );
 }
 
-// ─── Widget principal ────────────────────────────────────────────────────────
+// ─── Couleurs & Constantes UI ─────────────────────────────────────────────────
+
+class _UI {
+  static const Color primary    = Color(0xFFE63946);
+  static const Color primaryDim = Color(0xFFFF6B6B);
+  static const Color online     = Color(0xFF22C55E);
+  static const Color surface    = Color(0xFFF8FAFC);
+  static const Color surfaceDark= Color(0xFF0F172A);
+  static const Color bubbleDark = Color(0xFF1E293B);
+  static const Color text       = Color(0xFF1E293B);
+  static const Color textMuted  = Color(0xFF94A3B8);
+  static const Color mapBlue    = Color(0xFF3B82F6);
+  static const Color whatsapp   = Color(0xFF25D366);
+  static const Color callGreen  = Color(0xFF16A34A);
+}
+
+// ─── Écran principal CarAI ────────────────────────────────────────────────────
 
 class CarAIScreen extends StatefulWidget {
   const CarAIScreen({super.key});
@@ -65,36 +81,26 @@ class CarAIScreen extends StatefulWidget {
 
 class _CarAIScreenState extends State<CarAIScreen>
     with TickerProviderStateMixin {
-  static const _androidOptions =
-      AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions =
+  static const _androidOpts = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iosOpts =
       IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
-  final _storage = const FlutterSecureStorage(
-    aOptions: _androidOptions,
-    iOptions: _iOSOptions,
+  final _storage    = const FlutterSecureStorage(
+    aOptions: _androidOpts, iOptions: _iosOpts,
   );
-
-  final _messages = <_CarAIMessage>[];
-  final _inputCtrl = TextEditingController();
+  final _messages   = <_CarAIMessage>[];
+  final _inputCtrl  = TextEditingController();
   final _scrollCtrl = ScrollController();
   final _inputFocus = FocusNode();
 
-  bool _isLoading = false;
+  bool    _isLoading      = false;
   String? _conversationId;
   double? _userLat;
   double? _userLng;
 
-  // Animation du bouton envoi
-  late AnimationController _sendAnim;
-
   @override
   void initState() {
     super.initState();
-    _sendAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
     _startConversation();
     _tryGetLocation();
   }
@@ -104,15 +110,15 @@ class _CarAIScreenState extends State<CarAIScreen>
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _inputFocus.dispose();
-    _sendAnim.dispose();
     super.dispose();
   }
 
-  // ── Démarrer / retrouver la conversation ──────────────────────────────────
+  // ── Initialisation ────────────────────────────────────────────────────────
+
   Future<void> _startConversation() async {
     try {
       final token = await _storage.read(key: 'auth_token');
-      if (token == null) return;
+      if (token == null) { _addWelcome(); return; }
 
       final resp = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/carai/conversations/start'),
@@ -126,19 +132,15 @@ class _CarAIScreenState extends State<CarAIScreen>
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         _conversationId = data['conversation_id']?.toString();
-
-        // Charger l'historique si conversation existante
         if (data['is_new'] != true && _conversationId != null) {
           await _loadHistory();
         } else {
-          // Message de bienvenue
           _addWelcome();
         }
       } else {
         _addWelcome();
       }
-    } catch (e) {
-      debugPrint('[CarAI] startConversation: $e');
+    } catch (_) {
       _addWelcome();
     }
   }
@@ -147,38 +149,33 @@ class _CarAIScreenState extends State<CarAIScreen>
     if (!mounted) return;
     setState(() {
       _messages.add(_CarAIMessage(
-        id: 'welcome',
-        role: 'assistant',
-        content:
-            '🚗 Bonjour ! Je suis **CarAI**, votre assistant automobile CarEasy.\n\n'
-            'Je peux vous aider à trouver :\n'
-            '• 🔧 Un garage / mécanicien\n'
-            '• 🛞 Un vulcanisateur\n'
-            '• 🚿 Un centre de lavage\n'
-            '• ⚡ Un électricien auto\n'
-            '• 🏁 Et bien d\'autres services !\n\n'
-            'Dites-moi ce dont vous avez besoin.',
+        id:      'welcome',
+        role:    'assistant',
+        content: 'Bonjour, je suis CarAI — votre assistant automobile CarEasy au Bénin.\n\n'
+            'Je peux vous aider à trouver un mécanicien, un vulcanisateur, '
+            'un centre de lavage, un électricien auto et bien d\'autres services. '
+            'Dites-moi simplement ce dont vous avez besoin.',
         suggestions: [
-          '🔧 Trouver un garage',
-          '🛞 Vulcanisateur proche',
-          '🚿 Lavage auto',
-          '⛽ Station essence',
+          'Trouver un garage mécanique',
+          'Vulcanisateur disponible',
+          'Lavage auto',
+          'Electricien auto',
         ],
         createdAt: DateTime.now(),
       ));
     });
   }
 
-  // ── Historique ────────────────────────────────────────────────────────────
   Future<void> _loadHistory() async {
     if (_conversationId == null) return;
     try {
       final token = await _storage.read(key: 'auth_token');
-      if (token == null) return;
+      if (token == null) { _addWelcome(); return; }
 
       final resp = await http.get(
         Uri.parse(
-            '${AppConstants.apiBaseUrl}/carai/conversations/$_conversationId/messages?limit=20'),
+          '${AppConstants.apiBaseUrl}/carai/conversations/$_conversationId/messages?limit=20',
+        ),
         headers: {
           'Authorization': 'Bearer $token',
           'Accept': 'application/json',
@@ -188,28 +185,21 @@ class _CarAIScreenState extends State<CarAIScreen>
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final list = (data['data'] as List? ?? []);
-        if (list.isEmpty) {
-          _addWelcome();
-          return;
-        }
+        if (list.isEmpty) { _addWelcome(); return; }
         if (!mounted) return;
         setState(() {
           for (final item in list) {
-            final role =
-                item['role']?.toString() == 'user' ? 'user' : 'assistant';
-            final meta =
-                item['ai_metadata'] as Map<String, dynamic>? ?? {};
+            final meta = item['ai_metadata'] as Map<String, dynamic>? ?? {};
             _messages.add(_CarAIMessage(
-              id: item['id']?.toString() ?? UniqueKey().toString(),
-              role: role,
-              content: item['content']?.toString() ?? '',
-              services: _parseServices(meta['services']),
+              id:          item['id']?.toString() ?? UniqueKey().toString(),
+              role:        item['role']?.toString() == 'user' ? 'user' : 'assistant',
+              content:     item['content']?.toString() ?? '',
+              services:    _parseServices(meta['services']),
               suggestions: _parseStrList(meta['suggestions']),
-              mapUrl: meta['map_url']?.toString(),
-              intent: meta['intent']?.toString(),
-              createdAt: DateTime.tryParse(
-                      item['created_at']?.toString() ?? '') ??
-                  DateTime.now(),
+              mapUrl:      meta['map_url']?.toString(),
+              intent:      meta['intent']?.toString(),
+              createdAt:   DateTime.tryParse(item['created_at']?.toString() ?? '')
+                              ?? DateTime.now(),
             ));
           }
         });
@@ -217,18 +207,23 @@ class _CarAIScreenState extends State<CarAIScreen>
       } else {
         _addWelcome();
       }
-    } catch (e) {
-      debugPrint('[CarAI] loadHistory: $e');
+    } catch (_) {
       _addWelcome();
     }
   }
 
-  // ── GPS ───────────────────────────────────────────────────────────────────
+  // ── Localisation GPS ──────────────────────────────────────────────────────
+
   Future<void> _tryGetLocation() async {
     try {
       final perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) return;
+          perm == LocationPermission.deniedForever) {
+        // Demande de permission silencieuse
+        final req = await Geolocator.requestPermission();
+        if (req == LocationPermission.denied ||
+            req == LocationPermission.deniedForever) return;
+      }
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 8),
@@ -238,31 +233,26 @@ class _CarAIScreenState extends State<CarAIScreen>
     } catch (_) {}
   }
 
-  // ── Envoi d'un message ────────────────────────────────────────────────────
+  // ── Envoi de message ──────────────────────────────────────────────────────
+
   Future<void> _sendMessage(String text) async {
-    if (text.trim().isEmpty || _isLoading) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || _isLoading) return;
 
     _inputCtrl.clear();
     _inputFocus.unfocus();
 
-    final userMsg = _CarAIMessage(
-      id: 'user_${DateTime.now().millisecondsSinceEpoch}',
-      role: 'user',
-      content: text.trim(),
-      createdAt: DateTime.now(),
-    );
-
-    final loadingMsg = _CarAIMessage(
-      id: 'loading',
-      role: 'assistant',
-      content: '',
-      isLoading: true,
-      createdAt: DateTime.now(),
-    );
+    final loadingId = 'loading_${DateTime.now().millisecondsSinceEpoch}';
 
     setState(() {
-      _messages.add(userMsg);
-      _messages.add(loadingMsg);
+      _messages.add(_CarAIMessage(
+        id: 'user_${DateTime.now().millisecondsSinceEpoch}',
+        role: 'user', content: trimmed, createdAt: DateTime.now(),
+      ));
+      _messages.add(_CarAIMessage(
+        id: loadingId, role: 'assistant', content: '',
+        isLoading: true, createdAt: DateTime.now(),
+      ));
       _isLoading = true;
     });
     _scrollToBottom();
@@ -270,15 +260,12 @@ class _CarAIScreenState extends State<CarAIScreen>
     try {
       final token = await _storage.read(key: 'auth_token');
       if (token == null) throw Exception('Non authentifié');
-
-      // Obtenir la position si pas encore fait
       if (_userLat == null) await _tryGetLocation();
 
       final body = <String, dynamic>{
-        'message': text.trim(),
-        'conversation_id':
-            int.tryParse(_conversationId ?? '0') ?? 0,
-        if (_userLat != null) 'latitude': _userLat,
+        'message':         trimmed,
+        'conversation_id': int.tryParse(_conversationId ?? '0') ?? 0,
+        if (_userLat != null) 'latitude':  _userLat,
         if (_userLng != null) 'longitude': _userLng,
       };
 
@@ -290,47 +277,40 @@ class _CarAIScreenState extends State<CarAIScreen>
           'Accept': 'application/json',
         },
         body: jsonEncode(body),
-      ).timeout(const Duration(seconds: 25));
+      ).timeout(const Duration(seconds: 30));
 
       if (!mounted) return;
-
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
 
-      // Mettre à jour le conversationId si absent
       if (_conversationId == null && data['conversation_id'] != null) {
         _conversationId = data['conversation_id'].toString();
       }
 
-      final aiMsg = _CarAIMessage(
-        id: data['message_id']?.toString() ??
-            'ai_${DateTime.now().millisecondsSinceEpoch}',
-        role: 'assistant',
-        content: data['reply']?.toString() ?? 'Désolé, je n\'ai pas compris.',
-        services: _parseServices(data['services']),
-        suggestions: _parseStrList(data['suggestions']),
-        mapUrl: data['map_url']?.toString(),
-        intent: data['intent']?.toString(),
-        createdAt: DateTime.now(),
-      );
-
       setState(() {
-        _messages.removeWhere((m) => m.id == 'loading');
-        _messages.add(aiMsg);
+        _messages.removeWhere((m) => m.id == loadingId);
+        _messages.add(_CarAIMessage(
+          id:          data['message_id']?.toString() ?? 'ai_${DateTime.now().millisecondsSinceEpoch}',
+          role:        'assistant',
+          content:     data['reply']?.toString() ?? 'Je n\'ai pas compris votre demande.',
+          services:    _parseServices(data['services']),
+          suggestions: _parseStrList(data['suggestions']),
+          mapUrl:      data['map_url']?.toString(),
+          intent:      data['intent']?.toString(),
+          createdAt:   DateTime.now(),
+        ));
         _isLoading = false;
       });
       _scrollToBottom();
     } catch (e) {
-      debugPrint('[CarAI] sendMessage: $e');
       if (!mounted) return;
       setState(() {
-        _messages.removeWhere((m) => m.id == 'loading');
+        _messages.removeWhere((m) => m.id == loadingId);
         _messages.add(_CarAIMessage(
-          id: 'err_${DateTime.now().millisecondsSinceEpoch}',
-          role: 'assistant',
-          content:
-              '😔 Je suis momentanément indisponible. Réessaie dans quelques secondes.',
-          suggestions: ['🔄 Réessayer', '🔧 Trouver un garage', '🛞 Vulcanisateur'],
-          createdAt: DateTime.now(),
+          id:          'err_${DateTime.now().millisecondsSinceEpoch}',
+          role:        'assistant',
+          content:     'Le service est momentanément indisponible. Veuillez réessayer dans quelques instants.',
+          suggestions: ['Réessayer', 'Trouver un garage mécanique'],
+          createdAt:   DateTime.now(),
         ));
         _isLoading = false;
       });
@@ -338,29 +318,35 @@ class _CarAIScreenState extends State<CarAIScreen>
     }
   }
 
-  // ── Effacer l'historique ──────────────────────────────────────────────────
+  // ── Effacer l'historique ───────────────────────────────────────────────────
+
   Future<void> _clearHistory() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Effacer la conversation'),
-        content:
-            const Text('Voulez-vous effacer tout l\'historique de cette conversation ?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          Icon(Icons.delete_sweep_rounded, color: _UI.primary, size: 22),
+          const SizedBox(width: 10),
+          const Text('Effacer la conversation',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        ]),
+        content: const Text(
+          'Voulez-vous supprimer tout l\'historique de cette conversation ?',
+          style: TextStyle(fontSize: 14),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child:
-                Text('Annuler', style: TextStyle(color: Colors.grey[600])),
+            child: Text('Annuler', style: TextStyle(color: Colors.grey[600])),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppConstants.primaryRed,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _UI.primary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Effacer', style: TextStyle(color: Colors.white)),
+            child: const Text('Supprimer'),
           ),
         ],
       ),
@@ -372,10 +358,9 @@ class _CarAIScreenState extends State<CarAIScreen>
       try {
         final token = await _storage.read(key: 'auth_token');
         await http.delete(
-          Uri.parse(
-              '${AppConstants.apiBaseUrl}/carai/conversations/$_conversationId'),
+          Uri.parse('${AppConstants.apiBaseUrl}/carai/conversations/$_conversationId'),
           headers: {
-            'Authorization': 'Bearer $token ?? ""',
+            'Authorization': 'Bearer ${token ?? ""}',
             'Accept': 'application/json',
           },
         ).timeout(const Duration(seconds: 8));
@@ -390,12 +375,13 @@ class _CarAIScreenState extends State<CarAIScreen>
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
           _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 320),
           curve: Curves.easeOut,
         );
       }
@@ -403,42 +389,46 @@ class _CarAIScreenState extends State<CarAIScreen>
   }
 
   List<Map<String, dynamic>> _parseServices(dynamic raw) {
-    if (raw == null) return [];
     if (raw is List) {
-      return raw
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+      return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
     }
     return [];
   }
 
   List<String> _parseStrList(dynamic raw) {
-    if (raw == null) return [];
     if (raw is List) return raw.map((e) => e.toString()).toList();
     return [];
   }
 
-  // ── BUILD ─────────────────────────────────────────────────────────────────
+  Future<void> _launchUrl(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ═══════════════════════════════════════════════════════════════════════════
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      backgroundColor: isDark ? _UI.surfaceDark : _UI.surface,
       appBar: _buildAppBar(isDark),
       body: Column(
         children: [
           Expanded(
             child: _messages.isEmpty
-                ? _buildEmptyState()
+                ? _buildEmptyState(isDark)
                 : ListView.builder(
                     controller: _scrollCtrl,
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                        horizontal: 14, vertical: 10),
                     itemCount: _messages.length,
-                    itemBuilder: (_, i) => _buildMessage(_messages[i], isDark),
+                    itemBuilder: (_, i) =>
+                        _buildMessage(_messages[i], isDark),
                   ),
           ),
           _buildInputBar(isDark),
@@ -447,13 +437,15 @@ class _CarAIScreenState extends State<CarAIScreen>
     );
   }
 
+  // ── AppBar ────────────────────────────────────────────────────────────────
+
   PreferredSizeWidget _buildAppBar(bool isDark) {
     return AppBar(
       elevation: 0,
-      backgroundColor: AppConstants.primaryRed,
+      backgroundColor: _UI.primary,
       foregroundColor: Colors.white,
       leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+        icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
         onPressed: () => Navigator.pop(context),
       ),
       titleSpacing: 0,
@@ -464,11 +456,14 @@ class _CarAIScreenState extends State<CarAIScreen>
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(12),
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(11),
             ),
-            child: const Icon(Icons.smart_toy_rounded,
-                color: Colors.white, size: 22),
+            child: const Icon(
+              Icons.directions_car_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
           ),
           const SizedBox(width: 10),
           Column(
@@ -478,21 +473,27 @@ class _CarAIScreenState extends State<CarAIScreen>
                 'CarAI',
                 style: TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white),
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    letterSpacing: 0.2),
               ),
               Row(
                 children: [
                   Container(
-                    width: 7,
-                    height: 7,
+                    width: 6,
+                    height: 6,
                     decoration: const BoxDecoration(
-                        color: Color(0xFF4ADE80), shape: BoxShape.circle),
+                      color: _UI.online,
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 5),
                   const Text(
                     'Assistant automobile',
-                    style: TextStyle(fontSize: 11, color: Colors.white70),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w400),
                   ),
                 ],
               ),
@@ -502,7 +503,7 @@ class _CarAIScreenState extends State<CarAIScreen>
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.delete_outline_rounded),
+          icon: const Icon(Icons.delete_sweep_rounded, size: 22),
           tooltip: 'Effacer la conversation',
           onPressed: _clearHistory,
         ),
@@ -510,35 +511,50 @@ class _CarAIScreenState extends State<CarAIScreen>
     );
   }
 
-  Widget _buildEmptyState() {
+  // ── État vide ─────────────────────────────────────────────────────────────
+
+  Widget _buildEmptyState(bool isDark) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.all(24),
+            width: 88,
+            height: 88,
             decoration: BoxDecoration(
-              color: AppConstants.primaryRed.withOpacity(0.08),
+              color: _UI.primary.withOpacity(0.08),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.smart_toy_rounded,
-                size: 56, color: AppConstants.primaryRed),
+            child: Icon(
+              Icons.directions_car_rounded,
+              size: 44,
+              color: _UI.primary.withOpacity(0.7),
+            ),
           ),
           const SizedBox(height: 20),
-          const Text('CarAI',
-              style:
-                  TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
           Text(
-            'Votre assistant automobile intelligent',
-            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+            'CarAI',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white : _UI.text,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Votre assistant automobile CarEasy',
+            style: TextStyle(
+                color: _UI.textMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w400),
           ),
         ],
       ),
     );
   }
 
-  // ── Message bubble ─────────────────────────────────────────────────────────
+  // ── Message dispatcher ────────────────────────────────────────────────────
+
   Widget _buildMessage(_CarAIMessage msg, bool isDark) {
     if (msg.isLoading) return _buildTypingIndicator(isDark);
     return msg.role == 'user'
@@ -546,29 +562,30 @@ class _CarAIScreenState extends State<CarAIScreen>
         : _buildAIBubble(msg, isDark);
   }
 
+  // ── Bulle utilisateur ─────────────────────────────────────────────────────
+
   Widget _buildUserBubble(_CarAIMessage msg, bool isDark) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12, left: 60),
+      padding: const EdgeInsets.only(bottom: 10, left: 60),
       child: Align(
         alignment: Alignment.centerRight,
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFFE63946), Color(0xFFFF6B6B)],
+              colors: [_UI.primary, _UI.primaryDim],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(20),
-              topRight: Radius.circular(20),
-              bottomLeft: Radius.circular(20),
+              topLeft:     Radius.circular(18),
+              topRight:    Radius.circular(18),
+              bottomLeft:  Radius.circular(18),
               bottomRight: Radius.circular(4),
             ),
             boxShadow: [
               BoxShadow(
-                color: AppConstants.primaryRed.withOpacity(0.25),
+                color: _UI.primary.withOpacity(0.22),
                 blurRadius: 8,
                 offset: const Offset(0, 3),
               ),
@@ -576,32 +593,40 @@ class _CarAIScreenState extends State<CarAIScreen>
           ),
           child: Text(
             msg.content,
-            style:
-                const TextStyle(color: Colors.white, fontSize: 14.5),
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                height: 1.45),
           ),
         ),
       ),
     );
   }
 
+  // ── Bulle assistant ───────────────────────────────────────────────────────
+
   Widget _buildAIBubble(_CarAIMessage msg, bool isDark) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16, right: 40),
+      padding: const EdgeInsets.only(bottom: 14, right: 36),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Avatar
           Container(
-            width: 34,
-            height: 34,
-            margin: const EdgeInsets.only(right: 10, top: 2),
+            width: 32,
+            height: 32,
+            margin: const EdgeInsets.only(right: 9, top: 2),
             decoration: BoxDecoration(
-              color: AppConstants.primaryRed,
-              borderRadius: BorderRadius.circular(10),
+              color: _UI.primary,
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: const Icon(Icons.smart_toy_rounded,
-                color: Colors.white, size: 18),
+            child: const Icon(
+              Icons.directions_car_rounded,
+              color: Colors.white,
+              size: 17,
+            ),
           ),
+
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -609,20 +634,18 @@ class _CarAIScreenState extends State<CarAIScreen>
                 // Bulle texte
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
+                      horizontal: 14, vertical: 11),
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF1E293B)
-                        : Colors.white,
+                    color: isDark ? _UI.bubbleDark : Colors.white,
                     borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(4),
-                      topRight: Radius.circular(20),
-                      bottomLeft: Radius.circular(20),
-                      bottomRight: Radius.circular(20),
+                      topLeft:     Radius.circular(4),
+                      topRight:    Radius.circular(18),
+                      bottomLeft:  Radius.circular(18),
+                      bottomRight: Radius.circular(18),
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
+                        color: Colors.black.withOpacity(0.055),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -631,22 +654,24 @@ class _CarAIScreenState extends State<CarAIScreen>
                   child: _buildRichText(msg.content, isDark),
                 ),
 
-                // Carte des services
+                // Cartes prestataires
                 if (msg.services.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  _buildServicesCard(msg.services, isDark),
+                  const SizedBox(height: 9),
+                  ...msg.services
+                      .take(3)
+                      .map((s) => _buildServiceCard(s, isDark)),
                 ],
 
-                // Lien carte
+                // Bouton carte
                 if (msg.mapUrl != null && msg.mapUrl!.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  _buildMapButton(msg.mapUrl!),
+                  _buildMapButton(msg.mapUrl!, isDark),
                 ],
 
                 // Suggestions
                 if (msg.suggestions.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  _buildSuggestions(msg.suggestions),
+                  const SizedBox(height: 9),
+                  _buildSuggestions(msg.suggestions, isDark),
                 ],
               ],
             ),
@@ -656,102 +681,94 @@ class _CarAIScreenState extends State<CarAIScreen>
     );
   }
 
+  // ── Indicateur de frappe ──────────────────────────────────────────────────
+
   Widget _buildTypingIndicator(bool isDark) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16, right: 40),
+      padding: const EdgeInsets.only(bottom: 14, right: 36),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 34,
-            height: 34,
-            margin: const EdgeInsets.only(right: 10, top: 2),
+            width: 32,
+            height: 32,
+            margin: const EdgeInsets.only(right: 9, top: 2),
             decoration: BoxDecoration(
-              color: AppConstants.primaryRed,
-              borderRadius: BorderRadius.circular(10),
+              color: _UI.primary,
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: const Icon(Icons.smart_toy_rounded,
-                color: Colors.white, size: 18),
+            child: const Icon(
+              Icons.directions_car_rounded,
+              color: Colors.white,
+              size: 17,
+            ),
           ),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              color: isDark ? _UI.bubbleDark : Colors.white,
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(4),
-                topRight: Radius.circular(20),
-                bottomLeft: Radius.circular(20),
-                bottomRight: Radius.circular(20),
+                topLeft:     Radius.circular(4),
+                topRight:    Radius.circular(18),
+                bottomLeft:  Radius.circular(18),
+                bottomRight: Radius.circular(18),
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.06),
+                  color: Colors.black.withOpacity(0.055),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
               ],
             ),
-            child: _TypingDots(),
+            child: const _TypingDots(),
           ),
         ],
       ),
     );
   }
 
-  // ── Rich text (gère **bold** et • listes) ─────────────────────────────────
+  // ── Texte riche (gestion **bold**) ────────────────────────────────────────
+
   Widget _buildRichText(String text, bool isDark) {
-    final textColor =
-        isDark ? Colors.white : const Color(0xFF1E293B);
-    final spans = <TextSpan>[];
-    final parts = text.split('**');
+    final textColor = isDark ? Colors.white : _UI.text;
+    final parts     = text.split('**');
+    final spans     = <TextSpan>[];
     for (int i = 0; i < parts.length; i++) {
-      if (i.isOdd) {
-        spans.add(TextSpan(
-          text: parts[i],
-          style: TextStyle(
-              fontWeight: FontWeight.bold, color: textColor, fontSize: 14.5),
-        ));
-      } else {
-        spans.add(TextSpan(
-          text: parts[i],
-          style: TextStyle(color: textColor, fontSize: 14.5, height: 1.5),
-        ));
-      }
+      spans.add(TextSpan(
+        text: parts[i],
+        style: TextStyle(
+          fontWeight: i.isOdd ? FontWeight.w700 : FontWeight.w400,
+          color: textColor,
+          fontSize: 14,
+          height: 1.55,
+        ),
+      ));
     }
     return RichText(text: TextSpan(children: spans));
   }
 
-  // ── Services card ──────────────────────────────────────────────────────────
-  Widget _buildServicesCard(
-      List<Map<String, dynamic>> services, bool isDark) {
-    return Column(
-      children: services
-          .take(3)
-          .map((svc) => _buildServiceTile(svc, isDark))
-          .toList(),
-    );
-  }
+  // ── Carte prestataire ─────────────────────────────────────────────────────
 
-  Widget _buildServiceTile(Map<String, dynamic> svc, bool isDark) {
-    final entreprise =
-        svc['entreprise'] as Map<String, dynamic>? ?? {};
+  Widget _buildServiceCard(Map<String, dynamic> svc, bool isDark) {
+    final e    = svc['entreprise'] as Map<String, dynamic>? ?? {};
     final name = svc['name']?.toString() ?? 'Service';
-    final entrepriseName =
-        entreprise['name']?.toString() ?? svc['entreprise_name']?.toString() ?? '';
-    final phone = entreprise['call_phone']?.toString() ?? '';
-    final whatsapp =
-        entreprise['whatsapp_phone']?.toString() ?? '';
-    final distance = svc['distance_km'];
-    final logo = entreprise['logo']?.toString();
+    final ent  = e['name']?.toString() ?? '';
+    final ph   = e['call_phone']?.toString() ?? '';
+    final wa   = e['whatsapp_phone']?.toString() ?? '';
+    final dist = svc['distance_km'];
+    final logo = e['logo']?.toString();
+    final note = (svc['average_rating'] as num?)?.toDouble();
+    final avis = (svc['total_reviews'] as num?)?.toInt() ?? 0;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        color: isDark ? _UI.bubbleDark : Colors.white,
+        borderRadius: BorderRadius.circular(13),
         border: Border.all(
-          color: AppConstants.primaryRed.withOpacity(0.15),
+          color: _UI.primary.withOpacity(0.12),
           width: 1,
         ),
         boxShadow: [
@@ -764,26 +781,30 @@ class _CarAIScreenState extends State<CarAIScreen>
       ),
       child: Row(
         children: [
-          // Logo
+          // Logo / icône
           Container(
-            width: 44,
-            height: 44,
+            width: 42,
+            height: 42,
             decoration: BoxDecoration(
-              color: AppConstants.primaryRed.withOpacity(0.1),
+              color: _UI.primary.withOpacity(0.09),
               borderRadius: BorderRadius.circular(10),
               image: logo != null && logo.isNotEmpty
                   ? DecorationImage(
-                      image: NetworkImage(logo), fit: BoxFit.cover)
+                      image: NetworkImage(logo),
+                      fit: BoxFit.cover)
                   : null,
             ),
-            child: logo == null || logo.isEmpty
-                ? const Icon(Icons.build_rounded,
-                    color: AppConstants.primaryRed, size: 22)
+            child: (logo == null || logo.isEmpty)
+                ? const Icon(
+                    Icons.store_rounded,
+                    color: _UI.primary,
+                    size: 20,
+                  )
                 : null,
           ),
           const SizedBox(width: 10),
 
-          // Info
+          // Informations
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -793,59 +814,80 @@ class _CarAIScreenState extends State<CarAIScreen>
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    color: isDark ? Colors.white : _UI.text,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (entrepriseName.isNotEmpty) ...[
+                if (ent.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
-                    entrepriseName,
-                    style: TextStyle(
-                        fontSize: 11, color: Colors.grey[500]),
+                    ent,
+                    style: const TextStyle(
+                        fontSize: 12, color: _UI.textMuted),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
-                if (distance != null) ...[
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      Icon(Icons.location_on_rounded,
-                          size: 11, color: AppConstants.primaryRed),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    if (dist != null) ...[
+                      const Icon(
+                        Icons.near_me_rounded,
+                        size: 11,
+                        color: _UI.primary,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        '${dist} km',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: _UI.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    if (note != null && avis > 0) ...[
+                      const Icon(
+                        Icons.star_rounded,
+                        size: 11,
+                        color: Color(0xFFF59E0B),
+                      ),
                       const SizedBox(width: 2),
                       Text(
-                        '${distance}km',
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: AppConstants.primaryRed,
-                            fontWeight: FontWeight.w500),
+                        '$note ($avis)',
+                        style: const TextStyle(
+                            fontSize: 11, color: _UI.textMuted),
                       ),
                     ],
-                  ),
-                ],
+                  ],
+                ),
               ],
             ),
           ),
 
-          // Actions
+          // Boutons d'action
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (phone.isNotEmpty)
-                _actionIcon(
-                  Icons.call_rounded,
-                  Colors.green,
-                  () => _launchUrl('tel:$phone'),
+              if (ph.isNotEmpty)
+                _iconBtn(
+                  icon: Icons.call_rounded,
+                  color: _UI.callGreen,
+                  onTap: () => _launchUrl('tel:$ph'),
+                  tooltip: 'Appeler',
                 ),
-              if (whatsapp.isNotEmpty) ...[
+              if (wa.isNotEmpty) ...[
                 const SizedBox(width: 6),
-                _actionIcon(
-                  Icons.chat_rounded,
-                  const Color(0xFF25D366),
-                  () => _launchUrl(
-                      'https://wa.me/${whatsapp.replaceAll('+', '')}'),
+                _iconBtn(
+                  icon: Icons.chat_rounded,
+                  color: _UI.whatsapp,
+                  onTap: () => _launchUrl(
+                    'https://wa.me/${wa.replaceAll('+', '').replaceAll(' ', '')}',
+                  ),
+                  tooltip: 'WhatsApp',
                 ),
               ],
             ],
@@ -855,45 +897,59 @@ class _CarAIScreenState extends State<CarAIScreen>
     );
   }
 
-  Widget _actionIcon(IconData icon, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
+  Widget _iconBtn({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    String? tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(icon, color: color, size: 17),
         ),
-        child: Icon(icon, color: color, size: 18),
       ),
     );
   }
 
   // ── Bouton carte ──────────────────────────────────────────────────────────
-  Widget _buildMapButton(String url) {
+
+  Widget _buildMapButton(String url, bool isDark) {
     return GestureDetector(
       onTap: () => _launchUrl(url),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.blue.withOpacity(0.1),
+          color: _UI.mapBlue.withOpacity(0.08),
           borderRadius: BorderRadius.circular(10),
-          border:
-              Border.all(color: Colors.blue.withOpacity(0.3), width: 1),
+          border: Border.all(
+            color: _UI.mapBlue.withOpacity(0.25),
+            width: 1,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: const [
-            Icon(Icons.map_rounded, color: Colors.blue, size: 16),
+            Icon(Icons.map_rounded, color: _UI.mapBlue, size: 15),
             SizedBox(width: 6),
             Text(
               'Voir sur la carte',
               style: TextStyle(
-                  color: Colors.blue,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600),
+                color: _UI.mapBlue,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
+            SizedBox(width: 4),
+            Icon(Icons.open_in_new_rounded, color: _UI.mapBlue, size: 12),
           ],
         ),
       ),
@@ -901,121 +957,131 @@ class _CarAIScreenState extends State<CarAIScreen>
   }
 
   // ── Suggestions ───────────────────────────────────────────────────────────
-  Widget _buildSuggestions(List<String> suggestions) {
+
+  Widget _buildSuggestions(List<String> suggestions, bool isDark) {
     return Wrap(
-      spacing: 8,
+      spacing: 6,
       runSpacing: 6,
-      children: suggestions
-          .map((s) => GestureDetector(
-                onTap: () => _sendMessage(s),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 7),
-                  decoration: BoxDecoration(
-                    color:
-                        AppConstants.primaryRed.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: AppConstants.primaryRed.withOpacity(0.3),
-                      width: 1,
-                    ),
-                  ),
-                  child: Text(
-                    s,
-                    style: const TextStyle(
-                      color: AppConstants.primaryRed,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+      children: suggestions.map((s) {
+        return GestureDetector(
+          onTap: () => _sendMessage(s),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? _UI.primary.withOpacity(0.12)
+                  : _UI.primary.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _UI.primary.withOpacity(0.28),
+                width: 1,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.search_rounded,
+                  size: 12,
+                  color: _UI.primary,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  s,
+                  style: const TextStyle(
+                    color: _UI.primary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-              ))
-          .toList(),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
   // ── Barre de saisie ───────────────────────────────────────────────────────
+
   Widget _buildInputBar(bool isDark) {
     return Container(
       padding: EdgeInsets.fromLTRB(
-          16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+        14, 10, 14, 10 + MediaQuery.of(context).padding.bottom,
+      ),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        color: isDark ? _UI.bubbleDark : Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, -4),
+            color: Colors.black.withOpacity(0.07),
+            blurRadius: 14,
+            offset: const Offset(0, -3),
           ),
         ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Champ de saisie
+          // Champ texte
           Expanded(
             child: Container(
+              constraints: const BoxConstraints(maxHeight: 120),
               decoration: BoxDecoration(
                 color: isDark
-                    ? const Color(0xFF0F172A)
+                    ? Colors.white.withOpacity(0.06)
                     : const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(22),
               ),
               child: TextField(
-                controller: _inputCtrl,
-                focusNode: _inputFocus,
-                maxLines: 4,
-                minLines: 1,
+                controller:      _inputCtrl,
+                focusNode:       _inputFocus,
+                maxLines:        5,
+                minLines:        1,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (v) => _sendMessage(v),
+                onSubmitted:     _sendMessage,
                 style: TextStyle(
-                  color:
-                      isDark ? Colors.white : const Color(0xFF1E293B),
-                  fontSize: 14.5,
+                  color:    isDark ? Colors.white : _UI.text,
+                  fontSize: 14,
                 ),
                 decoration: InputDecoration(
                   hintText: 'Posez votre question...',
-                  hintStyle:
-                      TextStyle(color: Colors.grey[400], fontSize: 14),
-                  border: InputBorder.none,
+                  hintStyle: const TextStyle(
+                      color: _UI.textMuted, fontSize: 14),
+                  border:         InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 12),
+                      horizontal: 16, vertical: 11),
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 9),
 
           // Bouton envoi
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: _inputCtrl,
             builder: (_, value, __) {
               final hasText = value.text.trim().isNotEmpty;
+              final active  = hasText && !_isLoading;
               return GestureDetector(
-                onTap: () => _sendMessage(_inputCtrl.text),
+                onTap: active ? () => _sendMessage(_inputCtrl.text) : null,
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  width: 48,
-                  height: 48,
+                  duration: const Duration(milliseconds: 180),
+                  width:  46,
+                  height: 46,
                   decoration: BoxDecoration(
-                    gradient: hasText && !_isLoading
+                    gradient: active
                         ? const LinearGradient(
-                            colors: [
-                              Color(0xFFE63946),
-                              Color(0xFFFF6B6B)
-                            ],
+                            colors: [_UI.primary, _UI.primaryDim],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           )
                         : null,
-                    color: hasText && !_isLoading
-                        ? null
-                        : Colors.grey[300],
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: hasText && !_isLoading
+                    color: active ? null : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: active
                         ? [
                             BoxShadow(
-                              color: AppConstants.primaryRed
-                                  .withOpacity(0.35),
+                              color: _UI.primary.withOpacity(0.3),
                               blurRadius: 10,
                               offset: const Offset(0, 4),
                             )
@@ -1030,8 +1096,11 @@ class _CarAIScreenState extends State<CarAIScreen>
                             strokeWidth: 2,
                           ),
                         )
-                      : const Icon(Icons.send_rounded,
-                          color: Colors.white, size: 22),
+                      : Icon(
+                          Icons.send_rounded,
+                          color: active ? Colors.white : Colors.grey.shade500,
+                          size: 20,
+                        ),
                 ),
               );
             },
@@ -1040,20 +1109,13 @@ class _CarAIScreenState extends State<CarAIScreen>
       ),
     );
   }
-
-  Future<void> _launchUrl(String url) async {
-    try {
-      await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
-    } catch (e) {
-      debugPrint('[CarAI] launchUrl: $e');
-    }
-  }
 }
 
-// ─── Widget animation des points de frappe ────────────────────────────────────
+// ─── Animation des 3 points de frappe ────────────────────────────────────────
 
 class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
   @override
   State<_TypingDots> createState() => _TypingDotsState();
 }
@@ -1068,14 +1130,14 @@ class _TypingDotsState extends State<_TypingDots>
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1100),
     )..repeat();
     _anims = List.generate(3, (i) {
-      final start = i * 0.2;
+      final start = i * 0.18;
       return Tween<double>(begin: 0, end: -6).animate(
         CurvedAnimation(
           parent: _ctrl,
-          curve: Interval(start, start + 0.4, curve: Curves.easeInOut),
+          curve: Interval(start, start + 0.38, curve: Curves.easeInOut),
         ),
       );
     });
@@ -1091,30 +1153,28 @@ class _TypingDotsState extends State<_TypingDots>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (_, __) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(3, (i) {
-            return Transform.translate(
-              offset: Offset(0, _anims[i].value),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: AppConstants.primaryRed,
-                  shape: BoxShape.circle,
-                ),
+      builder: (_, __) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) {
+          return Transform.translate(
+            offset: Offset(0, _anims[i].value),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width:  8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: _UI.primary.withOpacity(0.7),
+                shape: BoxShape.circle,
               ),
-            );
-          }),
-        );
-      },
+            ),
+          );
+        }),
+      ),
     );
   }
 }
 
-// ─── Bouton flottant CarAI (à placer dans chaque écran) ───────────────────────
+// ─── Bouton flottant CarAI (FloatingActionButton) ─────────────────────────────
 
 class CarAIFab extends StatelessWidget {
   const CarAIFab({super.key});
@@ -1122,27 +1182,32 @@ class CarAIFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FloatingActionButton(
-      heroTag: 'carai_fab_${UniqueKey()}',
-      backgroundColor: AppConstants.primaryRed,
-      elevation: 6,
-      tooltip: 'CarAI — Assistant automobile',
+      heroTag:         'carai_fab_unique',
+      backgroundColor: _UI.primary,
+      elevation:       6,
+      tooltip:         'Assistant automobile CarAI',
       onPressed: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const CarAIScreen()),
       ),
       child: Stack(
+        clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
-          const Icon(Icons.smart_toy_rounded, color: Colors.white, size: 26),
+          const Icon(
+            Icons.support_agent_rounded,
+            color: Colors.white,
+            size: 26,
+          ),
           Positioned(
-            top: 0,
-            right: 0,
+            top: -2,
+            right: -2,
             child: Container(
-              width: 10,
+              width:  10,
               height: 10,
               decoration: BoxDecoration(
-                color: const Color(0xFF4ADE80),
-                shape: BoxShape.circle,
+                color:  _UI.online,
+                shape:  BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 1.5),
               ),
             ),
