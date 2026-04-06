@@ -102,7 +102,7 @@ final _storage = const FlutterSecureStorage(
       );
     }
   }
-
+  
   Future<void> _fetchDomaines() async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -112,21 +112,57 @@ final _storage = const FlutterSecureStorage(
       );
       if (res.statusCode == 200) {
         final List raw = jsonDecode(res.body);
-        // Filtrer par domaines de l'entreprise
-        final entrepriseDomaines =
-            (widget.entreprise['domaines'] as List? ?? [])
-                .map((d) => d['id'].toString())
+        
+        // Récupérer les IDs des domaines de l'entreprise
+        final entrepriseDomaines = widget.entreprise['domaines'];
+        
+        Set<String> entrepriseDomaineIds = {};
+        
+        // Gérer différents formats possibles
+        if (entrepriseDomaines is List) {
+          if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is Map) {
+            // Format: [{"id": 1, "name": "..."}, ...]
+            entrepriseDomaineIds = entrepriseDomaines
+                .map((d) => d['id']?.toString())
+                .where((id) => id != null)
+                .toSet()
+                .cast<String>();
+          } else if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is String) {
+            // Format: ["1", "2", "3"]
+            entrepriseDomaineIds = entrepriseDomaines
+                .map((id) => id.toString())
                 .toSet();
+          }
+        } else if (entrepriseDomaines is Map) {
+          // Format: {"ids": [1,2,3]} ou autre structure
+          if (entrepriseDomaines['ids'] is List) {
+            entrepriseDomaineIds = (entrepriseDomaines['ids'] as List)
+                .map((id) => id.toString())
+                .toSet();
+          }
+        }
+        
+        debugPrint('Domaines entreprise IDs: $entrepriseDomaineIds');
+        debugPrint('Tous les domaines: ${raw.map((d) => d['name'])}');
+        
         setState(() {
-          _domaines = raw
-              .where((d) => entrepriseDomaines.contains(d['id'].toString()))
-              .toList();
-          if (_domaines.isNotEmpty) {
+          // Filtrer les domaines de l'entreprise
+          _domaines = raw.where((d) {
+            final domaineId = d['id'].toString();
+            return entrepriseDomaineIds.contains(domaineId);
+          }).toList();
+          
+          debugPrint('Domaines filtrés: ${_domaines.map((d) => d['name'])}');
+          
+          // Sélectionner le premier domaine par défaut si disponible
+          if (_domaines.isNotEmpty && _selectedDomaineId == null) {
             _selectedDomaineId = _domaines.first['id'].toString();
           }
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Erreur fetch domaines: $e');
+    }
   }
 
   // ── Navigation ───────────────────────────────

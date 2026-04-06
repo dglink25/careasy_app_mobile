@@ -142,19 +142,63 @@ class _EditServiceScreenState extends State<EditServiceScreen>
       );
       if (res.statusCode == 200) {
         final List raw = jsonDecode(res.body);
-        final entrepriseDomaines = (widget.entreprise['domaines'] as List? ?? [])
-            .map((d) => d['id'].toString())
-            .toSet();
+        
+        // Récupérer les IDs des domaines de l'entreprise
+        final entrepriseDomaines = widget.entreprise['domaines'];
+        
+        Set<String> entrepriseDomaineIds = {};
+        
+        // Gérer différents formats possibles
+        if (entrepriseDomaines is List) {
+          if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is Map) {
+            // Format: [{"id": 1, "name": "..."}, ...]
+            entrepriseDomaineIds = entrepriseDomaines
+                .map((d) => d['id']?.toString())
+                .where((id) => id != null)
+                .toSet()
+                .cast<String>();
+          } else if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is String) {
+            // Format: ["1", "2", "3"]
+            entrepriseDomaineIds = entrepriseDomaines
+                .map((id) => id.toString())
+                .toSet();
+          }
+        } else if (entrepriseDomaines is Map) {
+          // Format: {"ids": [1,2,3]} ou autre structure
+          if (entrepriseDomaines['ids'] is List) {
+            entrepriseDomaineIds = (entrepriseDomaines['ids'] as List)
+                .map((id) => id.toString())
+                .toSet();
+          }
+        }
+        
+        debugPrint('Domaines entreprise IDs: $entrepriseDomaineIds');
+        debugPrint('Tous les domaines: ${raw.map((d) => d['name'])}');
+        
         setState(() {
-          _domaines = raw
-              .where((d) => entrepriseDomaines.contains(d['id'].toString()))
-              .toList();
-          if (_selectedDomaineId == null && _domaines.isNotEmpty) {
+          // Filtrer les domaines de l'entreprise
+          _domaines = raw.where((d) {
+            final domaineId = d['id'].toString();
+            return entrepriseDomaineIds.contains(domaineId);
+          }).toList();
+          
+          debugPrint('Domaines filtrés: ${_domaines.map((d) => d['name'])}');
+          
+          // Vérifier si le domaine actuel du service est toujours dans la liste
+          if (_selectedDomaineId != null && 
+              !_domaines.any((d) => d['id'].toString() == _selectedDomaineId)) {
+            // Si le domaine n'est plus disponible, sélectionner le premier
+            if (_domaines.isNotEmpty) {
+              _selectedDomaineId = _domaines.first['id'].toString();
+            }
+          } else if (_selectedDomaineId == null && _domaines.isNotEmpty) {
             _selectedDomaineId = _domaines.first['id'].toString();
           }
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Erreur fetch domaines: $e');
+    }
   }
 
   void _goToStep(int step) {
