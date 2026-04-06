@@ -12,6 +12,7 @@ import '../services/pusher_service.dart';
 import '../utils/constants.dart';
 import 'home_screen.dart';
 import 'welcome_screen.dart';
+import '../services/update_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -178,6 +179,10 @@ class _SplashScreenState extends State<SplashScreen>
             FadeTransition(opacity: anim, child: child),
       ),
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      UpdateService.checkForUpdate(context);
+    });
   }
 
   @override
@@ -226,7 +231,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Votre Automobile, Notre Expertise',
+                    'La solution pour ne jamais tomber en panne au Bénin',
                     style: TextStyle(
                       fontSize: 14,
                       fontStyle: FontStyle.italic,

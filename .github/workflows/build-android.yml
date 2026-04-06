@@ -1,0 +1,67 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.x'
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK release
+        run: flutter build apk --release
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep 'version:' pubspec.yaml | head -1 | awk '{print $2}' | tr -d "'")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk CarEasy.apk
+
+      - name: Create version.json
+        run: |
+          echo '{
+            "version": "${{ steps.version.outputs.VERSION }}",
+            "download_url": "https://github.com/${{ github.repository }}/releases/latest/download/CarEasy.apk",
+            "release_notes": "Nouvelle version disponible"
+          }' > version.json
+
+      - name: Delete existing latest release
+        run: |
+          gh release delete latest --yes || true
+          git push origin :refs/tags/latest || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "CarEasy — Dernière version"
+          files: |
+            CarEasy.apk
+            version.json
+          body: "Version ${{ steps.version.outputs.VERSION }} — Build automatique"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
