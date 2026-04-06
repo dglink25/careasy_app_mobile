@@ -9,7 +9,7 @@ plugins {
 android {
     namespace = "com.careasy.careasy_app_mobile"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -23,7 +23,7 @@ android {
 
     defaultConfig {
         applicationId = "com.careasy.careasy_app_mobile"
-        minSdk = flutter.minSdkVersion  // Remplacer flutter.minSdkVersion par 23 (minimum pour pusher)
+        minSdk = 23 
         targetSdk = 34  // Remplacer flutter.targetSdkVersion par une valeur fixe
         versionCode = flutter.versionCode
         versionName = flutter.versionName
