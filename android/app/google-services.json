@@ -12,7 +12,16 @@
           "package_name": "com.careasy.careasy_app_mobile"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "271933456982-q2v3lpnjjdbdlqaqi6m41g6e5qv3osef.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.careasy.careasy_app_mobile",
+            "certificate_hash": "06e42b28666f66f1256f6eca649954bc71753513"
+          }
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAeHiV-pDxF7F9VOi-qoKFOKB0AsIbKQZU"

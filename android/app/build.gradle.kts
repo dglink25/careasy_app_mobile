@@ -11,6 +11,15 @@ android {
     compileSdk = 36
     ndkVersion = "27.0.12077973"
 
+    signingConfigs {
+        create("release") {
+            keyAlias = System.getenv("KEY_ALIAS") ?: ""
+            keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+            storeFile = System.getenv("KEYSTORE_PATH")?.let { file(it) }
+            storePassword = System.getenv("STORE_PASSWORD") ?: ""
+        }
+    }
+
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
@@ -29,10 +38,9 @@ android {
         versionName = flutter.versionName
         multiDexEnabled = true
     }
-
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")  // ← plus "debug"
         }
     }
 }
