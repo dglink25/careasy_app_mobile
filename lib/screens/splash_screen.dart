@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
-import '../providers/rendez_vous_provider.dart';         
+import '../providers/rendez_vous_provider.dart';
 import '../services/notification_service.dart';
 import '../services/message_polling_service.dart';
 import '../services/pusher_service.dart';
@@ -24,10 +24,8 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
-  static const _androidOptions =
-      AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions =
-      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: _androidOptions,
@@ -37,14 +35,12 @@ class _SplashScreenState extends State<SplashScreen>
   late AnimationController _anim;
   late Animation<double> _fade;
   late Animation<double> _scale;
-  
-  // Pour les 5 points de chargement
+
   late List<AnimationController> _dotControllers;
   late List<Animation<double>> _dotAnimations;
   Timer? _loadingMessageTimer;
   int _currentMessageIndex = 0;
-  
-  // Messages de chargement
+
   final List<String> _loadingMessages = [
     'Connexion en cours...',
     'Préparation de votre espace...',
@@ -56,6 +52,10 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
+
+    // Réinitialiser le flag de mise à jour à chaque lancement
+    UpdateService.reset();
+
     _anim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 900));
     _fade = Tween<double>(begin: 0.0, end: 1.0)
@@ -63,13 +63,10 @@ class _SplashScreenState extends State<SplashScreen>
     _scale = Tween<double>(begin: 0.85, end: 1.0)
         .animate(CurvedAnimation(parent: _anim, curve: Curves.easeOutBack));
     _anim.forward();
-    
-    // Initialisation des animations pour les 5 points
+
     _initDotAnimations();
-    
-    // Démarrage du changement de messages
     _startLoadingMessages();
-    
+
     Future.delayed(const Duration(milliseconds: 1200), _checkSession);
   }
 
@@ -80,7 +77,7 @@ class _SplashScreenState extends State<SplashScreen>
         duration: const Duration(milliseconds: 400),
       )..repeat(reverse: true);
     });
-    
+
     _dotAnimations = List.generate(5, (index) {
       return Tween<double>(begin: 0.6, end: 1.2).animate(
         CurvedAnimation(
@@ -89,26 +86,22 @@ class _SplashScreenState extends State<SplashScreen>
         ),
       );
     });
-    
-    // Décaler les animations pour un effet cascade
+
     Future.delayed(Duration.zero, () {
       for (int i = 0; i < _dotControllers.length; i++) {
         Future.delayed(Duration(milliseconds: i * 100), () {
-          if (mounted && _dotControllers[i].isCompleted) {
-            _dotControllers[i].forward();
-          }
+          if (mounted) _dotControllers[i].forward();
         });
       }
     });
   }
 
   void _startLoadingMessages() {
-    _loadingMessageTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
+    _loadingMessageTimer =
+        Timer.periodic(const Duration(milliseconds: 800), (timer) {
       if (mounted && _currentMessageIndex < _loadingMessages.length - 1) {
-        setState(() {
-          _currentMessageIndex++;
-        });
-      } else if (_currentMessageIndex >= _loadingMessages.length - 1) {
+        setState(() { _currentMessageIndex++; });
+      } else {
         timer.cancel();
       }
     });
@@ -117,9 +110,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void dispose() {
     _anim.dispose();
-    for (var controller in _dotControllers) {
-      controller.dispose();
-    }
+    for (var c in _dotControllers) { c.dispose(); }
     _loadingMessageTimer?.cancel();
     super.dispose();
   }
@@ -153,11 +144,11 @@ class _SplashScreenState extends State<SplashScreen>
         }
         if (!mounted) return;
 
-        // ── Démarrer Pusher + Polling + FCM ──────────────────────────
+        // Démarrer Pusher + Polling + FCM
         await context.read<MessageProvider>().reinitializeAfterLogin();
         await NotificationService().refreshTokenAfterLogin();
 
-        // ── Injecter RendezVousProvider dans PusherService ──────────
+        // Injecter RendezVousProvider dans PusherService
         if (mounted) {
           PusherService().setRendezVousProvider(
               context.read<RendezVousProvider>());
@@ -246,17 +237,23 @@ class _SplashScreenState extends State<SplashScreen>
       ),
     );
 
+    // Vérifier la mise à jour APRÈS la navigation (pas avant)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      UpdateService.checkForUpdate(context);
+      if (mounted && context.mounted) {
+        // Délai pour laisser la nouvelle page se stabiliser
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted && context.mounted) {
+            UpdateService.checkForUpdate(context);
+          }
+        });
+      }
     });
   }
 
-  // Widget pour les 5 points de chargement style Facebook
   Widget _buildFacebookStyleLoading() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Les 5 points animés
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
@@ -266,7 +263,7 @@ class _SplashScreenState extends State<SplashScreen>
               builder: (context, child) {
                 return Container(
                   margin: const EdgeInsets.symmetric(horizontal: 6),
-                  width: 8 * _dotAnimations[index].value,
+                  width:  8 * _dotAnimations[index].value,
                   height: 8 * _dotAnimations[index].value,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
@@ -280,7 +277,6 @@ class _SplashScreenState extends State<SplashScreen>
           }),
         ),
         const SizedBox(height: 16),
-        // Message de chargement changeant
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),
           transitionBuilder: (Widget child, Animation<double> animation) {
@@ -315,7 +311,6 @@ class _SplashScreenState extends State<SplashScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(children: [
-        // Cercles décoratifs
         Positioned(
           top: -80, right: -80,
           child: Container(
@@ -342,8 +337,6 @@ class _SplashScreenState extends State<SplashScreen>
             ),
           ),
         ),
-        
-        // Contenu principal
         Center(
           child: AnimatedBuilder(
             animation: _anim,
@@ -352,9 +345,8 @@ class _SplashScreenState extends State<SplashScreen>
               child: ScaleTransition(
                 scale: _scale,
                 child: Column(
-                  mainAxisSize: MainAxisSize.min, 
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo
                     SizedBox(
                       width: 200, height: 200,
                       child: Image.asset(
@@ -363,7 +355,6 @@ class _SplashScreenState extends State<SplashScreen>
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Slogan
                     Text(
                       'La solution pour ne jamais tomber en panne au Bénin',
                       style: TextStyle(
@@ -380,12 +371,8 @@ class _SplashScreenState extends State<SplashScreen>
             ),
           ),
         ),
-        
-        // Footer avec le loader style Facebook
         Positioned(
-          bottom: 50,
-          left: 0,
-          right: 0,
+          bottom: 50, left: 0, right: 0,
           child: AnimatedBuilder(
             animation: _anim,
             builder: (_, __) => FadeTransition(

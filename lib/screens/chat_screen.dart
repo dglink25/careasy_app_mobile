@@ -70,9 +70,8 @@ class _ChatScreenState extends State<ChatScreen>
   bool _isSearching = false;
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
-  List<int> _searchResults = []; // indices des messages correspondants
+  List<int> _searchResults = [];
   int _searchCurrentIndex = -1;
-  final Map<int, GlobalKey> _msgKeys = {};
 
   // === RÉPONSE À UN MESSAGE ===
   MessageModel? _replyTo;
@@ -99,13 +98,11 @@ class _ChatScreenState extends State<ChatScreen>
   Duration _recDuration = Duration.zero;
   Timer? _recTimer;
 
-  // Waveform
   final List<double> _waveformBars = List.filled(40, 0.1);
   Timer? _waveformTimer;
   final math.Random _rand = math.Random();
   double _currentAmplitude = 0.0;
 
-  // Swipe micro
   final GlobalKey _micKey = GlobalKey();
   Offset? _micTouchStart;
   double _micDragY = 0.0;
@@ -125,7 +122,6 @@ class _ChatScreenState extends State<ChatScreen>
 
   MessageProvider? _msgProvider;
 
-  // Emojis fréquents
   final List<String> _frequentEmojis = [
     '😀','😂','🥰','😍','🤩','😎','🤔','😅','😭','😤',
     '🎉','👍','👎','❤️','🔥','✅','⚡','🙏','💪','😴',
@@ -199,7 +195,7 @@ class _ChatScreenState extends State<ChatScreen>
       }
     }
     setState(() {
-      _searchResults = results.reversed.toList(); // Plus récents en premier
+      _searchResults = results.reversed.toList();
       if (_searchResults.isNotEmpty) {
         _searchCurrentIndex = 0;
         _scrollToMessage(_searchResults[0]);
@@ -212,7 +208,6 @@ class _ChatScreenState extends State<ChatScreen>
       if (!mounted || !_scroll.hasClients) return;
       final msgs = _msgProvider?.getMessages(widget.conversationId) ?? [];
       if (index >= msgs.length) return;
-      // Calculer la position approximative
       final total = msgs.length;
       final ratio = index / total;
       final maxExt = _scroll.position.maxScrollExtent;
@@ -342,7 +337,6 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  // ── Modification de message ─────────────────────────────────────────
   bool _canEdit(MessageModel msg) {
     if (!msg.isMe) return false;
     if (msg.type != 'text') return false;
@@ -388,17 +382,9 @@ class _ChatScreenState extends State<ChatScreen>
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200) {
-        // Mettre à jour localement
-        final msgs = _msgProvider?.getMessages(widget.conversationId) ?? [];
-        final idx = msgs.indexWhere((m) => m.id == _editingMessage!.id);
-        if (idx != -1) {
-          final updated = msgs[idx].copyWith(content: newContent.trim());
-          // Forcer le refresh via provider
-          await _msgProvider?.loadMessages(widget.conversationId);
-        }
+        await _msgProvider?.loadMessages(widget.conversationId);
       } else {
-        // Fallback: mettre à jour localement sans serveur
-        _showErr('Erreur modification, mis à jour localement');
+        _showErr('Erreur modification');
       }
     } catch (e) {
       _showErr('Erreur de connexion');
@@ -415,7 +401,6 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  // ── Suppression de message ──────────────────────────────────────────
   Future<void> _deleteMessage(MessageModel msg) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -736,7 +721,6 @@ class _ChatScreenState extends State<ChatScreen>
       appBar: _buildAppBar(),
       body: Column(children: [
         if (widget.serviceName != null) _serviceBanner(),
-        // Barre de recherche inline
         if (_isSearching) _buildSearchBar(),
         Expanded(child: _buildMsgList()),
         _buildOtherIndicator(),
@@ -746,9 +730,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════
-  //  APP BAR — SANS icônes d'appel/vidéo
-  // ══════════════════════════════════════════════════════════════════════
   PreferredSizeWidget _buildAppBar() => AppBar(
     backgroundColor: AppConstants.primaryRed,
     foregroundColor: Colors.white,
@@ -822,7 +803,6 @@ class _ChatScreenState extends State<ChatScreen>
         )),
       ]);
     }),
-    // SEULEMENT recherche et menu (PAS d'icônes appel/vidéo)
     actions: [
       IconButton(
         icon: Icon(_isSearching ? Icons.close : Icons.search),
@@ -844,7 +824,6 @@ class _ChatScreenState extends State<ChatScreen>
     ],
   );
 
-  // ── Barre de recherche inline ───────────────────────────────────────
   Widget _buildSearchBar() {
     return Container(
       color: AppConstants.primaryRed,
@@ -903,12 +882,13 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  //  LISTE DE MESSAGES
+  //  LISTE DE MESSAGES — CORRECTION PRINCIPALE
   // ══════════════════════════════════════════════════════════════════════
   Widget _buildMsgList() {
     return Consumer<MessageProvider>(
       builder: (ctx, pv, _) {
         final msgs = pv.getMessages(widget.conversationId);
+
         if (msgs.length > _lastMsgCount) {
           _lastMsgCount = msgs.length;
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -922,13 +902,23 @@ class _ChatScreenState extends State<ChatScreen>
               child: CircularProgressIndicator(color: AppConstants.primaryRed));
         }
         if (msgs.isEmpty) return _buildEmpty();
+
         return ListView.builder(
           controller: _scroll,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
           itemCount: msgs.length,
           itemBuilder: (_, i) {
-            final showDate = i == 0 || msgs[i].createdAt.day != msgs[i - 1].createdAt.day;
-            // Vérifier si ce message correspond à la recherche
+            // ── CORRECTION DATE : comparer les dates LOCALES ──────────
+            bool showDate = i == 0;
+            if (i > 0) {
+              final prevDate = msgs[i - 1].createdAt;
+              final currDate = msgs[i].createdAt;
+              // Comparer année, mois, jour en heure locale
+              showDate = prevDate.year  != currDate.year  ||
+                         prevDate.month != currDate.month ||
+                         prevDate.day   != currDate.day;
+            }
+
             final isHighlighted = _isSearching &&
                 _searchResults.isNotEmpty &&
                 _searchResults.contains(i) &&
@@ -949,10 +939,24 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  Widget _buildDateSep(DateTime d) {
-    final diff = DateTime.now().difference(d).inDays;
-    String label = diff == 0 ? "Aujourd'hui" : diff == 1 ? 'Hier'
-        : DateFormat('dd MMMM yyyy', 'fr_FR').format(d);
+  // ── CORRECTION : Séparateur de date avec logique Hier/Aujourd'hui ────
+  Widget _buildDateSep(DateTime msgDate) {
+    final now   = DateTime.now();
+    // Dates en local (sans heure) pour comparaison
+    final today = DateTime(now.year, now.month, now.day);
+    final msgDay = DateTime(msgDate.year, msgDate.month, msgDate.day);
+
+    final diff = today.difference(msgDay).inDays;
+
+    String label;
+    if (diff == 0) {
+      label = "Aujourd'hui";
+    } else if (diff == 1) {
+      label = 'Hier';
+    } else {
+      label = DateFormat('dd MMMM yyyy', 'fr_FR').format(msgDate);
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Center(child: Container(
@@ -969,11 +973,9 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ── Swipe pour répondre ─────────────────────────────────────────────
   Widget _buildSwipeable(MessageModel m, int index, bool isHighlighted, bool isCurrentSearch) {
     return GestureDetector(
       onHorizontalDragEnd: (details) {
-        // Swipe vers la droite → répondre
         if (details.primaryVelocity != null && details.primaryVelocity! > 300) {
           HapticFeedback.mediumImpact();
           setState(() => _replyTo = m);
@@ -1012,6 +1014,7 @@ class _ChatScreenState extends State<ChatScreen>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            // Avatar uniquement pour les messages reçus
             if (!isMe) Padding(
               padding: const EdgeInsets.only(right: 4, bottom: 2),
               child: CircleAvatar(
@@ -1051,7 +1054,6 @@ class _ChatScreenState extends State<ChatScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Aperçu du message auquel on répond
                         if (m.replyTo != null) _buildReplyPreview(m.replyTo!),
                         _buildMsgContent(m),
                         const SizedBox(height: 2),
@@ -1059,6 +1061,7 @@ class _ChatScreenState extends State<ChatScreen>
                           mainAxisSize: MainAxisSize.min,
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
+                            // Heure en local
                             Text(DateFormat('HH:mm').format(m.createdAt),
                                 style: TextStyle(
                                     fontSize: 10,
@@ -1077,7 +1080,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ── Aperçu du message cité ──────────────────────────────────────────
   Widget _buildReplyPreview(ReplyToModel reply) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1363,7 +1365,7 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   // ══════════════════════════════════════════════════════════════════════
-  //  BARRE D'INPUT
+  //  BARRE D'INPUT (identique à l'original)
   // ══════════════════════════════════════════════════════════════════════
   Widget _buildInputBar() => Container(
     color: const Color(0xFFF0F2F5),
@@ -1371,13 +1373,8 @@ class _ChatScreenState extends State<ChatScreen>
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       if (_recPreview) _buildPreviewBar(),
       if (_recActive && _recLocked) _buildLockedRecBar(),
-
-      // Bannière de réponse
       if (_replyTo != null && !_isEditing) _buildReplyBanner(),
-
-      // Bannière de modification
       if (_isEditing && _editingMessage != null) _buildEditBanner(),
-
       if (!_recPreview)
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           _buildAttachBtn(),
@@ -1390,7 +1387,6 @@ class _ChatScreenState extends State<ChatScreen>
     ]),
   );
 
-  // ── Bannière répondre à ─────────────────────────────────────────────
   Widget _buildReplyBanner() {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1421,7 +1417,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ── Bannière modifier ───────────────────────────────────────────────
   Widget _buildEditBanner() {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1473,7 +1468,6 @@ class _ChatScreenState extends State<ChatScreen>
             border: InputBorder.none,
             contentPadding: const EdgeInsets.symmetric(vertical: 10)),
       )),
-      // BOUTON EMOJI FONCTIONNEL
       IconButton(
           icon: Icon(
             _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions_outlined,
@@ -1494,7 +1488,6 @@ class _ChatScreenState extends State<ChatScreen>
     ]),
   );
 
-  // ── EMOJI PICKER ────────────────────────────────────────────────────
   Widget _buildEmojiPicker() {
     return Container(
       height: 200,
@@ -1521,9 +1514,7 @@ class _ChatScreenState extends State<ChatScreen>
           child: GridView.builder(
             padding: const EdgeInsets.all(8),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 10,
-              mainAxisSpacing: 4,
-              crossAxisSpacing: 4,
+              crossAxisCount: 10, mainAxisSpacing: 4, crossAxisSpacing: 4,
             ),
             itemCount: _frequentEmojis.length,
             itemBuilder: (_, i) => GestureDetector(
@@ -1540,9 +1531,7 @@ class _ChatScreenState extends State<ChatScreen>
                 );
                 setState(() => _hasText = true);
               },
-              child: Center(
-                child: Text(_frequentEmojis[i], style: const TextStyle(fontSize: 22)),
-              ),
+              child: Center(child: Text(_frequentEmojis[i], style: const TextStyle(fontSize: 22))),
             ),
           ),
         ),
@@ -1755,7 +1744,7 @@ class _ChatScreenState extends State<ChatScreen>
           const SizedBox(width: 6),
           Text(_fmt(_recDuration),
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
-                  color: Color(0xFF2D2D2D), fontFeatures: [FontFeature.tabularFigures()])),
+                  color: Color(0xFF2D2D2D))),
         ]),
         const SizedBox(width: 12),
         Expanded(child: _buildWaveform()),
@@ -1889,7 +1878,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ── Menu contextuel (long press) ────────────────────────────────────
   void _msgMenu(MessageModel m) => showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -1898,7 +1886,6 @@ class _ChatScreenState extends State<ChatScreen>
         const SizedBox(height: 8),
         Container(width: 36, height: 4,
             decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
-        // Répondre
         ListTile(
             leading: const Icon(Icons.reply, color: AppConstants.primaryRed),
             title: const Text('Répondre'),
@@ -1907,7 +1894,6 @@ class _ChatScreenState extends State<ChatScreen>
               setState(() { _replyTo = m; _isEditing = false; });
               _focus.requestFocus();
             }),
-        // Copier
         ListTile(
             leading: const Icon(Icons.copy_outlined),
             title: const Text('Copier'),
@@ -1917,7 +1903,6 @@ class _ChatScreenState extends State<ChatScreen>
               ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Copié'), duration: Duration(seconds: 1)));
             }),
-        // Modifier (seulement si c'est mon message, texte, et < 15 min)
         if (_canEdit(m))
           ListTile(
               leading: const Icon(Icons.edit_outlined, color: Colors.blue),
@@ -1927,7 +1912,6 @@ class _ChatScreenState extends State<ChatScreen>
                 Navigator.pop(context);
                 _startEdit(m);
               }),
-        // Supprimer (seulement mes messages)
         if (m.isMe)
           ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
@@ -1938,7 +1922,6 @@ class _ChatScreenState extends State<ChatScreen>
               }),
       ])));
 
-  // ── Options (3 points) ──────────────────────────────────────────────
   void _showOptions() => showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -1960,8 +1943,6 @@ class _ChatScreenState extends State<ChatScreen>
               _showErr('Bientôt disponible');
             }),
       ]));
-
-  // ── Helpers ────────────────────────────────────────────────────────────
 
   Widget _buildEmpty() => Center(
     child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -2056,7 +2037,6 @@ class _ChatScreenState extends State<ChatScreen>
 // ══════════════════════════════════════════════════════════════════════
 class _MapPin extends StatefulWidget {
   const _MapPin();
-
   @override
   State<_MapPin> createState() => _MapPinState();
 }
@@ -2075,10 +2055,7 @@ class _MapPinState extends State<_MapPin> with SingleTickerProviderStateMixin {
   }
 
   @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _ctrl.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {

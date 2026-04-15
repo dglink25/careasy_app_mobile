@@ -1,9 +1,10 @@
 // lib/models/message_model.dart
 // ═══════════════════════════════════════════════════════════════════════
 // CORRECTIONS:
-// 1. Location: détection automatique si lat/lng présents ET type='text'
-//    → le backend stocke toujours type='text' pour les localisations
-// 2. Heure: toujours convertie en heure locale du téléphone (GMT+1)
+// 1. isMe : détection robuste via is_me flag ET comparaison sender_id
+// 2. Location: détection automatique si lat/lng présents ET type='text'
+// 3. Heure: toujours convertie en heure locale du téléphone
+// 4. createdAt: gestion correcte UTC → local sans ambiguïté
 // ═══════════════════════════════════════════════════════════════════════
 
 class ReplyToModel {
@@ -70,10 +71,14 @@ class MessageModel {
   factory MessageModel.fromJson(Map<String, dynamic> json, String currentUserId) {
     final senderId = json['sender_id']?.toString() ?? json['user_id']?.toString() ?? '';
 
+    // ─── Détection isMe robuste ────────────────────────────────────────
+    // Priorité 1 : flag explicite is_me du serveur
+    // Priorité 2 : comparaison sender_id avec currentUserId
+    // Ne jamais retourner true si currentUserId est vide
     bool isMe;
     if (json.containsKey('is_me') && json['is_me'] != null) {
       isMe = json['is_me'] == true;
-    } else if (currentUserId.isNotEmpty) {
+    } else if (currentUserId.isNotEmpty && senderId.isNotEmpty) {
       isMe = senderId == currentUserId;
     } else {
       isMe = false;
@@ -81,7 +86,8 @@ class MessageModel {
 
     ReplyToModel? replyTo;
     if (json['reply_to'] != null && json['reply_to'] is Map) {
-      try { replyTo = ReplyToModel.fromJson(json['reply_to']); } catch (_) {}
+      try { replyTo = ReplyToModel.fromJson(
+          Map<String, dynamic>.from(json['reply_to'] as Map)); } catch (_) {}
     }
 
     // ─── Parse des coordonnées ──────────────────────────────────────
@@ -89,31 +95,39 @@ class MessageModel {
     final lng = json['longitude'] != null ? double.tryParse(json['longitude'].toString()) : null;
 
     // ─── Détection automatique du type 'location' ──────────────────
-    // Le backend stocke TOUJOURS type='text' pour les localisations.
-    // Si lat et lng sont présents et non-nuls → c'est une localisation.
-    String msgType = json['type'] ?? 'text';
+    String msgType = json['type']?.toString() ?? 'text';
     if (msgType == 'text' && lat != null && lng != null) {
       msgType = 'location';
     }
 
-    // ─── Heure locale (GMT+1 Bénin / Africa/Porto-Novo) ───────────
-    // DateTime.parse retourne UTC si la string se termine par 'Z' ou a un offset.
-    // .toLocal() convertit automatiquement en heure du téléphone.
+    // ─── Heure locale ──────────────────────────────────────────────
+    // Laravel envoie toujours en UTC (format ISO 8601 sans 'Z' parfois).
+    // On force la lecture en UTC puis conversion locale.
     DateTime createdAt = DateTime.now();
     if (json['created_at'] != null) {
-      final raw = json['created_at'].toString();
-      final parsed = DateTime.tryParse(raw);
+      final raw = json['created_at'].toString().trim();
+      DateTime? parsed;
+
+      // Essai direct
+      parsed = DateTime.tryParse(raw);
+
+      // Si pas de suffix timezone, ajouter 'Z' pour forcer UTC
+      if (parsed != null && !raw.contains('Z') && !raw.contains('+') && !raw.contains('-', 10)) {
+        parsed = DateTime.tryParse('${raw}Z');
+      }
+
       if (parsed != null) {
-        // Si pas d'info timezone dans la string (pas de Z ni +HH:MM),
-        // on suppose que c'est UTC (ce que Laravel envoie par défaut)
-        // et on convertit en heure locale.
         createdAt = parsed.toLocal();
       }
     }
 
     DateTime? readAt;
     if (json['read_at'] != null) {
-      final parsed = DateTime.tryParse(json['read_at'].toString());
+      final raw = json['read_at'].toString().trim();
+      DateTime? parsed = DateTime.tryParse(raw);
+      if (parsed != null && !raw.contains('Z') && !raw.contains('+') && !raw.contains('-', 10)) {
+        parsed = DateTime.tryParse('${raw}Z');
+      }
       readAt = parsed?.toLocal();
     }
 
@@ -122,13 +136,14 @@ class MessageModel {
       conversationId: json['conversation_id']?.toString() ?? '',
       senderId:       senderId,
       content:        json['content'] ?? json['message'] ?? '',
-      type:           msgType,   // ← type corrigé (location si lat/lng présents)
+      type:           msgType,
       fileUrl:        json['file_url'] ?? json['url'],
       filePath:       json['file_path'],
-      createdAt:      createdAt, // ← heure locale téléphone
+      createdAt:      createdAt,
       readAt:         readAt,
       isMe:           isMe,
-      temporaryId:    json['temporary_id'],
+      status:         json['status']?.toString(),
+      temporaryId:    json['temporary_id']?.toString(),
       latitude:       lat,
       longitude:      lng,
       replyTo:        replyTo,
