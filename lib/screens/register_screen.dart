@@ -6,6 +6,11 @@ import 'package:careasy_app_mobile/screens/google_auth_screen.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'about_screen.dart';
+import 'otp_verification_register_screen.dart';
+import 'package:careasy_app_mobile/screens/otp_verification_screen.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -81,89 +86,35 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
       _showSnackBar('Veuillez accepter les conditions d\'utilisation', Colors.orange);
       return;
     }
-
-    setState(() => _isLoading = true);
-
-    try {
-      Map<String, dynamic> userData = {
-        'name': _nameController.text.trim(),
-        'password': _passwordController.text,
-        'password_confirmation': _confirmPasswordController.text,
-      };
-
-      if (_useEmail) {
-        userData['email'] = _emailController.text.trim().toLowerCase();
-      } else {
-        // Nettoyer le numéro de téléphone
-        String phone = _phoneController.text.trim().replaceAll(RegExp(r'\s+'), '');
-        userData['phone'] = phone;
-      }
-
-      print('Envoi des données vers: ${AppConstants.apiBaseUrl}/register');
-      print('Données: $userData');
-
-      final response = await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/register'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode(userData),
-      ).timeout(const Duration(seconds: 15));
-
-      print('Statut: ${response.statusCode}');
-      print('Réponse: ${response.body}');
-
-      final responseData = jsonDecode(response.body);
-
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        // Succès de l'inscription
-        if (responseData['token'] != null) {
-          await _storage.write(key: 'auth_token', value: responseData['token']);
-        }
-        
-        if (responseData['user'] != null) {
-          await _storage.write(key: 'user_data', value: jsonEncode(responseData['user']));
-        }
-        
-        if (mounted) {
-          _showSnackBar(
-            responseData['message'] ?? 'Inscription réussie !', 
-            Colors.green
-          );
-          
-          // Rediriger vers l'écran d'accueil
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (context) => const HomeScreen()),
-            (route) => false,
-          );
-        }
-      } else {
-        // Gestion des erreurs
-        String errorMessage = _extractErrorMessage(responseData);
-        _showSnackBar(errorMessage, Colors.red);
-      }
-    } catch (e) {
-      print('Exception: $e');
-      String errorMessage = 'Erreur de connexion au serveur';
-      
-      if (e.toString().contains('timed out')) {
-        errorMessage = 'Délai d\'attente dépassé. Vérifiez votre connexion.';
-      } else if (e.toString().contains('SocketException')) {
-        errorMessage = 'Impossible de joindre le serveur. Vérifiez que le serveur est démarré.';
-      }
-      
-      if (mounted) {
-        _showSnackBar(errorMessage, Colors.red);
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    
+    String identifier;
+    String type;
+    
+    if (_useEmail) {
+      identifier = _emailController.text.trim().toLowerCase();
+      type = 'email';
+    } else {
+      // Nettoyer le numéro de téléphone
+      identifier = _phoneController.text.trim().replaceAll(RegExp(r'\s+'), '');
+      type = 'phone';
     }
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => OtpVerificationRegisterScreen(
+          identifier: identifier,
+          type: type,
+          name: _nameController.text.trim(),
+          password: _passwordController.text,
+          confirmPassword: _confirmPasswordController.text,
+          acceptTerms: _acceptTerms,
+        ),
+      ),
+    );
   }
 
+  
   String _extractErrorMessage(Map<String, dynamic> responseData) {
     if (responseData['errors'] != null) {
       final errors = responseData['errors'] as Map;
