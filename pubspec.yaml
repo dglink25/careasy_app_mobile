@@ -87,6 +87,8 @@ dependencies:
   mobile_scanner: ^5.0.0 
   device_info_plus: ^10.0.0
 
+  flutter_pdfview: ^1.3.2
+
 
  
 
@@ -103,6 +105,7 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/sounds/
+    - assets/Manuel_Utilisateur_CarEasy.pdf
 
 dependency_overrides:
   record_linux: 1.3.0

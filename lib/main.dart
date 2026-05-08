@@ -37,10 +37,6 @@ void main() async {
   // ── 1. Firebase (OBLIGATOIRE en premier) ──────────────────────────────────
   try {
     await Firebase.initializeApp();
-
-    // ⚠️ IMPORTANT : onBackgroundMessage DOIT être appelé AVANT runApp()
-    // et APRÈS Firebase.initializeApp().
-    // La fonction doit être top-level et décorée @pragma('vm:entry-point').
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   } catch (e) {
     debugPrint('[main] Firebase init error: $e');

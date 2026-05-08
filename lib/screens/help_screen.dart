@@ -1,9 +1,9 @@
-// lib/screens/help_screen.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/constants.dart';
 import '../theme/app_theme.dart';
+import 'pdf_viewer_screen.dart';                  
 
 class HelpScreen extends StatefulWidget {
   const HelpScreen({super.key});
@@ -341,7 +341,14 @@ class _HelpScreenState extends State<HelpScreen> {
             icon: Icons.picture_as_pdf,
             title: 'Guide d\'utilisation',
             subtitle: 'Télécharger le guide PDF',
-            onTap: () => _showComingSoon('Guide d\'utilisation'),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const PdfViewerScreen(title: 'Guide d\'utilisation'),
+                ),
+              );
+            },
             isSmallScreen: isSmallScreen,
           ),
           const SizedBox(height: 8),
@@ -354,14 +361,6 @@ class _HelpScreenState extends State<HelpScreen> {
             isSmallScreen: isSmallScreen,
           ),
           const SizedBox(height: 8),
-          
-          _buildResourceItem(
-            icon: Icons.update,
-            title: 'Notes de version',
-            subtitle: 'Découvrir les dernières mises à jour',
-            onTap: () => _showComingSoon('Notes de version'),
-            isSmallScreen: isSmallScreen,
-          ),
         ],
       ),
     );

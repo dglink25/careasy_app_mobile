@@ -1,12 +1,3 @@
-// lib/models/message_model.dart
-// ═══════════════════════════════════════════════════════════════════════
-// CORRECTIONS:
-// 1. isMe : détection robuste via is_me flag ET comparaison sender_id
-// 2. Location: détection automatique si lat/lng présents ET type='text'
-// 3. Heure: toujours convertie en heure locale du téléphone
-// 4. createdAt: gestion correcte UTC → local sans ambiguïté
-// ═══════════════════════════════════════════════════════════════════════
-
 class ReplyToModel {
   final String id;
   final String senderId;
@@ -71,10 +62,7 @@ class MessageModel {
   factory MessageModel.fromJson(Map<String, dynamic> json, String currentUserId) {
     final senderId = json['sender_id']?.toString() ?? json['user_id']?.toString() ?? '';
 
-    // ─── Détection isMe robuste ────────────────────────────────────────
-    // Priorité 1 : flag explicite is_me du serveur
-    // Priorité 2 : comparaison sender_id avec currentUserId
-    // Ne jamais retourner true si currentUserId est vide
+
     bool isMe;
     if (json.containsKey('is_me') && json['is_me'] != null) {
       isMe = json['is_me'] == true;
@@ -100,9 +88,6 @@ class MessageModel {
       msgType = 'location';
     }
 
-    // ─── Heure locale ──────────────────────────────────────────────
-    // Laravel envoie toujours en UTC (format ISO 8601 sans 'Z' parfois).
-    // On force la lecture en UTC puis conversion locale.
     DateTime createdAt = DateTime.now();
     if (json['created_at'] != null) {
       final raw = json['created_at'].toString().trim();
