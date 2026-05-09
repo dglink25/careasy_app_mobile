@@ -39,7 +39,8 @@ class _OtpVerificationRegisterScreenState
   static const _aOpts = AndroidOptions(encryptedSharedPreferences: true);
   static const _iOpts =
       IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-  final _storage = const FlutterSecureStorage(aOptions: _aOpts, iOptions: _iOpts);
+  final _storage =
+      const FlutterSecureStorage(aOptions: _aOpts, iOptions: _iOpts);
 
   // ── Saisie OTP (6 champs) ─────────────────────────────────────────────
   final List<TextEditingController> _controllers =
@@ -47,17 +48,17 @@ class _OtpVerificationRegisterScreenState
   final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
 
   // ── État général ──────────────────────────────────────────────────────
-  bool _isVerifying  = false;
-  bool _isSending    = false;
-  bool _codeSent     = false;
-  String _errorMsg   = '';
-  String _maskedId   = '';
+  bool _isVerifying = false;
+  bool _isSending = false;
+  bool _codeSent = false;
+  String _errorMsg = '';
+  String _maskedId = '';
 
   // ── Timers ────────────────────────────────────────────────────────────
   // Durée de validité du code (ex: 300s = 5 min)
-  int  _expirySeconds = 300;
+  int _expirySeconds = 300;
   // Délai avant de pouvoir renvoyer (ex: 60s)
-  int  _resendSeconds = 60;
+  int _resendSeconds = 60;
 
   Timer? _expiryTimer;
   Timer? _resendTimer;
@@ -72,8 +73,8 @@ class _OtpVerificationRegisterScreenState
 
     _shakeCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 400));
-    _shakeAnim = Tween<double>(begin: 0, end: 20)
-        .animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn));
+    _shakeAnim = Tween<double>(begin: 0, end: 20).animate(
+        CurvedAnimation(parent: _shakeCtrl, curve: Curves.elasticIn));
 
     // Envoi automatique du code à l'ouverture de l'écran
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -128,39 +129,39 @@ class _OtpVerificationRegisterScreenState
   }
 
   // ── Envoi du code OTP ─────────────────────────────────────────────────
+  // NOTE : La vérification de doublon (email/téléphone déjà utilisé) est
+  // gérée dans RegisterScreen AVANT la navigation. Ici on envoie juste le code.
 
   Future<void> _sendOtp() async {
+    // Bloquer si déjà en train d'envoyer
     if (_isSending) return;
+
+    // Bloquer le renvoi si le timer n'est pas expiré
+    // (sauf pour le premier envoi où _codeSent est false)
+    if (_codeSent && _resendSeconds > 0) {
+      _showSnack(
+        'Attendez encore ${_formatTime(_resendSeconds)} avant de renvoyer.',
+        Colors.orange,
+      );
+      return;
+    }
 
     setState(() {
       _isSending = true;
-      _errorMsg  = '';
+      _errorMsg = '';
     });
 
     try {
-      // 1. Vérifier si l'identifiant est déjà utilisé (avant d'envoyer le code)
-      final alreadyUsed = await _checkIdentifierExists();
-      if (alreadyUsed) {
-        if (!mounted) return;
-        setState(() {
-          _errorMsg = widget.type == 'email'
-              ? 'Cette adresse email est déjà associée à un compte.'
-              : 'Ce numéro de téléphone est déjà associé à un compte.';
-          _isSending = false;
-        });
-        return;
-      }
-
-      // 2. Envoyer le code via /verify-contact/send
+      // Envoyer le code via /verify-contact/send
       final resp = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/verify-contact/send'),
         headers: {
           'Content-Type': 'application/json',
-          'Accept':       'application/json',
+          'Accept': 'application/json',
         },
         body: jsonEncode({
           'identifier': widget.identifier,
-          'type':       widget.type,
+          'type': widget.type,
         }),
       ).timeout(const Duration(seconds: 20));
 
@@ -169,34 +170,39 @@ class _OtpVerificationRegisterScreenState
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
 
       if (resp.statusCode == 200 && body['success'] == true) {
-        final expiresIn  = (body['expires_in']   as num?)?.toInt() ?? 300;
+        final expiresIn = (body['expires_in'] as num?)?.toInt() ?? 300;
         final resendAfter = (body['resend_after'] as num?)?.toInt() ?? 60;
-        final masked      = body['masked']?.toString() ?? '';
+        final masked = body['masked']?.toString() ?? '';
 
         setState(() {
-          _codeSent   = true;
-          _maskedId   = masked;
-          _isSending  = false;
-          _errorMsg   = '';
+          _codeSent = true;
+          _maskedId = masked;
+          _isSending = false;
+          _errorMsg = '';
         });
 
         _startExpiryTimer(expiresIn);
         _startResendTimer(resendAfter);
 
-        _showSnack(body['message'] ?? 'Code envoyé avec succès', Colors.green);
+        _showSnack(
+          body['message'] ?? 'Code envoyé avec succès',
+          Colors.green,
+        );
 
         // Focus sur le premier champ
         Future.delayed(
           const Duration(milliseconds: 300),
-          () => _focusNodes[0].requestFocus(),
+          () {
+            if (mounted) _focusNodes[0].requestFocus();
+          },
         );
       } else if (resp.statusCode == 429) {
         // Anti-spam : trop tôt pour renvoyer
         final waitSeconds = (body['wait_seconds'] as num?)?.toInt() ?? 60;
         setState(() {
-          _isSending    = false;
+          _isSending = false;
           _resendSeconds = waitSeconds;
-          _codeSent     = true; // L'écran reste, juste le bouton bloqué
+          _codeSent = true; // L'écran reste, juste le bouton bloqué
         });
         _startResendTimer(waitSeconds);
         _showSnack(
@@ -204,50 +210,23 @@ class _OtpVerificationRegisterScreenState
           Colors.orange,
         );
       } else {
+        // Seules les erreurs liées à l'envoi du code s'affichent ici
+        // (ex: numéro invalide, erreur gateway SMS, etc.)
+        // Les erreurs de doublon ne peuvent plus arriver ici car
+        // elles sont filtrées dans RegisterScreen.
         final msg = body['message'] ?? 'Impossible d\'envoyer le code.';
         setState(() {
           _isSending = false;
-          _errorMsg  = msg;
+          _errorMsg = msg;
         });
       }
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
         _isSending = false;
-        _errorMsg  = 'Erreur réseau. Vérifiez votre connexion.';
+        _errorMsg = 'Erreur réseau. Vérifiez votre connexion.';
       });
       debugPrint('[OTP Send] Exception: $e');
-    }
-  }
-
-  // ── Vérification si le contact existe déjà ────────────────────────────
-
-  Future<bool> _checkIdentifierExists() async {
-    try {
-      final endpoint = widget.type == 'email'
-          ? '${AppConstants.apiBaseUrl}/check-email'
-          : '${AppConstants.apiBaseUrl}/check-phone';
-
-      final field = widget.type == 'email' ? 'email' : 'phone';
-
-      final resp = await http.post(
-        Uri.parse(endpoint),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept':       'application/json',
-        },
-        body: jsonEncode({field: widget.identifier}),
-      ).timeout(const Duration(seconds: 10));
-
-      if (resp.statusCode == 200) {
-        final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        // Le backend retourne { available: bool }
-        // Si available = false → déjà utilisé
-        return body['available'] == false;
-      }
-      return false; // En cas d'erreur, on laisse passer (le register échouera)
-    } catch (_) {
-      return false;
     }
   }
 
@@ -298,7 +277,7 @@ class _OtpVerificationRegisterScreenState
 
     setState(() {
       _isVerifying = true;
-      _errorMsg    = '';
+      _errorMsg = '';
     });
 
     try {
@@ -306,12 +285,12 @@ class _OtpVerificationRegisterScreenState
         Uri.parse('${AppConstants.apiBaseUrl}/verify-contact/check'),
         headers: {
           'Content-Type': 'application/json',
-          'Accept':       'application/json',
+          'Accept': 'application/json',
         },
         body: jsonEncode({
           'identifier': widget.identifier,
-          'type':       widget.type,
-          'code':       _currentOtp,
+          'type': widget.type,
+          'code': _currentOtp,
         }),
       ).timeout(const Duration(seconds: 15));
 
@@ -324,13 +303,15 @@ class _OtpVerificationRegisterScreenState
         final verifyToken = body['verify_token']?.toString() ?? '';
         await _completeRegistration(verifyToken);
       } else {
+        // Seules les erreurs liées au code s'affichent ici :
+        // OTP_EXPIRED, MAX_ATTEMPTS, WRONG_CODE, etc.
         final code = body['code']?.toString() ?? '';
         if (code == 'OTP_EXPIRED' || code == 'MAX_ATTEMPTS') {
           _clearFields();
         }
         setState(() {
           _isVerifying = false;
-          _errorMsg    = body['message'] ?? 'Code incorrect.';
+          _errorMsg = body['message'] ?? 'Code incorrect.';
         });
         _shakeCtrl.forward(from: 0);
       }
@@ -338,7 +319,7 @@ class _OtpVerificationRegisterScreenState
       if (!mounted) return;
       setState(() {
         _isVerifying = false;
-        _errorMsg    = 'Erreur réseau. Réessayez.';
+        _errorMsg = 'Erreur réseau. Réessayez.';
       });
       debugPrint('[OTP Verify] Exception: $e');
     }
@@ -352,13 +333,13 @@ class _OtpVerificationRegisterScreenState
         Uri.parse('${AppConstants.apiBaseUrl}/register'),
         headers: {
           'Content-Type': 'application/json',
-          'Accept':       'application/json',
+          'Accept': 'application/json',
         },
         body: jsonEncode({
-          'name':                  widget.name,
-          'password':              widget.password,
+          'name': widget.name,
+          'password': widget.password,
           'password_confirmation': widget.confirmPassword,
-          'verify_token':          verifyToken,
+          'verify_token': verifyToken,
         }),
       ).timeout(const Duration(seconds: 20));
 
@@ -367,12 +348,13 @@ class _OtpVerificationRegisterScreenState
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
 
       if (resp.statusCode == 200 || resp.statusCode == 201) {
-        // Sauvegarder le token et les données utilisateur
         if (data['token'] != null) {
-          await _storage.write(key: 'auth_token', value: data['token'].toString());
+          await _storage.write(
+              key: 'auth_token', value: data['token'].toString());
         }
         if (data['user'] != null) {
-          await _storage.write(key: 'user_data', value: jsonEncode(data['user']));
+          await _storage.write(
+              key: 'user_data', value: jsonEncode(data['user']));
         }
 
         _showSnack(data['message'] ?? 'Inscription réussie !', Colors.green);
@@ -384,8 +366,8 @@ class _OtpVerificationRegisterScreenState
           (_) => false,
         );
       } else {
-        // Extraire le message d'erreur le plus précis possible
-        String errorMessage = data['message'] ?? 'Erreur lors de l\'inscription';
+        String errorMessage =
+            data['message'] ?? 'Erreur lors de l\'inscription';
         if (data['errors'] != null) {
           final errors = data['errors'] as Map<String, dynamic>;
           final first = errors.values
@@ -397,14 +379,14 @@ class _OtpVerificationRegisterScreenState
         }
         setState(() {
           _isVerifying = false;
-          _errorMsg    = errorMessage;
+          _errorMsg = errorMessage;
         });
       }
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
         _isVerifying = false;
-        _errorMsg    = 'Erreur de connexion au serveur.';
+        _errorMsg = 'Erreur de connexion au serveur.';
       });
       debugPrint('[Register] Exception: $e');
     }
@@ -418,7 +400,8 @@ class _OtpVerificationRegisterScreenState
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -426,7 +409,6 @@ class _OtpVerificationRegisterScreenState
 
   String get _maskedDisplay {
     if (_maskedId.isNotEmpty) return _maskedId;
-    // Masquage de secours côté client
     final id = widget.identifier;
     if (widget.type == 'email') {
       final parts = id.split('@');
@@ -444,6 +426,11 @@ class _OtpVerificationRegisterScreenState
   @override
   Widget build(BuildContext context) {
     final expired = _codeSent && _expirySeconds <= 0;
+
+    // Le bouton "Renvoyer" est disponible seulement si :
+    // - Le code a déjà été envoyé une fois
+    // - Le timer de renvoi est expiré
+    // - On n'est pas en train d'envoyer
     final canResend = _codeSent && _resendSeconds <= 0 && !_isSending;
 
     return Scaffold(
@@ -520,35 +507,54 @@ class _OtpVerificationRegisterScreenState
               ),
               const SizedBox(height: 10),
 
-              if (_isSending && !_codeSent)
-                // Envoi en cours
-                Column(children: [
-                  const SizedBox(height: 12),
-                  const CircularProgressIndicator(color: AppConstants.primaryRed),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Envoi du code en cours...',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              if (_isSending && !_codeSent) ...[
+                // Envoi initial en cours
+                const SizedBox(height: 12),
+                const Center(
+                  child: CircularProgressIndicator(
+                      color: AppConstants.primaryRed),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Envoi du code en cours...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                ),
+              ] else if (!_codeSent && _errorMsg.isNotEmpty) ...[
+                // Erreur d'envoi initial (ex: erreur gateway SMS)
+                const SizedBox(height: 12),
+                _buildErrorBanner(),
+                const SizedBox(height: 16),
+                Center(
+                  child: ElevatedButton.icon(
+                    onPressed: _sendOtp,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Réessayer'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppConstants.primaryRed,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                ])
-              else if (!_codeSent && _errorMsg.isNotEmpty)
-                // Erreur avant envoi (ex: email déjà utilisé)
-                _buildErrorBanner()
-              else ...[
-                // Description
+                ),
+              ] else if (_codeSent) ...[
+                // ── Code envoyé : afficher le formulaire ──────────────
                 RichText(
                   textAlign: TextAlign.center,
                   text: TextSpan(
                     style: const TextStyle(
-                        fontSize: 14, color: Color(0xFF718096), height: 1.5),
+                        fontSize: 14,
+                        color: Color(0xFF718096),
+                        height: 1.5),
                     children: [
                       const TextSpan(text: 'Code envoyé à\n'),
                       TextSpan(
                         text: _maskedDisplay,
                         style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: AppConstants.primaryRed),
+                          fontWeight: FontWeight.w700,
+                          color: AppConstants.primaryRed,
+                        ),
                       ),
                     ],
                   ),
@@ -619,7 +625,7 @@ class _OtpVerificationRegisterScreenState
                   ),
                 ),
 
-                // ── Erreur ────────────────────────────────────────────
+                // ── Erreur de vérification du code ────────────────────
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 300),
                   child: _errorMsg.isNotEmpty
@@ -650,10 +656,12 @@ class _OtpVerificationRegisterScreenState
                 SizedBox(
                   height: 52,
                   child: ElevatedButton(
-                    onPressed:
-                        (!_isOtpComplete || _isVerifying || expired || !_codeSent)
-                            ? null
-                            : _verifyOtp,
+                    onPressed: (!_isOtpComplete ||
+                            _isVerifying ||
+                            expired ||
+                            !_codeSent)
+                        ? null
+                        : _verifyOtp,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppConstants.primaryRed,
                       foregroundColor: Colors.white,
@@ -694,13 +702,20 @@ class _OtpVerificationRegisterScreenState
                                 fontSize: 13, fontWeight: FontWeight.w600),
                           ),
                         )
-                      : Text(
-                          _isSending
-                              ? 'Envoi en cours...'
-                              : 'Renvoyer dans ${_formatTime(_resendSeconds)}',
-                          style: const TextStyle(
-                              fontSize: 13, color: Color(0xFFA0AEC0)),
-                        ),
+                      : _isSending
+                          ? const Text(
+                              'Envoi en cours...',
+                              style: TextStyle(
+                                  fontSize: 13, color: Color(0xFFA0AEC0)),
+                            )
+                          : _resendSeconds > 0
+                              ? Text(
+                                  'Renvoyer dans ${_formatTime(_resendSeconds)}',
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      color: Color(0xFFA0AEC0)),
+                                )
+                              : const SizedBox.shrink(),
                 ),
 
                 const SizedBox(height: 16),
@@ -744,9 +759,7 @@ class _OtpVerificationRegisterScreenState
         style: TextStyle(
           fontSize: 22,
           fontWeight: FontWeight.w800,
-          color: _errorMsg.isNotEmpty
-              ? Colors.red
-              : const Color(0xFF2D3436),
+          color: _errorMsg.isNotEmpty ? Colors.red : const Color(0xFF2D3436),
         ),
         decoration: InputDecoration(
           counterText: '',
@@ -773,9 +786,7 @@ class _OtpVerificationRegisterScreenState
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(
-              color: _errorMsg.isNotEmpty
-                  ? Colors.red
-                  : AppConstants.primaryRed,
+              color: _errorMsg.isNotEmpty ? Colors.red : AppConstants.primaryRed,
               width: 2,
             ),
           ),

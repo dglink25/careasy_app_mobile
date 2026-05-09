@@ -8,9 +8,6 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'about_screen.dart';
 import 'otp_verification_register_screen.dart';
-import 'package:careasy_app_mobile/screens/otp_verification_screen.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -19,20 +16,24 @@ class RegisterScreen extends StatefulWidget {
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStateMixin {
+class _RegisterScreenState extends State<RegisterScreen>
+    with TickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  
+
   bool _isPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
   bool _isLoading = false;
   bool _useEmail = true;
   bool _acceptTerms = false;
-  
+
+  // Erreur liée à l'identifiant (email/téléphone déjà utilisé)
+  String? _identifierError;
+
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
@@ -42,29 +43,24 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
   @override
   void initState() {
     super.initState();
-    
+
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    
+
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeIn,
-      ),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
     );
-    
+
     _slideAnimation = Tween<Offset>(
       begin: const Offset(0, 0.1),
       end: Offset.zero,
     ).animate(
       CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeOutCubic,
-      ),
+          parent: _animationController, curve: Curves.easeOutCubic),
     );
-    
+
     _animationController.forward();
   }
 
@@ -79,26 +75,83 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
     super.dispose();
   }
 
+  // ── Vérification si l'identifiant est déjà utilisé ───────────────────────
+  Future<bool> _checkIdentifierAvailable(
+      String identifier, String type) async {
+    try {
+      final endpoint = type == 'email'
+          ? '${AppConstants.apiBaseUrl}/check-email'
+          : '${AppConstants.apiBaseUrl}/check-phone';
+
+      final field = type == 'email' ? 'email' : 'phone';
+
+      final resp = await http.post(
+        Uri.parse(endpoint),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({field: identifier}),
+      ).timeout(const Duration(seconds: 10));
+
+      if (resp.statusCode == 200) {
+        final body = jsonDecode(resp.body) as Map<String, dynamic>;
+        // available: true → disponible, false → déjà utilisé
+        return body['available'] == true;
+      }
+      // En cas d'erreur serveur, on laisse passer (le register échouera)
+      return true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  // ── Soumission du formulaire ──────────────────────────────────────────────
   Future<void> _handleRegister() async {
+    // Réinitialiser l'erreur d'identifiant
+    setState(() => _identifierError = null);
+
     if (!_formKey.currentState!.validate()) return;
-    
+
     if (!_acceptTerms) {
-      _showSnackBar('Veuillez accepter les conditions d\'utilisation', Colors.orange);
+      _showSnackBar(
+          'Veuillez accepter les conditions d\'utilisation', Colors.orange);
       return;
     }
-    
+
     String identifier;
     String type;
-    
+
     if (_useEmail) {
       identifier = _emailController.text.trim().toLowerCase();
       type = 'email';
     } else {
-      // Nettoyer le numéro de téléphone
-      identifier = _phoneController.text.trim().replaceAll(RegExp(r'\s+'), '');
+      identifier =
+          _phoneController.text.trim().replaceAll(RegExp(r'\s+'), '');
       type = 'phone';
     }
-    
+
+    // Vérifier la disponibilité de l'identifiant AVANT de naviguer
+    setState(() => _isLoading = true);
+
+    final isAvailable = await _checkIdentifierAvailable(identifier, type);
+
+    if (!mounted) return;
+
+    if (!isAvailable) {
+      setState(() {
+        _isLoading = false;
+        _identifierError = type == 'email'
+            ? 'Cette adresse email est déjà associée à un compte.'
+            : 'Ce numéro de téléphone est déjà associé à un compte.';
+      });
+      return;
+    }
+
+    setState(() => _isLoading = false);
+
+    // Tout est OK → naviguer vers la vérification OTP
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -114,27 +167,14 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
     );
   }
 
-  
-  String _extractErrorMessage(Map<String, dynamic> responseData) {
-    if (responseData['errors'] != null) {
-      final errors = responseData['errors'] as Map;
-      if (errors['email'] != null) return errors['email'][0];
-      if (errors['phone'] != null) return errors['phone'][0];
-      if (errors['contact'] != null) return errors['contact'][0];
-      if (errors['name'] != null) return errors['name'][0];
-      if (errors['password'] != null) return errors['password'][0];
-    }
-    
-    return responseData['message'] ?? 'Erreur lors de l\'inscription';
-  }
-
   void _showSnackBar(String message, Color color) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -159,7 +199,7 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final bool isSmallScreen = size.width < 360;
-    
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -181,17 +221,17 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
               color: Colors.white.withOpacity(0.2),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.arrow_back, 
-              color: Colors.white, 
-              size: isSmallScreen ? 16 : 18,
-            ),
+            child: Icon(Icons.arrow_back,
+                color: Colors.white, size: isSmallScreen ? 16 : 18),
           ),
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Container(
-        height: size.height - MediaQuery.of(context).padding.top - kToolbarHeight - MediaQuery.of(context).padding.bottom,
+      body: SizedBox(
+        height: size.height -
+            MediaQuery.of(context).padding.top -
+            kToolbarHeight -
+            MediaQuery.of(context).padding.bottom,
         child: SingleChildScrollView(
           physics: const ClampingScrollPhysics(),
           padding: EdgeInsets.symmetric(
@@ -207,7 +247,7 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Logo - Correction du chemin d'image
+                    // ── Logo ──────────────────────────────────────────────
                     Center(
                       child: TweenAnimationBuilder(
                         duration: const Duration(milliseconds: 800),
@@ -221,14 +261,18 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                               height: isSmallScreen ? 80 : 100,
                               decoration: BoxDecoration(
                                 gradient: const LinearGradient(
-                                  colors: [Color(0xFFE63946), Color(0xFFFF6B6B)],
+                                  colors: [
+                                    Color(0xFFE63946),
+                                    Color(0xFFFF6B6B)
+                                  ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                 ),
                                 shape: BoxShape.circle,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppConstants.primaryRed.withOpacity(0.3),
+                                    color: AppConstants.primaryRed
+                                        .withOpacity(0.3),
                                     blurRadius: 20,
                                     offset: const Offset(0, 10),
                                   ),
@@ -239,7 +283,6 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                                   'assets/images/logo.png',
                                   fit: BoxFit.cover,
                                   errorBuilder: (context, error, stackTrace) {
-                                    // Fallback si l'image ne se charge pas
                                     return Center(
                                       child: Text(
                                         'CE',
@@ -259,10 +302,9 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         },
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.02),
-                    
-                    // Message de bienvenue
+
                     const Center(
                       child: Text(
                         'Rejoignez CarEasy',
@@ -273,9 +315,9 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         ),
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.01),
-                    
+
                     const Center(
                       child: Text(
                         'Créez votre compte pour commencer',
@@ -286,10 +328,10 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         ),
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.03),
-                    
-                    // Mode de contact
+
+                    // ── Toggle email / téléphone ───────────────────────────
                     Container(
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
@@ -299,18 +341,20 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                       child: Row(
                         children: [
                           Expanded(
-                            child: _buildContactToggle(true, 'Email', Icons.email_outlined),
+                            child: _buildContactToggle(
+                                true, 'Email', Icons.email_outlined),
                           ),
                           Expanded(
-                            child: _buildContactToggle(false, 'Téléphone', Icons.phone_outlined),
+                            child: _buildContactToggle(
+                                false, 'Téléphone', Icons.phone_outlined),
                           ),
                         ],
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.02),
-                    
-                    // Nom complet
+
+                    // ── Nom complet ───────────────────────────────────────
                     TextFormField(
                       controller: _nameController,
                       decoration: _inputDecoration(
@@ -327,23 +371,31 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         return null;
                       },
                     ),
-                    
+
                     SizedBox(height: size.height * 0.015),
-                    
-                    // Champ conditionnel (Email ou Téléphone)
+
+                    // ── Champ email ou téléphone ──────────────────────────
                     if (_useEmail) ...[
                       TextFormField(
                         controller: _emailController,
                         decoration: _inputDecoration(
                           hintText: 'Adresse email',
                           icon: Icons.email_outlined,
+                          // Afficher l'erreur d'identifiant dans la bordure
+                          errorText: _identifierError,
                         ),
                         keyboardType: TextInputType.emailAddress,
+                        onChanged: (_) {
+                          if (_identifierError != null) {
+                            setState(() => _identifierError = null);
+                          }
+                        },
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return 'Email requis';
                           }
-                          final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+                          final emailRegex =
+                              RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
                           if (!emailRegex.hasMatch(value.trim())) {
                             return 'Email invalide';
                           }
@@ -356,27 +408,59 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         decoration: _inputDecoration(
                           hintText: 'Numéro de téléphone',
                           icon: Icons.phone_outlined,
+                          errorText: _identifierError,
                         ),
                         keyboardType: TextInputType.phone,
+                        onChanged: (_) {
+                          if (_identifierError != null) {
+                            setState(() => _identifierError = null);
+                          }
+                        },
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return 'Téléphone requis';
                           }
-                          String clean = value.replaceAll(RegExp(r'[^0-9+]'), '');
-                          if (clean.length < 8) {
-                            return 'Minimum 8 chiffres';
-                          }
-                          if (clean.length > 15) {
-                            return 'Maximum 15 chiffres';
-                          }
+                          String clean =
+                              value.replaceAll(RegExp(r'[^0-9+]'), '');
+                          if (clean.length < 8) return 'Minimum 8 chiffres';
+                          if (clean.length > 15) return 'Maximum 15 chiffres';
                           return null;
                         },
                       ),
                     ],
-                    
+
+                    // ── Bannière d'erreur identifiant (hors du champ) ─────
+                    if (_identifierError != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: Colors.red.withOpacity(0.3), width: 1),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error_outline,
+                                color: Colors.red, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _identifierError!,
+                                style: const TextStyle(
+                                    color: Colors.red, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     SizedBox(height: size.height * 0.015),
-                    
-                    // Mot de passe
+
+                    // ── Mot de passe ──────────────────────────────────────
                     TextFormField(
                       controller: _passwordController,
                       decoration: _inputDecoration(
@@ -384,14 +468,13 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         icon: Icons.lock_outline,
                         suffixIcon: IconButton(
                           icon: Icon(
-                            _isPasswordVisible ? Icons.visibility_off : Icons.visibility,
+                            _isPasswordVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
                             color: const Color(0xFF718096),
                           ),
-                          onPressed: () {
-                            setState(() {
-                              _isPasswordVisible = !_isPasswordVisible;
-                            });
-                          },
+                          onPressed: () => setState(
+                              () => _isPasswordVisible = !_isPasswordVisible),
                         ),
                       ),
                       obscureText: !_isPasswordVisible,
@@ -399,16 +482,14 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         if (value == null || value.isEmpty) {
                           return 'Mot de passe requis';
                         }
-                        if (value.length < 6) {
-                          return 'Minimum 6 caractères';
-                        }
+                        if (value.length < 6) return 'Minimum 6 caractères';
                         return null;
                       },
                     ),
-                    
+
                     SizedBox(height: size.height * 0.015),
-                    
-                    // Confirmer mot de passe
+
+                    // ── Confirmer mot de passe ────────────────────────────
                     TextFormField(
                       controller: _confirmPasswordController,
                       decoration: _inputDecoration(
@@ -416,14 +497,14 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         icon: Icons.lock_outline,
                         suffixIcon: IconButton(
                           icon: Icon(
-                            _isConfirmPasswordVisible ? Icons.visibility_off : Icons.visibility,
+                            _isConfirmPasswordVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
                             color: const Color(0xFF718096),
                           ),
-                          onPressed: () {
-                            setState(() {
-                              _isConfirmPasswordVisible = !_isConfirmPasswordVisible;
-                            });
-                          },
+                          onPressed: () => setState(() =>
+                              _isConfirmPasswordVisible =
+                                  !_isConfirmPasswordVisible),
                         ),
                       ),
                       obscureText: !_isConfirmPasswordVisible,
@@ -437,23 +518,22 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         return null;
                       },
                     ),
-                    
+
                     SizedBox(height: size.height * 0.01),
-                    
-                    // Conditions d'utilisation
+
+                    // ── Conditions d'utilisation ──────────────────────────
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Checkbox(
                           value: _acceptTerms,
-                          onChanged: (value) {
-                            setState(() {
-                              _acceptTerms = value ?? false;
-                            });
-                          },
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                          onChanged: (value) =>
+                              setState(() => _acceptTerms = value ?? false),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4)),
                           activeColor: AppConstants.primaryRed,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                         ),
                         Expanded(
                           child: Padding(
@@ -469,10 +549,10 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         ),
                       ],
                     ),
-                    
+
                     SizedBox(height: size.height * 0.02),
-                    
-                    // Bouton d'inscription
+
+                    // ── Bouton S'inscrire ─────────────────────────────────
                     SizedBox(
                       width: double.infinity,
                       height: isSmallScreen ? 45 : 50,
@@ -483,8 +563,7 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                              borderRadius: BorderRadius.circular(12)),
                           disabledBackgroundColor: Colors.grey[300],
                         ),
                         child: _isLoading
@@ -492,44 +571,38 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                                 height: 20,
                                 width: 20,
                                 child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2,
-                                ),
+                                    color: Colors.white, strokeWidth: 2),
                               )
                             : const Text(
                                 'S\'INSCRIRE',
                                 style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.5,
-                                ),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.5),
                               ),
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.015),
-                    
-                    // Séparateur
+
+                    // ── Séparateur ────────────────────────────────────────
                     Row(
                       children: [
                         Expanded(child: Divider(color: Colors.grey[300])),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            'ou',
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: isSmallScreen ? 12 : 13,
-                            ),
-                          ),
+                          child: Text('ou',
+                              style: TextStyle(
+                                  color: Colors.grey[500],
+                                  fontSize: isSmallScreen ? 12 : 13)),
                         ),
                         Expanded(child: Divider(color: Colors.grey[300])),
                       ],
                     ),
-                    
+
                     SizedBox(height: size.height * 0.015),
-                    
-                    // Bouton Google - Design amélioré
+
+                    // ── Google ────────────────────────────────────────────
                     SizedBox(
                       width: double.infinity,
                       height: isSmallScreen ? 45 : 50,
@@ -538,34 +611,25 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: Colors.grey[400]!),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                              borderRadius: BorderRadius.circular(12)),
                           backgroundColor: Colors.white,
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            // Logo Google stylisé
                             Container(
                               width: 24,
                               height: 24,
                               margin: const EdgeInsets.only(right: 12),
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
-                              child: const Icon(
-                                Icons.g_mobiledata,
-                                size: 28,
-                                color: Color(0xFFDB4437), // Rouge Google
-                              ),
+                              child: const Icon(Icons.g_mobiledata,
+                                  size: 28, color: Color(0xFFDB4437)),
                             ),
                             Text(
                               'Continuer avec Google',
                               style: TextStyle(
                                 fontSize: isSmallScreen ? 13 : 14,
                                 fontWeight: FontWeight.w600,
-                                color: const Color(0xFF3C4043), // Gris foncé
+                                color: const Color(0xFF3C4043),
                                 letterSpacing: 0.2,
                               ),
                             ),
@@ -573,43 +637,42 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
                         ),
                       ),
                     ),
-                    
+
                     SizedBox(height: size.height * 0.02),
-                    
-                    // Lien vers connexion
+
+                    // ── Lien vers connexion ───────────────────────────────
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
                           'Déjà un compte ?',
                           style: TextStyle(
-                            color: const Color(0xFF718096),
-                            fontSize: isSmallScreen ? 12 : 13,
-                          ),
+                              color: const Color(0xFF718096),
+                              fontSize: isSmallScreen ? 12 : 13),
                         ),
                         TextButton(
                           onPressed: () {
                             Navigator.pushReplacement(
                               context,
-                              MaterialPageRoute(builder: (context) => const LoginScreen()),
+                              MaterialPageRoute(
+                                  builder: (context) => const LoginScreen()),
                             );
                           },
                           style: TextButton.styleFrom(
                             foregroundColor: AppConstants.primaryRed,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 8),
                           ),
                           child: Text(
                             'Se connecter',
                             style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: isSmallScreen ? 12 : 13,
-                            ),
+                                fontWeight: FontWeight.w600,
+                                fontSize: isSmallScreen ? 12 : 13),
                           ),
                         ),
                       ],
                     ),
-                    
-                    // Espace supplémentaire pour éviter le scroll inutile
+
                     SizedBox(height: size.height * 0.02),
                   ],
                 ),
@@ -625,12 +688,14 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
     required String hintText,
     required IconData icon,
     Widget? suffixIcon,
+    String? errorText,
   }) {
     return InputDecoration(
       hintText: hintText,
       hintStyle: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 14),
       prefixIcon: Icon(icon, color: const Color(0xFF718096), size: 20),
       suffixIcon: suffixIcon,
+      errorText: errorText,
       filled: true,
       fillColor: const Color(0xFFF8F9FA),
       border: OutlineInputBorder(
@@ -639,7 +704,9 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide.none,
+        borderSide: errorText != null
+            ? const BorderSide(color: Colors.red, width: 1.5)
+            : BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
@@ -649,18 +716,23 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
         borderRadius: BorderRadius.circular(14),
         borderSide: const BorderSide(color: Colors.red, width: 1.5),
       ),
-      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: Colors.red, width: 1.5),
+      ),
+      contentPadding:
+          const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
     );
   }
 
   Widget _buildContactToggle(bool isEmail, String label, IconData icon) {
     bool isSelected = _useEmail == isEmail;
-    
+
     return GestureDetector(
       onTap: () {
         setState(() {
           _useEmail = isEmail;
-          // Effacer le champ non utilisé
+          _identifierError = null;
           if (isEmail) {
             _phoneController.clear();
           } else {
@@ -687,18 +759,21 @@ class _RegisterScreenState extends State<RegisterScreen> with TickerProviderStat
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              icon,
-              size: 16,
-              color: isSelected ? AppConstants.primaryRed : Colors.grey[500],
-            ),
+            Icon(icon,
+                size: 16,
+                color: isSelected
+                    ? AppConstants.primaryRed
+                    : Colors.grey[500]),
             const SizedBox(width: 4),
             Flexible(
               child: Text(
                 label,
                 style: TextStyle(
-                  color: isSelected ? AppConstants.primaryRed : Colors.grey[500],
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                  color: isSelected
+                      ? AppConstants.primaryRed
+                      : Colors.grey[500],
+                  fontWeight:
+                      isSelected ? FontWeight.w600 : FontWeight.w500,
                   fontSize: 13,
                 ),
                 overflow: TextOverflow.ellipsis,
