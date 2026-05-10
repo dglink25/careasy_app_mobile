@@ -28,8 +28,87 @@ import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 import '../widgets/notification_bell.dart';
 import 'welcome_screen.dart';
 import 'chat_screen.dart';
-import 'rendez_vous/create_rendez_vous_screen.dart'; 
+import 'rendez_vous/create_rendez_vous_screen.dart';
 import 'carai_screen.dart';
+
+// ─── Widget étoiles réutilisable ──────────────────────────────────────────────
+class StarRatingRow extends StatelessWidget {
+  final double rating;
+  final int totalReviews;
+  final double starSize;
+  final bool showCount;
+  final Color? textColor;
+
+  const StarRatingRow({
+    super.key,
+    required this.rating,
+    required this.totalReviews,
+    this.starSize = 14,
+    this.showCount = true,
+    this.textColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (totalReviews == 0) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.star_outline_rounded, size: starSize, color: Colors.grey[400]),
+          const SizedBox(width: 3),
+          Text(
+            'Pas encore noté',
+            style: TextStyle(
+              fontSize: starSize - 3,
+              color: Colors.grey[400],
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Étoiles
+        ...List.generate(5, (i) {
+          final filled = i < rating.floor();
+          final half = !filled && i < rating;
+          return Icon(
+            filled
+                ? Icons.star_rounded
+                : half
+                    ? Icons.star_half_rounded
+                    : Icons.star_outline_rounded,
+            size: starSize,
+            color: filled || half ? const Color(0xFFF59E0B) : Colors.grey[300],
+          );
+        }),
+        const SizedBox(width: 4),
+        // Note chiffre
+        Text(
+          rating.toStringAsFixed(1),
+          style: TextStyle(
+            fontSize: starSize - 1,
+            fontWeight: FontWeight.w700,
+            color: textColor ?? const Color(0xFF92400E),
+          ),
+        ),
+        if (showCount) ...[
+          const SizedBox(width: 3),
+          Text(
+            '($totalReviews)',
+            style: TextStyle(
+              fontSize: starSize - 2,
+              color: textColor?.withOpacity(0.6) ?? Colors.grey[500],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -67,8 +146,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   final FocusNode _searchFocusNode = FocusNode();
   List<dynamic> _searchResults = [];
   Timer? _debounceTimer;
-
-
 
   @override
   void initState() {
@@ -266,8 +343,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             const Icon(Icons.phone, color: Colors.green, size: 50),
             const SizedBox(height: 16),
             const Text('Composez le numéro', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text('Impossible de lancer l\'appel automatiquement.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[600], fontSize: 14)),
             const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(12),
@@ -477,9 +552,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   }),
                   const SizedBox(height: 12),
                 ],
-                _buildContactButton(icon: Icons.calendar_month, color: Colors.blue, title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention', onTap: () { 
-                  Navigator.pop(context); 
-                  // ← MODIFICATION : redirection directe vers l'écran de création de rendez-vous
+                _buildContactButton(icon: Icons.calendar_month, color: Colors.blue, title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention', onTap: () {
+                  Navigator.pop(context);
                   Navigator.push(context, MaterialPageRoute(
                     builder: (_) => ChangeNotifierProvider(
                       create: (_) => RendezVousProvider(),
@@ -522,6 +596,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _showError(String message) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
 
+  @override
   Widget build(BuildContext context) {
     final userName      = _userData?['name'] ?? 'Utilisateur';
     final userPhoto     = _userData?['profile_photo_url'] ?? '';
@@ -664,7 +739,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
             ),
 
-      floatingActionButton: const CarAIFab(),  
+      floatingActionButton: const CarAIFab(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
 
       bottomNavigationBar: Container(
@@ -794,12 +869,21 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildServicesList() => ListView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: _filteredServices.length, itemBuilder: (_, i) => _buildServiceCard(_filteredServices[i], i));
 
+  // ════════════════════════════════════════════════════════════════════════════
+  //  CARTE SERVICE — avec badge de notation ⭐
+  // ════════════════════════════════════════════════════════════════════════════
   Widget _buildServiceCard(Map<String, dynamic> service, int index) {
     final entreprise    = service['entreprise'] ?? {};
     final hasPromo      = service['has_promo'] ?? false;
     final isPromoActive = service['is_promo_active'] ?? false;
     final medias        = service['medias'] is List ? service['medias'] : [];
     final curIdx        = _currentImageIndex[index] ?? 0;
+
+    // ── Données notation ────────────────────────────────────────────────
+    final int totalReviews   = (service['total_reviews'] as num?)?.toInt() ?? 0;
+    final double avgRating   = totalReviews > 0
+        ? (service['average_rating'] as num?)?.toDouble() ?? 0.0
+        : 0.0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -808,31 +892,72 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         shadowColor: Colors.black.withOpacity(0.05),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+          // ── Image + badges ──────────────────────────────────────────────
           Stack(children: [
             ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-              child: Container(height: 160, width: double.infinity, color: Colors.grey[200],
-                  child: medias.isNotEmpty
-                      ? Image.network(medias[curIdx % medias.length], fit: BoxFit.cover, errorBuilder: (_, __, ___) => Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])))
-                      : Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400]))),
+              child: Container(
+                height: 160, width: double.infinity, color: Colors.grey[200],
+                child: medias.isNotEmpty
+                    ? Image.network(medias[curIdx % medias.length], fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])))
+                    : Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400]))),
             ),
+            // Indicateurs carrousel
             if (medias.length > 1)
               Positioned(bottom: 8, left: 0, right: 0,
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(medias.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 2), width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: i == curIdx % medias.length ? Colors.white : Colors.white.withOpacity(0.5)))))),
+            // Badge promo
             if (hasPromo && isPromoActive)
               Positioned(top: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)), child: Text('-${service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)))),
+            // ★ Badge notation en haut à droite
+            if (totalReviews > 0)
+              Positioned(
+                top: 8, right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.65),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))],
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
+                    const SizedBox(width: 3),
+                    Text(
+                      avgRating.toStringAsFixed(1),
+                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '($totalReviews)',
+                      style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11),
+                    ),
+                  ]),
+                ),
+              ),
           ]),
 
+          // ── Contenu carte ───────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Logo entreprise
                 Container(width: 40, height: 40, decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10), image: entreprise['logo'] != null ? DecorationImage(image: NetworkImage(entreprise['logo']), fit: BoxFit.cover) : null), child: entreprise['logo'] == null ? Icon(Icons.business, size: 20, color: Colors.grey[600]) : null),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(service['name'] ?? 'Service', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(entreprise['name'] ?? 'Entreprise', style: TextStyle(fontSize: 13, color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 4),
+                  // ★ Étoiles sous le nom
+                  StarRatingRow(
+                    rating: avgRating,
+                    totalReviews: totalReviews,
+                    starSize: 13,
+                  ),
                   const SizedBox(height: 4),
                   Row(children: [
                     Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
@@ -840,6 +965,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Text(service['is_always_open'] == true ? '24h/24' : service['start_time'] != null && service['end_time'] != null ? '${service['start_time']} - ${service['end_time']}' : 'Horaires variables', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
                   ]),
                 ])),
+                // Prix
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (service['is_price_on_request'] == true)
                     Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)), child: Text('Sur devis', style: TextStyle(fontSize: 11, color: Colors.blue[700], fontWeight: FontWeight.w600)))
@@ -896,8 +1022,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _buildEmptyState(String message, IconData icon) => Container(padding: const EdgeInsets.symmetric(vertical: 32), child: Center(child: Column(children: [Icon(icon, size: 48, color: Colors.grey[400]), const SizedBox(height: 8), Text(message, style: TextStyle(fontSize: 14, color: Colors.grey[600]))])));
 
   void _handleEntrepriseTap() => Navigator.push(context, MaterialPageRoute(builder: (_) => const MesEntreprisesScreen()));
-
-  void _showComingSoon(String feature) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$feature - Bientôt disponible'), behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), duration: const Duration(seconds: 2)));
 
   void _showProfileDialog() => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())).then((_) => _loadUserData());
 
