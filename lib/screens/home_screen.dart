@@ -30,6 +30,7 @@ import 'welcome_screen.dart';
 import 'chat_screen.dart';
 import 'rendez_vous/create_rendez_vous_screen.dart';
 import 'carai_screen.dart';
+import 'map_screen.dart';
 
 // ─── Widget étoiles réutilisable ──────────────────────────────────────────────
 class StarRatingRow extends StatelessWidget {
@@ -656,9 +657,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
           const NotificationBell(),
+
           IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.white),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
+            icon: const Icon(Icons.map_outlined, color: Colors.white),
+            tooltip: 'Carte des entreprises',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MapScreen()),
+            ),
           ),
         ],
       ),
