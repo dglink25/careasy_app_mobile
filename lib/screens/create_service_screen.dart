@@ -8,10 +8,11 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 
-
 class CreateServiceScreen extends StatefulWidget {
-  final Map<String, dynamic> entreprise;
-  const CreateServiceScreen({super.key, required this.entreprise});
+  
+  final Map<String, dynamic>? entreprise;
+
+  const CreateServiceScreen({super.key, this.entreprise});
 
   @override
   State<CreateServiceScreen> createState() => _CreateServiceScreenState();
@@ -19,54 +20,60 @@ class CreateServiceScreen extends StatefulWidget {
 
 class _CreateServiceScreenState extends State<CreateServiceScreen>
     with TickerProviderStateMixin {
-  // APRÈS
-final _storage = const FlutterSecureStorage(
-  aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
-);
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+  );
+
   final _pageController = PageController();
   int _currentStep = 0;
   bool _isSubmitting = false;
 
-  // ── Step 1 : Infos de base ───────────────────
-  final _nameCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
+  // ── ENTREPRISES ─────────────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _mesEntreprises = [];
+  bool _isLoadingEntreprises = true;
+  Map<String, dynamic>? _selectedEntreprise;
+
+  // ── DOMAINES (de l'entreprise sélectionnée) ──────────────────────────────────
+  List<Map<String, dynamic>> _domaines = [];
+  bool _isLoadingDomaines = false;
+  String? _selectedDomaineId;
+
+  // ── STEP 1 : Infos de base ───────────────────────────────────────────────────
+  final _nameCtrl  = TextEditingController();
+  final _descCtrl  = TextEditingController();
   final _priceCtrl = TextEditingController();
   final _promoCtrl = TextEditingController();
   bool _isPriceOnRequest = false;
-  bool _hasPromo = false;
-  String? _selectedDomaineId;
-  List<dynamic> _domaines = [];
+  bool _hasPromo         = false;
 
-  // ── Step 2 : Horaires ────────────────────────
+  // ── STEP 2 : Horaires ─────────────────────────────────────────────────────────
   bool _isAlwaysOpen = false;
   final Map<String, bool> _dayOpen = {
     'monday': false, 'tuesday': false, 'wednesday': false,
     'thursday': false, 'friday': false, 'saturday': false, 'sunday': false,
   };
   final Map<String, TextEditingController> _dayStart = {};
-  final Map<String, TextEditingController> _dayEnd = {};
+  final Map<String, TextEditingController> _dayEnd   = {};
   final Map<String, String> _dayNames = {
     'monday': 'Lundi', 'tuesday': 'Mardi', 'wednesday': 'Mercredi',
-    'thursday': 'Jeudi', 'friday': 'Vendredi', 'saturday': 'Samedi',
-    'sunday': 'Dimanche',
+    'thursday': 'Jeudi', 'friday': 'Vendredi',
+    'saturday': 'Samedi', 'sunday': 'Dimanche',
   };
 
-  final List<File> _mediaFiles = [];
+  // ── STEP 3 : Médias ───────────────────────────────────────────────────────────
+  final List<File>   _mediaFiles    = [];
   final List<String> _mediaPreviews = [];
 
+  // ─────────────────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
     for (final day in _dayNames.keys) {
       _dayStart[day] = TextEditingController(text: '08:00');
-      _dayEnd[day] = TextEditingController(text: '18:00');
+      _dayEnd[day]   = TextEditingController(text: '18:00');
     }
-    _fetchDomaines();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkTrialLimitsOnOpen();
-    });
+    _loadMesEntreprises();
   }
 
   @override
@@ -74,98 +81,148 @@ final _storage = const FlutterSecureStorage(
     _nameCtrl.dispose(); _descCtrl.dispose();
     _priceCtrl.dispose(); _promoCtrl.dispose();
     for (final c in _dayStart.values) c.dispose();
-    for (final c in _dayEnd.values) c.dispose();
+    for (final c in _dayEnd.values)   c.dispose();
     _pageController.dispose();
     super.dispose();
   }
 
-    void _checkTrialLimitsOnOpen() {
-    final entreprise = widget.entreprise;
-
-    // Récupérer les infos de l'entreprise passées en paramètre
-    final bool isInTrial = entreprise['is_in_trial_period'] == true ||
-        entreprise['trial_status'] == 'in_trial';
-
-    final int currentServices = (entreprise['services'] as List?)?.length ??
-        entreprise['services_count'] ?? 0;
-
-    final int? maxServices = entreprise['max_services_allowed'] != null
-        ? int.tryParse(entreprise['max_services_allowed'].toString())
-        : null;
-
-    // Si en essai ET limite atteinte → bloquer immédiatement
-    if (isInTrial && maxServices != null && currentServices >= maxServices) {
-      _showTrialLimitBlockingDialog(
-        maxServices: maxServices,
-        currentServices: currentServices,
-        isTrialExpired: false,
-      );
-    }
-  }
-  
-  Future<void> _fetchDomaines() async {
+  // ── Chargement des entreprises du prestataire ─────────────────────────────────
+  Future<void> _loadMesEntreprises() async {
+    setState(() => _isLoadingEntreprises = true);
     try {
       final token = await _storage.read(key: 'auth_token');
       final res = await http.get(
-        Uri.parse('${AppConstants.apiBaseUrl}/domaines'),
+        Uri.parse('${AppConstants.apiBaseUrl}/entreprises/mine'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
       );
       if (res.statusCode == 200) {
         final List raw = jsonDecode(res.body);
-        
-        // Récupérer les IDs des domaines de l'entreprise
-        final entrepriseDomaines = widget.entreprise['domaines'];
-        
-        Set<String> entrepriseDomaineIds = {};
-        
-        // Gérer différents formats possibles
-        if (entrepriseDomaines is List) {
-          if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is Map) {
-            // Format: [{"id": 1, "name": "..."}, ...]
-            entrepriseDomaineIds = entrepriseDomaines
-                .map((d) => d['id']?.toString())
-                .where((id) => id != null)
-                .toSet()
-                .cast<String>();
-          } else if (entrepriseDomaines.isNotEmpty && entrepriseDomaines.first is String) {
-            // Format: ["1", "2", "3"]
-            entrepriseDomaineIds = entrepriseDomaines
-                .map((id) => id.toString())
-                .toSet();
-          }
-        } else if (entrepriseDomaines is Map) {
-          // Format: {"ids": [1,2,3]} ou autre structure
-          if (entrepriseDomaines['ids'] is List) {
-            entrepriseDomaineIds = (entrepriseDomaines['ids'] as List)
-                .map((id) => id.toString())
-                .toSet();
+        final validated = raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .where((e) => e['status'] == 'validated')
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _mesEntreprises     = validated;
+            _isLoadingEntreprises = false;
+          });
+
+          // Pré-sélectionner si entreprise fournie en paramètre
+          if (widget.entreprise != null) {
+            final preId = widget.entreprise!['id']?.toString();
+            final found = validated.firstWhere(
+              (e) => e['id']?.toString() == preId,
+              orElse: () => <String, dynamic>{},
+            );
+            if (found.isNotEmpty) {
+              await _onEntrepriseSelected(found);
+            } else if (validated.length == 1) {
+              await _onEntrepriseSelected(validated.first);
+            }
+          } 
+          else if (validated.length == 1) {
+            // Une seule entreprise → sélection automatique
+            await _onEntrepriseSelected(validated.first);
           }
         }
-        
-        debugPrint('Domaines entreprise IDs: $entrepriseDomaineIds');
-        debugPrint('Tous les domaines: ${raw.map((d) => d['name'])}');
-        
-        setState(() {
-          // Filtrer les domaines de l'entreprise
-          _domaines = raw.where((d) {
-            final domaineId = d['id'].toString();
-            return entrepriseDomaineIds.contains(domaineId);
-          }).toList();
-          
-          debugPrint('Domaines filtrés: ${_domaines.map((d) => d['name'])}');
-          
-          // Sélectionner le premier domaine par défaut si disponible
-          if (_domaines.isNotEmpty && _selectedDomaineId == null) {
-            _selectedDomaineId = _domaines.first['id'].toString();
-          }
-        });
+      } else {
+        if (mounted) setState(() => _isLoadingEntreprises = false);
       }
     } catch (e) {
-      debugPrint('Erreur fetch domaines: $e');
+      debugPrint('Erreur chargement entreprises: $e');
+      if (mounted) setState(() => _isLoadingEntreprises = false);
     }
   }
 
-  // ── Navigation ───────────────────────────────
+  // ── Sélection d'une entreprise → charge ses domaines ─────────────────────────
+  Future<void> _onEntrepriseSelected(Map<String, dynamic> entreprise) async {
+    setState(() {
+      _selectedEntreprise = entreprise;
+      _selectedDomaineId  = null;
+      _domaines           = [];
+      _isLoadingDomaines  = true;
+    });
+
+    // 1. Lire les domaines déjà présents dans l'objet entreprise
+    final rawDomaines = entreprise['domaines'];
+    if (rawDomaines is List && rawDomaines.isNotEmpty) {
+      final parsed = _parseDomaines(rawDomaines);
+      if (parsed.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _domaines          = parsed;
+            _isLoadingDomaines = false;
+            if (parsed.length == 1) {
+              _selectedDomaineId = parsed.first['id'];
+            }
+          });
+        }
+        return;
+      }
+    }
+
+    // 2. Fallback : appel API /entreprises/{id} pour récupérer les domaines
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      final id    = entreprise['id']?.toString() ?? '';
+      final res   = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/entreprises/$id'),
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+      );
+      if (res.statusCode == 200) {
+        final data     = jsonDecode(res.body) as Map<String, dynamic>;
+        final domaines = data['domaines'];
+        final parsed   = _parseDomaines(domaines is List ? domaines : []);
+        if (mounted) {
+          setState(() {
+            _domaines          = parsed;
+            _isLoadingDomaines = false;
+            if (parsed.length == 1) {
+              _selectedDomaineId = parsed.first['id'];
+            }
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoadingDomaines = false);
+      }
+    } catch (e) {
+      debugPrint('Erreur chargement domaines: $e');
+      if (mounted) setState(() => _isLoadingDomaines = false);
+    }
+
+    // Vérification limite essai
+    _checkTrialLimits(entreprise);
+  }
+
+  List<Map<String, dynamic>> _parseDomaines(List raw) => raw
+      .whereType<Map>()
+      .map((d) => {
+            'id':   d['id']?.toString()   ?? '',
+            'name': d['name']?.toString() ?? '',
+          })
+      .where((d) => d['id']!.isNotEmpty && d['name']!.isNotEmpty)
+      .toList();
+
+  void _checkTrialLimits(Map<String, dynamic> entreprise) {
+    final bool isInTrial  = entreprise['is_in_trial_period'] == true ||
+        (entreprise['trial_status'] is Map &&
+            entreprise['trial_status']['status'] == 'active');
+    final int current     = (entreprise['services'] as List?)?.length ??
+        entreprise['services_count'] ?? 0;
+    final int? maxAllowed = int.tryParse(
+        entreprise['max_services_allowed']?.toString() ?? '');
+
+    if (isInTrial && maxAllowed != null && current >= maxAllowed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showTrialLimitDialog(
+            maxServices: maxAllowed, currentServices: current);
+      });
+    }
+  }
+
+  // ── Navigation stepper ────────────────────────────────────────────────────────
   void _goToStep(int step) {
     setState(() => _currentStep = step);
     _pageController.animateToPage(step,
@@ -175,11 +232,14 @@ final _storage = const FlutterSecureStorage(
   bool _validateStep() {
     switch (_currentStep) {
       case 0:
-        if (_nameCtrl.text.trim().isEmpty) {
-          _showError('Le nom du service est requis'); return false;
+        if (_selectedEntreprise == null) {
+          _showError('Sélectionnez une entreprise'); return false;
         }
         if (_selectedDomaineId == null) {
-          _showError('Sélectionnez un domaine'); return false;
+          _showError('Sélectionnez un domaine d\'activité'); return false;
+        }
+        if (_nameCtrl.text.trim().isEmpty) {
+          _showError('Le nom du service est requis'); return false;
         }
         if (!_isPriceOnRequest && _priceCtrl.text.trim().isEmpty) {
           _showError('Entrez un prix ou cochez "Sur devis"'); return false;
@@ -189,14 +249,12 @@ final _storage = const FlutterSecureStorage(
         }
         return true;
       case 1:
-        if (!_isAlwaysOpen) {
-          final anyOpen = _dayOpen.values.any((v) => v);
-          if (!anyOpen) {
-            _showError('Sélectionnez au moins un jour ouvert'); return false;
-          }
+        if (!_isAlwaysOpen && !_dayOpen.values.any((v) => v)) {
+          _showError('Sélectionnez au moins un jour ouvert'); return false;
         }
         return true;
-      default: return true;
+      default:
+        return true;
     }
   }
 
@@ -205,11 +263,9 @@ final _storage = const FlutterSecureStorage(
     if (_currentStep < 2) _goToStep(_currentStep + 1);
   }
 
-  // ── Photos ───────────────────────────────────
+  // ── Photos ────────────────────────────────────────────────────────────────────
   Future<void> _pickMedia() async {
-    if (_mediaFiles.length >= 5) {
-      _showError('Maximum 5 photos'); return;
-    }
+    if (_mediaFiles.length >= 5) { _showError('Maximum 5 photos'); return; }
     final source = await _showSourceDialog();
     if (source == null) return;
     try {
@@ -251,12 +307,12 @@ final _storage = const FlutterSecureStorage(
         ),
       );
 
-  // ── Soumission ───────────────────────────────
+  // ── Soumission ────────────────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (!_validateStep()) return;
     setState(() => _isSubmitting = true);
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token   = await _storage.read(key: 'auth_token');
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('${AppConstants.apiBaseUrl}/services'),
@@ -266,11 +322,10 @@ final _storage = const FlutterSecureStorage(
         'Accept': 'application/json',
       });
 
-      // Champs de base
-      request.fields['name'] = _nameCtrl.text.trim();
-      request.fields['descriptions'] = _descCtrl.text.trim();
-      request.fields['entreprise_id'] = widget.entreprise['id'].toString();
-      request.fields['domaine_id'] = _selectedDomaineId!;
+      request.fields['name']           = _nameCtrl.text.trim();
+      request.fields['descriptions']   = _descCtrl.text.trim();
+      request.fields['entreprise_id']  = _selectedEntreprise!['id'].toString();
+      request.fields['domaine_id']     = _selectedDomaineId!;
       request.fields['is_price_on_request'] = _isPriceOnRequest ? '1' : '0';
 
       if (!_isPriceOnRequest && _priceCtrl.text.isNotEmpty) {
@@ -281,7 +336,6 @@ final _storage = const FlutterSecureStorage(
         request.fields['price_promo'] = _promoCtrl.text.trim();
       }
 
-      // Horaires
       request.fields['is_always_open'] = _isAlwaysOpen ? '1' : '0';
       if (!_isAlwaysOpen) {
         for (final day in _dayNames.keys) {
@@ -289,14 +343,13 @@ final _storage = const FlutterSecureStorage(
               _dayOpen[day]! ? '1' : '0';
           if (_dayOpen[day]!) {
             request.fields['schedule[$day][start]'] = _dayStart[day]!.text;
-            request.fields['schedule[$day][end]'] = _dayEnd[day]!.text;
+            request.fields['schedule[$day][end]']   = _dayEnd[day]!.text;
           }
         }
       }
 
-      // Photos
       for (int i = 0; i < _mediaFiles.length; i++) {
-        final f = _mediaFiles[i];
+        final f   = _mediaFiles[i];
         final ext = f.path.split('.').last.toLowerCase();
         request.files.add(await http.MultipartFile.fromPath(
           'medias[]', f.path,
@@ -305,30 +358,22 @@ final _storage = const FlutterSecureStorage(
       }
 
       final response = await request.send();
-      final body = await response.stream.bytesToString();
+      final body     = await response.stream.bytesToString();
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         _showSuccessDialog();
       } else {
-        // ✅ Gestion spéciale des erreurs 403 liées aux limites de l'essai
         if (response.statusCode == 403) {
-          final data = jsonDecode(body);
+          final data    = jsonDecode(body);
           final message = data['message'] ?? '';
-
-          // Vérifier si c'est une erreur de limite de services (essai gratuit)
-          if (message.contains('limite de services') ||
-              message.contains('période d\'essai')) {
-            final int maxServices = data['max_services'] ?? 3;
-            final int currentServices = data['current_services'] ?? 0;
-            _showTrialLimitBlockingDialog(
-              maxServices: maxServices,
-              currentServices: currentServices,
-              isTrialExpired: false,
+          if (message.contains('limite') || message.contains('essai')) {
+            _showTrialLimitDialog(
+              maxServices:     data['max_services']     ?? 3,
+              currentServices: data['current_services'] ?? 0,
             );
             return;
           }
         }
-
         final data = jsonDecode(body);
         String msg = data['message'] ?? 'Erreur';
         if (data['errors'] != null) {
@@ -347,364 +392,184 @@ final _storage = const FlutterSecureStorage(
     }
   }
 
-    void _showTrialLimitBlockingDialog({
-    required int maxServices,
-    required int currentServices,
-    required bool isTrialExpired,
-  }) {
-    showDialog(
-      context: context,
-      barrierDismissible: false, // Ne peut pas fermer sans action
-      builder: (_) => WillPopScope(
-        onWillPop: () async => false, // Bloquer le bouton retour Android
-        child: Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ── Icône ──
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.lock_outline_rounded,
-                    color: Colors.orange,
-                    size: 44,
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // ── Titre ──
-                const Text(
-                  'Limite de services atteinte',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // ── Badge compteur ──
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.home_repair_service_outlined,
-                          color: Colors.orange[700], size: 16),
-                      const SizedBox(width: 8),
-                      Text(
-                        '$currentServices / $maxServices services utilisés',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.orange[700],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-
-                // ── Message ──
-                Text(
-                  'Votre période d\'essai gratuite vous permet de créer jusqu\'à '
-                  '$maxServices service${maxServices > 1 ? 's' : ''}. '
-                  'Pour en ajouter davantage, souscrivez à un plan payant.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[600],
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // ── Avantages d'un plan payant ──
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.green.withOpacity(0.2)),
-                  ),
-                  child: Column(
-                    children: [
-                      _benefitRow(Icons.all_inclusive, 'Services illimités'),
-                      const SizedBox(height: 6),
-                      _benefitRow(Icons.people_outline, 'Gestion des employés'),
-                      const SizedBox(height: 6),
-                      _benefitRow(Icons.analytics_outlined, 'Statistiques avancées'),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                    SizedBox(
-  width: double.infinity,
-  child: ElevatedButton.icon(
-    onPressed: () {
-      Navigator.pop(context);
-      Navigator.push(context,
-        MaterialPageRoute(builder: (_) => const PlansAbonnementScreen()));
-    },
-    icon: const Icon(Icons.subscriptions_outlined, size: 16),
-    label: const Text('Plans & Abonnements'),
-    style: ElevatedButton.styleFrom(
-      backgroundColor: Colors.grey[100],
-      foregroundColor: Colors.black87,
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    ),
-  ),
-),
-
-                const SizedBox(height: 10),
-
-                // ── Bouton secondaire → Retour ──
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () {
-                      Navigator.pop(context); // Fermer le dialog
-                      Navigator.pop(context); // Quitter CreateServiceScreen
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey[600],
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(color: Colors.grey[300]!),
-                      ),
-                    ),
-                    child: const Text(
-                      'Retour',
-                      style: TextStyle(fontSize: 14),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Ligne d'avantage dans le dialog
-  Widget _benefitRow(IconData icon, String label) => Row(
-    children: [
-      Icon(icon, size: 15, color: Colors.green[600]),
-      const SizedBox(width: 8),
-      Text(label,
-          style: TextStyle(
-              fontSize: 12,
-              color: Colors.green[700],
-              fontWeight: FontWeight.w500)),
-    ],
-  );
-  
- void _navigateToAbonnements() {
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      '/profile/abonnements',
-      (route) => route.isFirst,
-    );
-  }
-
-  void _showSuccessDialog() => showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 72, height: 72,
-              decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), shape: BoxShape.circle),
-              child: const Icon(Icons.check_circle, color: Colors.green, size: 44)),
-          const SizedBox(height: 18),
-          const Text('Service créé !',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Text('Votre service a été ajouté avec succès.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[600])),
-          const SizedBox(height: 24),
-          SizedBox(width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () { Navigator.pop(context); Navigator.pop(context); },
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: AppConstants.primaryRed,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: const Text('OK'),
-            )),
-        ]),
-      ),
-    ),
-  );
-
-  void _showError(String msg) => ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(msg), backgroundColor: Colors.red[700],
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-  );
-
-  // ── BUILD ────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  BUILD
+  // ─────────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final steps = ['Infos', 'Horaires', 'Photos'];
-    final icons = [Icons.info_outline, Icons.schedule, Icons.photo_library];
+    const steps = ['Infos', 'Horaires', 'Photos'];
+    const icons = [Icons.info_outline, Icons.schedule, Icons.photo_library];
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       body: Column(children: [
         _buildHeader(steps, icons),
-        Expanded(child: PageView(
-          controller: _pageController,
-          physics: const NeverScrollableScrollPhysics(),
-          children: [_buildStep1(), _buildStep2(), _buildStep3()],
-        )),
+        Expanded(
+          child: PageView(
+            controller: _pageController,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [_buildStep1(), _buildStep2(), _buildStep3()],
+          ),
+        ),
         _buildNavButtons(),
       ]),
     );
   }
 
+  // ── Header stepper ────────────────────────────────────────────────────────────
   Widget _buildHeader(List<String> steps, List<IconData> icons) {
     return Container(
       decoration: const BoxDecoration(
         color: AppConstants.primaryRed,
         borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(24),
-            bottomRight: Radius.circular(24)),
+            bottomLeft: Radius.circular(24), bottomRight: Radius.circular(24)),
       ),
-      child: SafeArea(bottom: false, child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-        child: Column(children: [
-          Row(children: [
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                padding: const EdgeInsets.all(8),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+          child: Column(children: [
+            Row(children: [
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text('Créer un service',
+                    style: TextStyle(color: Colors.white, fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                    borderRadius: BorderRadius.circular(20)),
+                child: Text('${_currentStep + 1}/3',
+                    style: const TextStyle(color: Colors.white, fontSize: 12,
+                        fontWeight: FontWeight.w600)),
               ),
-            ),
-            const SizedBox(width: 12),
-            const Expanded(child: Text('Créer un service',
-                style: TextStyle(color: Colors.white, fontSize: 18,
-                    fontWeight: FontWeight.bold))),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20)),
-              child: Text('${_currentStep + 1}/3',
-                  style: const TextStyle(color: Colors.white, fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(height: 16),
+            Row(
+              children: List.generate(3, (i) {
+                final isDone    = i < _currentStep;
+                final isCurrent = i == _currentStep;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(right: i < 2 ? 8 : 0),
+                    child: Column(children: [
+                      Row(children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          width: isCurrent ? 34 : 26,
+                          height: isCurrent ? 34 : 26,
+                          decoration: BoxDecoration(
+                            color: isDone || isCurrent
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.3),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(isDone ? Icons.check : icons[i],
+                              size: isCurrent ? 16 : 13,
+                              color: isDone || isCurrent
+                                  ? AppConstants.primaryRed
+                                  : Colors.white),
+                        ),
+                        if (i < 2)
+                          Expanded(
+                            child: Container(
+                              height: 2,
+                              color: i < _currentStep
+                                  ? Colors.white
+                                  : Colors.white.withOpacity(0.3),
+                            ),
+                          ),
+                      ]),
+                      const SizedBox(height: 4),
+                      Text(steps[i],
+                          style: TextStyle(
+                              color: isCurrent
+                                  ? Colors.white
+                                  : Colors.white.withOpacity(0.7),
+                              fontSize: 10,
+                              fontWeight: isCurrent
+                                  ? FontWeight.bold
+                                  : FontWeight.normal),
+                          textAlign: TextAlign.center),
+                    ]),
+                  ),
+                );
+              }),
             ),
           ]),
-          const SizedBox(height: 16),
-          Row(children: List.generate(3, (i) {
-            final isDone = i < _currentStep, isCurrent = i == _currentStep;
-            return Expanded(child: Padding(
-              padding: EdgeInsets.only(right: i < 2 ? 8 : 0),
-              child: Column(children: [
-                Row(children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: isCurrent ? 34 : 26, height: isCurrent ? 34 : 26,
-                    decoration: BoxDecoration(
-                      color: isDone || isCurrent ? Colors.white : Colors.white.withOpacity(0.3),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(isDone ? Icons.check : icons[i],
-                        size: isCurrent ? 16 : 13,
-                        color: isDone || isCurrent ? AppConstants.primaryRed : Colors.white),
-                  ),
-                  if (i < 2) Expanded(child: Container(height: 2,
-                      color: i < _currentStep ? Colors.white : Colors.white.withOpacity(0.3))),
-                ]),
-                const SizedBox(height: 4),
-                Text(steps[i], style: TextStyle(
-                    color: isCurrent ? Colors.white : Colors.white.withOpacity(0.7),
-                    fontSize: 10,
-                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal),
-                  textAlign: TextAlign.center),
-              ]),
-            ));
-          })),
-        ]),
-      )),
+        ),
+      ),
     );
   }
 
-  // ── STEP 1 : Infos de base ────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+  //  STEP 1 — Infos de base
+  // ════════════════════════════════════════════════════════════════════════════
   Widget _buildStep1() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _sectionTitle(Icons.info_outline, 'Informations de base',
-          'Nom, domaine et tarification du service'),
+
+      // ── Sélection Entreprise ───────────────────────────────────────────────
+      _sectionTitle(Icons.business_rounded, 'Entreprise',
+          'Sélectionnez l\'entreprise concernée'),
+      const SizedBox(height: 14),
+
+      _isLoadingEntreprises
+          ? _loadingWidget('Chargement de vos entreprises…')
+          : _mesEntreprises.isEmpty
+              ? _emptyWidget(
+                  Icons.business_outlined,
+                  'Aucune entreprise validée',
+                  'Votre entreprise doit être validée pour créer des services.',
+                )
+              : _buildEntrepriseSelector(),
+
       const SizedBox(height: 20),
 
-      // Nom
+      // ── Sélection Domaine ──────────────────────────────────────────────────
+      _sectionTitle(Icons.category_outlined, 'Domaine d\'activité',
+          'Domaine associé à ce service'),
+      const SizedBox(height: 14),
+
+      _buildDomaineSelector(),
+
+      const SizedBox(height: 20),
+
+      // ── Infos service ──────────────────────────────────────────────────────
+      _sectionTitle(Icons.info_outline, 'Informations du service',
+          'Nom et description'),
+      const SizedBox(height: 14),
+
       _label('Nom du service', required: true),
       _field(_nameCtrl, 'Ex: Vidange moteur', Icons.build_circle_outlined),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
 
-      // Description
       _label('Description'),
       TextFormField(
         controller: _descCtrl,
         maxLines: 3,
         style: const TextStyle(fontSize: 14),
-        decoration: _inputDeco('Décrivez votre service...', Icons.description_outlined),
-      ),
-      const SizedBox(height: 16),
-
-      // Domaine
-      _label('Domaine d\'activité', required: true),
-      Container(
-        decoration: BoxDecoration(color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey[200]!)),
-        child: DropdownButtonHideUnderline(
-          child: DropdownButton<String>(
-            value: _selectedDomaineId,
-            isExpanded: true,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            borderRadius: BorderRadius.circular(12),
-            items: _domaines.map((d) => DropdownMenuItem(
-              value: d['id'].toString(),
-              child: Text(d['name'] ?? ''),
-            )).toList(),
-            onChanged: (v) => setState(() => _selectedDomaineId = v),
-          ),
-        ),
+        decoration: _inputDeco('Décrivez votre service…', Icons.description_outlined),
       ),
       const SizedBox(height: 20),
 
-      // Prix
-      _sectionTitle(Icons.payments_outlined, 'Tarification', 'Définissez le prix de votre service'),
+      // ── Tarification ───────────────────────────────────────────────────────
+      _sectionTitle(Icons.payments_outlined, 'Tarification',
+          'Définissez le prix de votre service'),
       const SizedBox(height: 14),
 
-      // Sur devis toggle
       _toggleCard(
         icon: Icons.request_quote_outlined,
         title: 'Prix sur devis',
@@ -723,7 +588,6 @@ final _storage = const FlutterSecureStorage(
             keyboardType: TextInputType.number),
         const SizedBox(height: 12),
 
-        // Promo toggle
         _toggleCard(
           icon: Icons.local_offer_outlined,
           title: 'Activer une promotion',
@@ -738,11 +602,236 @@ final _storage = const FlutterSecureStorage(
               keyboardType: TextInputType.number),
         ],
       ],
+
       const SizedBox(height: 20),
     ]),
   );
 
-  // ── STEP 2 : Horaires ──────────────────────────
+  // ── Widget sélecteur d'entreprise ─────────────────────────────────────────────
+  Widget _buildEntrepriseSelector() {
+    // Une seule entreprise → affichage simplifié (pas de dropdown)
+    if (_mesEntreprises.length == 1) {
+      final e = _mesEntreprises.first;
+      return _SelectedEntrepriseCard(entreprise: e);
+    }
+
+    // Plusieurs entreprises → dropdown avec cards
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Dropdown
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: _selectedEntreprise != null
+                  ? AppConstants.primaryRed.withOpacity(0.4)
+                  : Colors.grey.shade200,
+              width: _selectedEntreprise != null ? 1.5 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.03), blurRadius: 8)
+            ],
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedEntreprise?['id']?.toString(),
+              isExpanded: true,
+              hint: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(children: [
+                  Icon(Icons.business_outlined,
+                      size: 18, color: Colors.grey.shade400),
+                  const SizedBox(width: 10),
+                  Text('Sélectionnez une entreprise',
+                      style: TextStyle(
+                          color: Colors.grey.shade400, fontSize: 13)),
+                ]),
+              ),
+              borderRadius: BorderRadius.circular(14),
+              padding: EdgeInsets.zero,
+              items: _mesEntreprises.map((e) {
+                final logo = e['logo']?.toString() ?? '';
+                return DropdownMenuItem<String>(
+                  value: e['id'].toString(),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(children: [
+                      // Logo
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                          image: logo.isNotEmpty
+                              ? DecorationImage(
+                                  image: NetworkImage(logo),
+                                  fit: BoxFit.cover)
+                              : null,
+                        ),
+                        child: logo.isEmpty
+                            ? Icon(Icons.business,
+                                size: 16, color: Colors.grey.shade400)
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          e['name']?.toString() ?? '',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ]),
+                  ),
+                );
+              }).toList(),
+              onChanged: (id) {
+                final found = _mesEntreprises.firstWhere(
+                    (e) => e['id'].toString() == id,
+                    orElse: () => <String, dynamic>{});
+                if (found.isNotEmpty) _onEntrepriseSelected(found);
+              },
+            ),
+          ),
+        ),
+
+        // Carte récap de l'entreprise sélectionnée
+        if (_selectedEntreprise != null) ...[
+          const SizedBox(height: 10),
+          _SelectedEntrepriseCard(entreprise: _selectedEntreprise!),
+        ],
+      ],
+    );
+  }
+
+  // ── Widget sélecteur de domaine ───────────────────────────────────────────────
+  Widget _buildDomaineSelector() {
+    // Pas d'entreprise sélectionnée
+    if (_selectedEntreprise == null) {
+      return _infoBox(
+        Icons.info_outline,
+        Colors.grey.shade400,
+        Colors.grey.shade50,
+        Colors.grey.shade200,
+        'Sélectionnez d\'abord une entreprise pour voir ses domaines.',
+      );
+    }
+
+    // Chargement
+    if (_isLoadingDomaines) {
+      return _loadingWidget('Chargement des domaines…');
+    }
+
+    // Aucun domaine
+    if (_domaines.isEmpty) {
+      return _infoBox(
+        Icons.warning_amber_rounded,
+        Colors.orange.shade600,
+        Colors.orange.shade50,
+        Colors.orange.shade200,
+        'Aucun domaine d\'activité trouvé pour cette entreprise.',
+      );
+    }
+
+    // Un seul domaine → sélection automatique + badge
+    if (_domaines.length == 1) {
+      final d = _domaines.first;
+      // Auto-select
+      if (_selectedDomaineId != d['id']) {
+        WidgetsBinding.instance.addPostFrameCallback(
+            (_) => setState(() => _selectedDomaineId = d['id']));
+      }
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppConstants.primaryRed.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppConstants.primaryRed.withOpacity(0.25)),
+        ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: AppConstants.primaryRed.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.category_rounded,
+                color: AppConstants.primaryRed, size: 16),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(d['name']!,
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700)),
+          ),
+          const Icon(Icons.check_circle_rounded,
+              color: AppConstants.primaryRed, size: 18),
+        ]),
+      );
+    }
+
+    // Plusieurs domaines → liste de chips sélectionnables
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _domaines.map((d) {
+        final isSelected = _selectedDomaineId == d['id'];
+        return GestureDetector(
+          onTap: () => setState(() => _selectedDomaineId = d['id']),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected
+                  ? AppConstants.primaryRed
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected
+                    ? AppConstants.primaryRed
+                    : Colors.grey.shade200,
+                width: isSelected ? 1.5 : 1,
+              ),
+              boxShadow: isSelected
+                  ? [BoxShadow(
+                      color: AppConstants.primaryRed.withOpacity(0.2),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2))]
+                  : [BoxShadow(
+                      color: Colors.black.withOpacity(0.03), blurRadius: 4)],
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(
+                isSelected
+                    ? Icons.check_circle_rounded
+                    : Icons.category_outlined,
+                size: 15,
+                color: isSelected ? Colors.white : Colors.grey.shade500,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                d['name']!,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isSelected ? Colors.white : Colors.grey.shade700,
+                ),
+              ),
+            ]),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  STEP 2 — Horaires
+  // ════════════════════════════════════════════════════════════════════════════
   Widget _buildStep2() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -750,7 +839,6 @@ final _storage = const FlutterSecureStorage(
           'Définissez quand votre service est disponible'),
       const SizedBox(height: 20),
 
-      // 24h/24 toggle
       _toggleCard(
         icon: Icons.all_inclusive,
         title: 'Disponible 24h/24',
@@ -765,35 +853,46 @@ final _storage = const FlutterSecureStorage(
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-              color: Colors.blue[50], borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue[200]!)),
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue.shade200)),
           child: Row(children: [
-            Icon(Icons.info_outline, color: Colors.blue[700], size: 16),
+            Icon(Icons.info_outline, color: Colors.blue.shade700, size: 16),
             const SizedBox(width: 8),
-            Expanded(child: Text('Activez les jours où vous êtes disponible',
-                style: TextStyle(fontSize: 12, color: Colors.blue[700]))),
+            Expanded(
+              child: Text('Activez les jours où vous êtes disponible',
+                  style: TextStyle(fontSize: 12, color: Colors.blue.shade700)),
+            ),
           ]),
         ),
         const SizedBox(height: 14),
         ..._dayNames.entries.map((entry) {
-          final day = entry.key;
-          final name = entry.value;
+          final day    = entry.key;
+          final name   = entry.value;
           final isOpen = _dayOpen[day]!;
           return Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
-              color: Colors.white, borderRadius: BorderRadius.circular(14),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(
-                  color: isOpen ? AppConstants.primaryRed.withOpacity(0.3) : Colors.grey[200]!),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)],
+                  color: isOpen
+                      ? AppConstants.primaryRed.withOpacity(0.3)
+                      : Colors.grey.shade200),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)
+              ],
             ),
             child: Column(children: [
-              // Ligne jour + toggle
-              Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 child: Row(children: [
-                  Text(name, style: TextStyle(fontSize: 14,
-                      fontWeight: isOpen ? FontWeight.w700 : FontWeight.normal,
-                      color: isOpen ? Colors.black87 : Colors.grey[500])),
+                  Text(name,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight:
+                              isOpen ? FontWeight.w700 : FontWeight.normal,
+                          color: isOpen ? Colors.black87 : Colors.grey.shade500)),
                   const Spacer(),
                   Switch(
                     value: isOpen,
@@ -802,13 +901,15 @@ final _storage = const FlutterSecureStorage(
                   ),
                 ]),
               ),
-              // Horaires si ouvert
               if (isOpen)
-                Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
                   child: Row(children: [
                     Expanded(child: _timeField(_dayStart[day]!, 'Ouverture')),
-                    const Padding(padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: Text('—', style: TextStyle(color: Colors.grey))),
+                    Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Text('—',
+                            style: TextStyle(color: Colors.grey.shade400))),
                     Expanded(child: _timeField(_dayEnd[day]!, 'Fermeture')),
                   ]),
                 ),
@@ -820,42 +921,50 @@ final _storage = const FlutterSecureStorage(
     ]),
   );
 
-  Widget _timeField(TextEditingController ctrl, String hint) => GestureDetector(
-    onTap: () async {
-      final t = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay(
-          hour: int.tryParse(ctrl.text.split(':')[0]) ?? 8,
-          minute: int.tryParse(ctrl.text.split(':')[1]) ?? 0,
-        ),
-        builder: (ctx, child) => Theme(
-          data: Theme.of(ctx).copyWith(
-              colorScheme: const ColorScheme.light(primary: AppConstants.primaryRed)),
-          child: child!,
+  Widget _timeField(TextEditingController ctrl, String hint) =>
+      GestureDetector(
+        onTap: () async {
+          final t = await showTimePicker(
+            context: context,
+            initialTime: TimeOfDay(
+              hour:   int.tryParse(ctrl.text.split(':')[0]) ?? 8,
+              minute: int.tryParse(ctrl.text.split(':')[1]) ?? 0,
+            ),
+            builder: (ctx, child) => Theme(
+              data: Theme.of(ctx).copyWith(
+                  colorScheme: const ColorScheme.light(
+                      primary: AppConstants.primaryRed)),
+              child: child!,
+            ),
+          );
+          if (t != null) {
+            ctrl.text =
+                '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+            setState(() {});
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade200)),
+          child: Row(children: [
+            Icon(Icons.access_time, size: 16, color: Colors.grey.shade500),
+            const SizedBox(width: 6),
+            Text(ctrl.text.isEmpty ? hint : ctrl.text,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: ctrl.text.isEmpty
+                        ? Colors.grey.shade400
+                        : Colors.black87)),
+          ]),
         ),
       );
-      if (t != null) {
-        ctrl.text =
-            '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-        setState(() {});
-      }
-    },
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-          color: Colors.grey[50], borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.grey[200]!)),
-      child: Row(children: [
-        Icon(Icons.access_time, size: 16, color: Colors.grey[500]),
-        const SizedBox(width: 6),
-        Text(ctrl.text.isEmpty ? hint : ctrl.text,
-            style: TextStyle(fontSize: 13,
-                color: ctrl.text.isEmpty ? Colors.grey[400] : Colors.black87)),
-      ]),
-    ),
-  );
 
-  // ── STEP 3 : Médias + récap ───────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+  //  STEP 3 — Médias + récap
+  // ════════════════════════════════════════════════════════════════════════════
   Widget _buildStep3() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -863,7 +972,6 @@ final _storage = const FlutterSecureStorage(
           'Ajoutez jusqu\'à 5 photos (optionnel)'),
       const SizedBox(height: 16),
 
-      // Grid photos
       GridView.count(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
@@ -872,10 +980,15 @@ final _storage = const FlutterSecureStorage(
         mainAxisSpacing: 8,
         children: [
           ..._mediaPreviews.asMap().entries.map((e) => Stack(children: [
-            ClipRRect(borderRadius: BorderRadius.circular(10),
-                child: Image.file(File(e.value), fit: BoxFit.cover,
-                    width: double.infinity, height: double.infinity)),
-            Positioned(top: 4, right: 4,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.file(File(e.value),
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity),
+            ),
+            Positioned(
+              top: 4, right: 4,
               child: GestureDetector(
                 onTap: () => setState(() {
                   _mediaFiles.removeAt(e.key);
@@ -883,7 +996,8 @@ final _storage = const FlutterSecureStorage(
                 }),
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                  decoration: const BoxDecoration(
+                      color: Colors.red, shape: BoxShape.circle),
                   child: const Icon(Icons.close, size: 12, color: Colors.white),
                 ),
               ),
@@ -894,16 +1008,22 @@ final _storage = const FlutterSecureStorage(
               onTap: _pickMedia,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white, borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppConstants.primaryRed.withOpacity(0.4), width: 1.5,
-                      style: BorderStyle.solid),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: AppConstants.primaryRed.withOpacity(0.4),
+                      width: 1.5),
                 ),
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center, children: [
                   Icon(Icons.add_photo_alternate_outlined,
                       color: AppConstants.primaryRed, size: 28),
                   const SizedBox(height: 4),
-                  Text('Ajouter', style: TextStyle(fontSize: 11,
-                      color: AppConstants.primaryRed, fontWeight: FontWeight.w500)),
+                  Text('Ajouter',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppConstants.primaryRed,
+                          fontWeight: FontWeight.w500)),
                 ]),
               ),
             ),
@@ -912,110 +1032,299 @@ final _storage = const FlutterSecureStorage(
 
       const SizedBox(height: 24),
 
-      // Récapitulatif
       _sectionTitle(Icons.checklist, 'Récapitulatif', ''),
       const SizedBox(height: 12),
+
       Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey[200]!),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.grey.shade200),
         ),
         child: Column(children: [
-          _recapRow('Service', _nameCtrl.text.isNotEmpty ? _nameCtrl.text : '—'),
-          _recapRow('Domaine', _domaines.firstWhere(
-            (d) => d['id'].toString() == _selectedDomaineId,
-            orElse: () => {'name': '—'})['name']),
-          _recapRow('Prix', _isPriceOnRequest ? 'Sur devis' :
-              _priceCtrl.text.isNotEmpty ? '${_priceCtrl.text} FCFA' : '—'),
+          _recapRow('Entreprise',
+              _selectedEntreprise?['name']?.toString() ?? '—'),
+          _recapRow('Domaine', _domaines
+              .firstWhere((d) => d['id'] == _selectedDomaineId,
+                  orElse: () => {'name': '—'})['name']!),
+          _recapRow('Service',
+              _nameCtrl.text.isNotEmpty ? _nameCtrl.text : '—'),
+          _recapRow('Prix',
+              _isPriceOnRequest
+                  ? 'Sur devis'
+                  : _priceCtrl.text.isNotEmpty
+                      ? '${_priceCtrl.text} FCFA'
+                      : '—'),
           if (_hasPromo && _promoCtrl.text.isNotEmpty)
             _recapRow('Prix promo', '${_promoCtrl.text} FCFA'),
-          _recapRow('Disponibilité', _isAlwaysOpen ? '24h/24'
-              : '${_dayOpen.values.where((v) => v).length} jour(s)'),
+          _recapRow('Disponibilité',
+              _isAlwaysOpen
+                  ? '24h/24'
+                  : '${_dayOpen.values.where((v) => v).length} jour(s)'),
           _recapRow('Photos', '${_mediaFiles.length} photo(s)'),
         ]),
       ),
-
       const SizedBox(height: 20),
     ]),
   );
 
-  // ── Nav buttons ───────────────────────────────
+  // ── Boutons de navigation ─────────────────────────────────────────────────────
   Widget _buildNavButtons() {
     final isLast = _currentStep == 2;
+    final canProceed = !_isLoadingEntreprises && !_isLoadingDomaines;
+
     return Container(
       padding: EdgeInsets.fromLTRB(20, 12, 20,
           MediaQuery.of(context).padding.bottom + 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05),
-            blurRadius: 12, offset: const Offset(0, -3))],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05),
+              blurRadius: 12, offset: const Offset(0, -3))
+        ],
       ),
       child: Row(children: [
         if (_currentStep > 0) ...[
-          Expanded(flex: 2, child: OutlinedButton.icon(
-            onPressed: () => _goToStep(_currentStep - 1),
-            icon: const Icon(Icons.arrow_back, size: 16),
-            label: const Text('Précédent'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.grey[700],
-              side: BorderSide(color: Colors.grey[300]!),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          Expanded(
+            flex: 2,
+            child: OutlinedButton.icon(
+              onPressed: () => _goToStep(_currentStep - 1),
+              icon: const Icon(Icons.arrow_back, size: 16),
+              label: const Text('Précédent'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.grey.shade700,
+                side: BorderSide(color: Colors.grey.shade300),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
             ),
-          )),
+          ),
           const SizedBox(width: 12),
         ],
-        Expanded(flex: 3, child: ElevatedButton(
-          onPressed: _isSubmitting ? null : (isLast ? _submit : _next),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: isLast ? Colors.green[600] : AppConstants.primaryRed,
-            foregroundColor: Colors.white,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        Expanded(
+          flex: 3,
+          child: ElevatedButton(
+            onPressed: (_isSubmitting || !canProceed)
+                ? null
+                : (isLast ? _submit : _next),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isLast ? Colors.green.shade600 : AppConstants.primaryRed,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              disabledBackgroundColor: Colors.grey.shade200,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: _isSubmitting
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(isLast ? Icons.check : Icons.arrow_forward, size: 18),
+                    const SizedBox(width: 8),
+                    Text(isLast ? 'Créer le service' : 'Suivant',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15)),
+                  ]),
           ),
-          child: _isSubmitting
-              ? const SizedBox(width: 20, height: 20,
-                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-              : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(isLast ? Icons.check : Icons.arrow_forward, size: 18),
-                  const SizedBox(width: 8),
-                  Text(isLast ? 'Créer le service' : 'Suivant',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                ]),
-        )),
+        ),
       ]),
     );
   }
 
-  // ── Widgets helpers ───────────────────────────
-  Widget _sectionTitle(IconData icon, String title, String sub) =>
-      Container(padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)]),
-        child: Row(children: [
-          Container(padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: AppConstants.primaryRed.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: AppConstants.primaryRed, size: 20)),
-          const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-            if (sub.isNotEmpty) Text(sub, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-          ])),
-        ]));
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  DIALOGS
+  // ─────────────────────────────────────────────────────────────────────────────
+  void _showTrialLimitDialog(
+      {required int maxServices, required int currentServices}) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 80, height: 80,
+                decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    shape: BoxShape.circle),
+                child: const Icon(Icons.lock_outline_rounded,
+                    color: Colors.orange, size: 44),
+              ),
+              const SizedBox(height: 20),
+              const Text('Limite de services atteinte',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: Colors.orange.withOpacity(0.3))),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.home_repair_service_outlined,
+                      color: Colors.orange.shade700, size: 16),
+                  const SizedBox(width: 8),
+                  Text('$currentServices / $maxServices services utilisés',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.orange.shade700)),
+                ]),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Votre période d\'essai vous permet de créer jusqu\'à '
+                '$maxServices service${maxServices > 1 ? 's' : ''}. '
+                'Souscrivez à un plan payant pour en ajouter davantage.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13, color: Colors.grey.shade600, height: 1.5),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const PlansAbonnementScreen()));
+                  },
+                  icon: const Icon(Icons.subscriptions_outlined, size: 16),
+                  label: const Text('Voir les plans'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppConstants.primaryRed,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    Navigator.pop(context);
+                  },
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.grey.shade600,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.grey.shade300)),
+                  ),
+                  child: const Text('Retour'),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSuccessDialog() => showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 72, height: 72,
+            decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1), shape: BoxShape.circle),
+            child: const Icon(Icons.check_circle, color: Colors.green, size: 44),
+          ),
+          const SizedBox(height: 18),
+          const Text('Service créé !',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text('Votre service a été ajouté avec succès.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey.shade600)),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppConstants.primaryRed,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              child: const Text('OK'),
+            ),
+          ),
+        ]),
+      ),
+    ),
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  //  WIDGETS HELPERS
+  // ─────────────────────────────────────────────────────────────────────────────
+  Widget _sectionTitle(IconData icon, String title, String sub) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      boxShadow: [
+        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)
+      ],
+    ),
+    child: Row(children: [
+      Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+            color: AppConstants.primaryRed.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10)),
+        child: Icon(icon, color: AppConstants.primaryRed, size: 20),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          if (sub.isNotEmpty)
+            Text(sub,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+        ]),
+      ),
+    ]),
+  );
 
   Widget _label(String t, {bool required = false}) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
     child: Row(children: [
-      Text(t, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      if (required) const Text(' *', style: TextStyle(color: Colors.red)),
+      Text(t,
+          style:
+              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      if (required)
+        const Text(' *', style: TextStyle(color: Colors.red)),
     ]),
   );
 
   Widget _field(TextEditingController ctrl, String hint, IconData icon,
-      {TextInputType? keyboardType}) =>
+          {TextInputType? keyboardType}) =>
       TextFormField(
         controller: ctrl,
         keyboardType: keyboardType,
@@ -1025,41 +1334,69 @@ final _storage = const FlutterSecureStorage(
 
   InputDecoration _inputDeco(String hint, IconData icon) => InputDecoration(
     hintText: hint,
-    hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
-    prefixIcon: Icon(icon, color: Colors.grey[500], size: 18),
+    hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+    prefixIcon: Icon(icon, color: Colors.grey.shade500, size: 18),
     filled: true,
     fillColor: Colors.white,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey[200]!)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey[200]!)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppConstants.primaryRed, width: 1.5)),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200)),
+    enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200)),
+    focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide:
+            const BorderSide(color: AppConstants.primaryRed, width: 1.5)),
+    contentPadding:
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
   );
 
-  Widget _toggleCard({required IconData icon, required String title,
-      required String subtitle, required bool value,
-      required ValueChanged<bool> onChanged, Color? color}) =>
+  Widget _toggleCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+    Color? color,
+  }) =>
       Container(
         padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: value
-                ? (color ?? AppConstants.primaryRed).withOpacity(0.3)
-                : Colors.grey[200]!),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)]),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: value
+                  ? (color ?? AppConstants.primaryRed).withOpacity(0.3)
+                  : Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.03), blurRadius: 6)
+          ],
+        ),
         child: Row(children: [
-          Container(padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                  color: (color ?? AppConstants.primaryRed).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: color ?? AppConstants.primaryRed, size: 18)),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+                color: (color ?? AppConstants.primaryRed).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10)),
+            child: Icon(icon,
+                color: color ?? AppConstants.primaryRed, size: 18),
+          ),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-          ])),
-          Switch(value: value, onChanged: onChanged,
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(subtitle,
+                  style:
+                      TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+            ]),
+          ),
+          Switch(
+              value: value,
+              onChanged: onChanged,
               activeColor: color ?? AppConstants.primaryRed),
         ]),
       );
@@ -1067,10 +1404,187 @@ final _storage = const FlutterSecureStorage(
   Widget _recapRow(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(children: [
-      SizedBox(width: 90, child: Text(label,
-          style: TextStyle(fontSize: 12, color: Colors.grey[500], fontWeight: FontWeight.w500))),
-      Expanded(child: Text(value,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600))),
+      SizedBox(
+        width: 90,
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade500,
+                fontWeight: FontWeight.w500)),
+      ),
+      Expanded(
+        child: Text(value,
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
     ]),
   );
+
+  Widget _loadingWidget(String msg) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 18),
+    child: Row(children: [
+      const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(
+            strokeWidth: 2, color: AppConstants.primaryRed),
+      ),
+      const SizedBox(width: 12),
+      Text(msg, style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
+    ]),
+  );
+
+  Widget _emptyWidget(IconData icon, String title, String sub) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Colors.grey.shade200),
+    ),
+    child: Column(children: [
+      Icon(icon, size: 40, color: Colors.grey.shade300),
+      const SizedBox(height: 10),
+      Text(title,
+          style: TextStyle(
+              fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
+      const SizedBox(height: 4),
+      Text(sub,
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+          textAlign: TextAlign.center),
+    ]),
+  );
+
+  Widget _infoBox(IconData icon, Color iconColor, Color bg, Color border,
+          String msg) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: border)),
+        child: Row(children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(msg,
+                style: TextStyle(fontSize: 12, color: iconColor)),
+          ),
+        ]),
+      );
+
+  void _showError(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+}
+
+
+class _SelectedEntrepriseCard extends StatelessWidget {
+  final Map<String, dynamic> entreprise;
+  const _SelectedEntrepriseCard({required this.entreprise});
+
+  @override
+  Widget build(BuildContext context) {
+    final logo   = entreprise['logo']?.toString() ?? '';
+    final name   = entreprise['name']?.toString() ?? 'Entreprise';
+    final status = entreprise['status']?.toString() ?? '';
+
+    // Domaines en chips
+    final doms = entreprise['domaines'];
+    final domList = doms is List
+        ? doms.whereType<Map>().map((d) => d['name']?.toString() ?? '').where((n) => n.isNotEmpty).toList()
+        : <String>[];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppConstants.primaryRed.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppConstants.primaryRed.withOpacity(0.2)),
+      ),
+      child: Row(children: [
+        // Logo
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+            image: logo.isNotEmpty
+                ? DecorationImage(
+                    image: NetworkImage(logo), fit: BoxFit.cover)
+                : null,
+          ),
+          child: logo.isEmpty
+              ? Icon(Icons.business, color: Colors.grey.shade400, size: 22)
+              : null,
+        ),
+        const SizedBox(width: 12),
+
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(name,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
+              if (status == 'validated')
+                Row(mainAxisSize: MainAxisSize.min, children: const [
+                  SizedBox(width: 4),
+                  Icon(Icons.verified_rounded,
+                      size: 14, color: Color(0xFF4CAF50)),
+                  SizedBox(width: 2),
+                  Text('Validée',
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF4CAF50),
+                          fontWeight: FontWeight.w600)),
+                ]),
+            ]),
+            if (domList.isNotEmpty) ...[
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: domList
+                    .take(3)
+                    .map((d) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                              color:
+                                  AppConstants.primaryRed.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(6)),
+                          child: Text(d,
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppConstants.primaryRed,
+                                  fontWeight: FontWeight.w600)),
+                        ))
+                    .toList(),
+              ),
+            ],
+          ]),
+        ),
+
+        // Coche
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+              color: AppConstants.primaryRed.withOpacity(0.1),
+              shape: BoxShape.circle),
+          child: const Icon(Icons.check_rounded,
+              size: 14, color: AppConstants.primaryRed),
+        ),
+      ]),
+    );
+  }
 }

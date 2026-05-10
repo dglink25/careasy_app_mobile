@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:io';
-
+import '../widgets/service_selection_modal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -774,15 +774,11 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
 
   // ─── RENDEZ-VOUS : Sélection du service ────────────────────────────────────
   Future<void> _openRendezVous() async {
-    // Si l'entreprise a des services, afficher une dialog pour choisir
-    if (_servicesList.isNotEmpty) {
-      _showServiceSelectionDialog();
-    } else if (_services.isNotEmpty) {
-      _showServiceSelectionDialog();
-    } else {
-      // Pas de services, créer un rendez-vous générique
-      _navigateToCreateRdv(null);
-    }
+    await showServiceSelectionModal(
+      context: context,
+      entreprise: widget.entreprise,
+      mode: ServiceSelectionMode.rendezVous,
+    );
   }
 
   void _showServiceSelectionDialog() {
@@ -911,23 +907,11 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
   }
 
   // ─── MESSAGE / CHAT ────────────────────────────────────────────────────────
-  void _openChat() {
-    final entId = widget.entreprise['id']?.toString() ?? '';
-    final otherUser = UserModel(
-      id: entId,
-      name: _name,
-      photoUrl: _logo.isNotEmpty ? _logo : null,
-      role: 'entreprise',
-      isOnline: false,
-    );
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChangeNotifierProvider.value(
-          value: context.read<MessageProvider>(),
-          child: ChatScreen(conversationId: entId, otherUser: otherUser),
-        ),
-      ),
+  void _openChat() async {
+    await showServiceSelectionModal(
+      context: context,
+      entreprise: widget.entreprise,
+      mode: ServiceSelectionMode.message,
     );
   }
 
