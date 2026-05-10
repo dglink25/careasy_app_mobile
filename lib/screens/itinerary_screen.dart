@@ -1,9 +1,3 @@
-// lib/screens/itinerary_screen.dart
-// ═══════════════════════════════════════════════════════════════════════════
-//  CarEasy — Itinéraire interactif style Google Maps
-//  Flutter Map + OpenRouteService (API gratuite) + géolocalisation temps réel
-// ═══════════════════════════════════════════════════════════════════════════
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;

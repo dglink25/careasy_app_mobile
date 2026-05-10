@@ -1,12 +1,7 @@
-// lib/screens/map_screen.dart
-// ═══════════════════════════════════════════════════════════════════════════
-//  CarEasy — Carte interactive des entreprises
-//  Flutter Map (OpenStreetMap) + géolocalisation + modal entreprise
-// ═══════════════════════════════════════════════════════════════════════════
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/user_model.dart';
 import '../providers/message_provider.dart';
@@ -25,6 +21,7 @@ import 'chat_screen.dart';
 import 'entreprise_services_screen.dart';
 import 'itinerary_screen.dart';
 import 'rendez_vous/create_rendez_vous_screen.dart';
+import 'service_detail_screen.dart';
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 const _kDefaultLat  = 6.3654; // Cotonou
@@ -35,7 +32,6 @@ const _kZoomFocus   = 16.0;
 const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
 const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
-// ═════════════════════════════════════════════════════════════════════════════
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -478,9 +474,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Marqueur utilisateur
-// ═════════════════════════════════════════════════════════════════════════════
 class _UserMarker extends StatefulWidget {
   @override State<_UserMarker> createState() => _UserMarkerState();
 }
@@ -580,9 +573,7 @@ class _EntrepriseMarker extends StatelessWidget {
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Carte entreprise dans la liste bottom
-// ═════════════════════════════════════════════════════════════════════════════
+
 class _EntrepriseCard extends StatelessWidget {
   final Map<String, dynamic> entreprise;
   final double? distance;
@@ -648,7 +639,7 @@ class _EntrepriseCard extends StatelessWidget {
   Widget _placeholder() => Center(child: Icon(Icons.business, size: 28, color: Colors.grey[300]));
 }
 
-class _EntrepriseModal extends StatelessWidget {
+class _EntrepriseModal extends StatefulWidget {
   final Map<String, dynamic> entreprise;
   final double? distance;
   final LatLng? userPosition;
@@ -661,26 +652,328 @@ class _EntrepriseModal extends StatelessWidget {
     this.userPosition,
   });
 
-  // ── Helper ─────────────────────────────────────────────────────────────────
-  String get _name    => entreprise['name']?.toString() ?? 'Entreprise';
-  String get _logo    => entreprise['logo']?.toString() ?? '';
-  String get _boutiq  => entreprise['image_boutique']?.toString() ?? '';
-  String get _addr    => entreprise['google_formatted_address']?.toString() ?? entreprise['siege']?.toString() ?? '';
-  String get _whatsapp=> entreprise['whatsapp_phone']?.toString() ?? '';
-  String get _phone   => entreprise['call_phone']?.toString() ?? '';
-  String get _status  => entreprise['status']?.toString() ?? '';
-  List   get _doms    => (entreprise['domaines'] as List?) ?? [];
-  List   get _services=> (entreprise['services'] as List?) ?? [];
+  @override
+  State<_EntrepriseModal> createState() => _EntrepriseModalState();
+}
+
+class _EntrepriseModalState extends State<_EntrepriseModal> {
+  bool _isLoadingServices = false;
+  List<Map<String, dynamic>> _services = [];
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  String get _name    => widget.entreprise['name']?.toString() ?? 'Entreprise';
+  String get _logo    => widget.entreprise['logo']?.toString() ?? '';
+  String get _boutiq  => widget.entreprise['image_boutique']?.toString() ?? '';
+  String get _addr    => widget.entreprise['google_formatted_address']?.toString() ?? 
+                         widget.entreprise['siege']?.toString() ?? '';
+  String get _whatsapp=> widget.entreprise['whatsapp_phone']?.toString() ?? '';
+  String get _phone   => widget.entreprise['call_phone']?.toString() ?? '';
+  String get _status  => widget.entreprise['status']?.toString() ?? '';
+  List   get _doms    => (widget.entreprise['domaines'] as List?) ?? [];
+  List   get _servicesList => (widget.entreprise['services'] as List?) ?? [];
 
   LatLng? get _position {
-    final lat = double.tryParse(entreprise['latitude']?.toString() ?? '');
-    final lng = double.tryParse(entreprise['longitude']?.toString() ?? '');
+    final lat = double.tryParse(widget.entreprise['latitude']?.toString() ?? '');
+    final lng = double.tryParse(widget.entreprise['longitude']?.toString() ?? '');
     if (lat == null || lng == null) return null;
     return LatLng(lat, lng);
   }
 
+  // ─── Formatage téléphone (identique à service_detail.dart) ─────────────────
+  String _formatPhoneNumber(String phone) {
+    if (phone.isEmpty) return '';
+    String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleaned.startsWith('+')) return cleaned;
+    if (cleaned.startsWith('00')) return '+${cleaned.substring(2)}';
+    if (cleaned.startsWith('0') && cleaned.length == 10) return '+229${cleaned.substring(1)}';
+    if (cleaned.length == 8) return '+229$cleaned';
+    if (cleaned.startsWith('229') && cleaned.length >= 11) return '+$cleaned';
+    return cleaned;
+  }
+
+  // ─── APPELER ───────────────────────────────────────────────────────────────
+  Future<void> _makePhoneCall() async {
+    if (_phone.isEmpty) {
+      _showErrorSnackbar('Aucun numéro de téléphone disponible');
+      return;
+    }
+    try {
+      final formattedNumber = _formatPhoneNumber(_phone);
+      final uri = Uri.parse('tel:$formattedNumber');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        _showErrorSnackbar('Impossible de passer l\'appel');
+      }
+    } catch (e) {
+      _showErrorSnackbar('Erreur lors de l\'appel');
+    }
+  }
+
+  // ─── WHATSAPP avec détection d'application ─────────────────────────────────
+  Future<void> _openWhatsApp() async {
+    if (_whatsapp.isEmpty) {
+      _showErrorSnackbar('Aucun numéro WhatsApp disponible');
+      return;
+    }
+    try {
+      final cleanNumber = _formatPhoneNumber(_whatsapp).replaceAll('+', '');
+      // Essayer d'ouvrir avec l'API standard WhatsApp
+      final whatsappUri = Uri.parse('https://wa.me/$cleanNumber');
+      
+      // Vérifier si l'application WhatsApp est installée
+      bool canLaunchWhatsApp = false;
+      
+      // Sur Android, on peut essayer le schéma intent
+      if (Platform.isAndroid) {
+        try {
+          final whatsAppPackage = await _getWhatsAppPackage();
+          if (whatsAppPackage != null) {
+            final intentUri = Uri.parse('intent://send?phone=$cleanNumber#Intent;scheme=whatsapp;package=$whatsAppPackage;end');
+            if (await canLaunchUrl(intentUri)) {
+              await launchUrl(intentUri, mode: LaunchMode.externalApplication);
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+      
+      // Fallback: ouvrir dans le navigateur (WhatsApp Web ou redirection)
+      if (await canLaunchUrl(whatsappUri)) {
+        await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+      } else {
+        _showErrorSnackbar('WhatsApp n\'est pas installé sur cet appareil');
+      }
+    } catch (e) {
+      _showErrorSnackbar('Erreur lors de l\'ouverture de WhatsApp');
+    }
+  }
+
+  // Détection du package WhatsApp (Business ou normal)
+  Future<String?> _getWhatsAppPackage() async {
+    // Vérifier si WhatsApp Business est installé
+    if (await _isAppInstalled('com.whatsapp.w4b')) {
+      return 'com.whatsapp.w4b';
+    }
+    // Vérifier si WhatsApp standard est installé
+    if (await _isAppInstalled('com.whatsapp')) {
+      return 'com.whatsapp';
+    }
+    return null;
+  }
+
+  Future<bool> _isAppInstalled(String packageName) async {
+    try {
+      final result = await MethodChannel('com.careasy.app/platform').invokeMethod<bool>('isAppInstalled', {'package': packageName});
+      return result == true;
+    } catch (_) {
+      // Fallback: on suppose que l'app n'est pas installée
+      return false;
+    }
+  }
+
+  // ─── RENDEZ-VOUS : Sélection du service ────────────────────────────────────
+  Future<void> _openRendezVous() async {
+    // Si l'entreprise a des services, afficher une dialog pour choisir
+    if (_servicesList.isNotEmpty) {
+      _showServiceSelectionDialog();
+    } else if (_services.isNotEmpty) {
+      _showServiceSelectionDialog();
+    } else {
+      // Pas de services, créer un rendez-vous générique
+      _navigateToCreateRdv(null);
+    }
+  }
+
+  void _showServiceSelectionDialog() {
+    final allServices = _servicesList.isNotEmpty ? _servicesList : _services;
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Choisissez un service',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: allServices.length,
+                itemBuilder: (context, index) {
+                  final service = allServices[index] as Map<String, dynamic>;
+                  return ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppConstants.primaryRed.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        _getServiceIcon(service['name']?.toString() ?? ''),
+                        color: AppConstants.primaryRed,
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(
+                      service['name']?.toString() ?? 'Service sans nom',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      _getServicePriceText(service),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _navigateToCreateRdv(service);
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getServicePriceText(Map<String, dynamic> service) {
+    if (service['is_price_on_request'] == true) {
+      return 'Prix sur devis';
+    }
+    final hasPromo = service['has_promo'] == true && service['is_promo_active'] == true;
+    if (hasPromo) {
+      return '${service['price_promo']} FCFA (au lieu de ${service['price']} FCFA)';
+    }
+    final price = service['price'];
+    if (price != null && price.toString().isNotEmpty) {
+      return '$price FCFA';
+    }
+    return 'Prix non défini';
+  }
+
+  IconData _getServiceIcon(String serviceName) {
+    final name = serviceName.toLowerCase();
+    if (name.contains('lavage') || name.contains('nettoyage')) return Icons.cleaning_services;
+    if (name.contains('vidange') || name.contains('entretien')) return Icons.build;
+    if (name.contains('pneu') || name.contains('gomme')) return Icons.circle;
+    if (name.contains('climatisation') || name.contains('clim')) return Icons.ac_unit;
+    if (name.contains('diagnostic')) return Icons.diagnostics;
+    if (name.contains('réparation') || name.contains('reparation')) return Icons.handyman;
+    return Icons.car_repair;
+  }
+
+  void _navigateToCreateRdv(Map<String, dynamic>? service) {
+    final serviceToUse = service ?? _createGenericService();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider(
+          create: (_) => RendezVousProvider(),
+          child: CreateRendezVousScreen(service: serviceToUse),
+        ),
+      ),
+    );
+  }
+
+  Map<String, dynamic> _createGenericService() {
+    return {
+      'id': null,
+      'name': 'Service général',
+      'price': 'Sur devis',
+      'is_price_on_request': true,
+      'entreprise': widget.entreprise,
+      'descriptions': 'Prenez rendez-vous avec ${_name} pour discuter de vos besoins.',
+    };
+  }
+
+  // ─── MESSAGE / CHAT ────────────────────────────────────────────────────────
+  void _openChat() {
+    final entId = widget.entreprise['id']?.toString() ?? '';
+    final otherUser = UserModel(
+      id: entId,
+      name: _name,
+      photoUrl: _logo.isNotEmpty ? _logo : null,
+      role: 'entreprise',
+      isOnline: false,
+    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider.value(
+          value: context.read<MessageProvider>(),
+          child: ChatScreen(conversationId: entId, otherUser: otherUser),
+        ),
+      ),
+    );
+  }
+
+  // ─── ITINÉRAIRE ────────────────────────────────────────────────────────────
+  void _openItinerary() {
+    if (_position == null) {
+      _showErrorSnackbar('Adresse non disponible');
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ItineraryScreen(
+          destination: _position!,
+          destinationName: _name,
+          userPosition: widget.userPosition,
+        ),
+      ),
+    );
+  }
+
+  // ─── CONSULTER TOUS LES SERVICES ───────────────────────────────────────────
+  void _openAllServices() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EntrepriseServicesScreen(entreprise: widget.entreprise),
+      ),
+    );
+  }
+
+  void _showErrorSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final allServices = _servicesList.isNotEmpty ? _servicesList : _services;
+    
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
@@ -690,8 +983,12 @@ class _EntrepriseModal extends StatelessWidget {
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         // Poignée
-        Container(margin: const EdgeInsets.only(top: 10), width: 40, height: 4,
-            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+        Container(
+          margin: const EdgeInsets.only(top: 10),
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+        ),
 
         // Header avec image boutique ou logo
         _buildHeader(context),
@@ -704,7 +1001,7 @@ class _EntrepriseModal extends StatelessWidget {
             if (_doms.isNotEmpty) _buildDomaines(),
 
             // Adresse + distance
-            if (_addr.isNotEmpty || distance != null) _buildAddressRow(),
+            if (_addr.isNotEmpty || widget.distance != null) _buildAddressRow(),
 
             const SizedBox(height: 14),
 
@@ -713,8 +1010,8 @@ class _EntrepriseModal extends StatelessWidget {
 
             const SizedBox(height: 14),
 
-            // ── Bouton Consulter services ──────────────────────────────────
-            _buildServicesButton(context),
+            // ── Bouton Consulter les services ──────────────────────────────
+            _buildServicesButton(context, allServices.length),
 
             const SizedBox(height: 16),
           ]),
@@ -732,7 +1029,9 @@ class _EntrepriseModal extends StatelessWidget {
       ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         child: Container(
-          height: 110, width: double.infinity, color: Colors.grey[100],
+          height: 110,
+          width: double.infinity,
+          color: Colors.grey[100],
           child: coverUrl.isNotEmpty
               ? Image.network(coverUrl, fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => _coverPlaceholder())
@@ -740,53 +1039,68 @@ class _EntrepriseModal extends StatelessWidget {
         ),
       ),
       // Gradient overlay
-      Positioned.fill(child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          gradient: LinearGradient(
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [Colors.transparent, Colors.black.withOpacity(0.5)],
+      Positioned.fill(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.transparent, Colors.black.withOpacity(0.5)],
+            ),
           ),
         ),
-      )),
+      ),
       // Bouton fermer
-      Positioned(top: 10, right: 10,
+      Positioned(
+        top: 10,
+        right: 10,
         child: GestureDetector(
-          onTap: onClose,
+          onTap: widget.onClose,
           child: Container(
-            width: 32, height: 32,
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
             child: const Icon(Icons.close, color: Colors.white, size: 18),
           ),
         ),
       ),
       // Logo + nom en bas de la bannière
-      Positioned(bottom: 12, left: 14, right: 60,
+      Positioned(
+        bottom: 12,
+        left: 14,
+        right: 60,
         child: Row(children: [
           Container(
-            width: 46, height: 46,
+            width: 46,
+            height: 46,
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
               boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 8)],
               image: _logo.isNotEmpty
-                  ? DecorationImage(image: NetworkImage(_logo), fit: BoxFit.cover,
-                      onError: (_, __) {})
+                  ? DecorationImage(image: NetworkImage(_logo), fit: BoxFit.cover, onError: (_, __) {})
                   : null,
             ),
             child: _logo.isEmpty ? const Icon(Icons.business, color: AppConstants.primaryRed, size: 24) : null,
           ),
           const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (_status == 'validated')
-              Row(children: const [
-                Icon(Icons.verified, color: Color(0xFF4CAF50), size: 12),
-                SizedBox(width: 3),
-                Text('Vérifié', style: TextStyle(color: Color(0xFF4CAF50), fontSize: 11, fontWeight: FontWeight.w600)),
-              ]),
-          ])),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                _name,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (_status == 'validated')
+                Row(children: const [
+                  Icon(Icons.verified, color: Color(0xFF4CAF50), size: 12),
+                  SizedBox(width: 3),
+                  Text('Vérifié', style: TextStyle(color: Color(0xFF4CAF50), fontSize: 11, fontWeight: FontWeight.w600)),
+                ]),
+            ]),
+          ),
         ]),
       ),
     ]);
@@ -794,21 +1108,30 @@ class _EntrepriseModal extends StatelessWidget {
 
   Widget _coverPlaceholder() => Container(
     color: AppConstants.primaryRed.withOpacity(0.08),
-    child: Center(child: Icon(Icons.business_center, size: 40, color: AppConstants.primaryRed.withOpacity(0.2))),
+    child: Center(
+      child: Icon(Icons.business_center, size: 40, color: AppConstants.primaryRed.withOpacity(0.2)),
+    ),
   );
 
   Widget _buildDomaines() => Padding(
     padding: const EdgeInsets.only(top: 10, bottom: 4),
-    child: Wrap(spacing: 6, runSpacing: 4, children: _doms.take(3).map((d) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: AppConstants.primaryRed.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(d['name']?.toString() ?? '', style: const TextStyle(fontSize: 10, color: AppConstants.primaryRed, fontWeight: FontWeight.w600)),
-      );
-    }).toList()),
+    child: Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: _doms.take(3).map((d) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: AppConstants.primaryRed.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            d['name']?.toString() ?? '',
+            style: const TextStyle(fontSize: 10, color: AppConstants.primaryRed, fontWeight: FontWeight.w600),
+          ),
+        );
+      }).toList(),
+    ),
   );
 
   Widget _buildAddressRow() => Padding(
@@ -816,14 +1139,23 @@ class _EntrepriseModal extends StatelessWidget {
     child: Row(children: [
       const Icon(Icons.location_on, size: 14, color: AppConstants.primaryRed),
       const SizedBox(width: 4),
-      Expanded(child: Text(_addr, style: TextStyle(fontSize: 12, color: Colors.grey[600]), maxLines: 2, overflow: TextOverflow.ellipsis)),
-      if (distance != null) ...[
+      Expanded(
+        child: Text(
+          _addr,
+          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      if (widget.distance != null) ...[
         const SizedBox(width: 8),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
           decoration: BoxDecoration(color: AppConstants.primaryRed, borderRadius: BorderRadius.circular(12)),
           child: Text(
-            distance! < 1 ? '${(distance! * 1000).round()} m' : '${distance!.toStringAsFixed(1)} km',
+            widget.distance! < 1
+                ? '${(widget.distance! * 1000).round()} m'
+                : '${widget.distance!.toStringAsFixed(1)} km',
             style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
           ),
         ),
@@ -832,121 +1164,59 @@ class _EntrepriseModal extends StatelessWidget {
   );
 
   Widget _buildActionIcons(BuildContext context) {
+    final hasPhone = _phone.isNotEmpty;
+    final hasWhatsapp = _whatsapp.isNotEmpty;
+    final hasServices = _servicesList.isNotEmpty || _services.isNotEmpty;
+
     return Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+      // Appeler
       _ActionIcon(
         icon: Icons.phone,
         label: 'Appeler',
         color: const Color(0xFF4CAF50),
-        onTap: _phone.isNotEmpty ? () => _launch(context, 'tel:${_phone}') : null,
+        onTap: hasPhone ? _makePhoneCall : null,
       ),
+      // WhatsApp
       _ActionIcon(
         icon: Icons.chat,
         label: 'WhatsApp',
         color: const Color(0xFF25D366),
-        onTap: _whatsapp.isNotEmpty
-            ? () => _launch(context, 'https://wa.me/${_whatsapp.replaceAll('+', '').replaceAll(' ', '')}')
-            : null,
+        onTap: hasWhatsapp ? _openWhatsApp : null,
       ),
+      // Message (Chat in-app)
       _ActionIcon(
         icon: Icons.message_rounded,
         label: 'Message',
         color: Colors.deepPurple,
-        onTap: () => _openChat(context),
+        onTap: _openChat,
       ),
+      // Rendez-vous
       _ActionIcon(
         icon: Icons.calendar_month,
         label: 'Rendez-vous',
         color: Colors.blue,
-        onTap: _services.isNotEmpty ? () => _openRdv(context) : null,
+        onTap: _openRendezVous,
       ),
+      // Itinéraire
       _ActionIcon(
         icon: Icons.near_me_rounded,
         label: 'Itinéraire',
         color: AppConstants.primaryRed,
-        onTap: _position != null ? () => _openItinerary(context) : null,
+        onTap: _position != null ? _openItinerary : null,
       ),
     ]);
   }
 
-  Future<void> _launch(BuildContext ctx, String url) async {
-    try {
-      // ignore: import_of_legacy_library_into_null_safe, deprecated_member_use
-      await _launchUrl(url);
-    } catch (e) {
-      if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-          content: Text('Impossible d\'ouvrir: $url'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    }
-  }
-
-  Future<void> _launchUrl(String url) async {
-    // Using url_launcher through dynamic import to keep code clean
-    final uri = Uri.parse(url);
-    // ignore: depend_on_referenced_packages
-    try {
-      // We call launch via the platform channel approach
-      await SystemChannels.platform.invokeMethod('openUrl', {'url': url});
-    } catch (_) {
-      // fallback: ignore
-    }
-  }
-
-  void _openChat(BuildContext ctx) {
-    final entId = entreprise['id']?.toString() ?? '';
-    final entName = _name;
-    final otherUser = UserModel(
-      id: entId, name: entName, photoUrl: _logo.isNotEmpty ? _logo : null,
-      role: 'entreprise', isOnline: false,
-    );
-    Navigator.push(ctx, MaterialPageRoute(
-      builder: (_) => ChangeNotifierProvider.value(
-        value: ctx.read<MessageProvider>(),
-        child: ChatScreen(conversationId: entId, otherUser: otherUser),
-      ),
-    ));
-  }
-
-  void _openRdv(BuildContext ctx) {
-    if (_services.isEmpty) return;
-    final service = Map<String, dynamic>.from(_services.first as Map);
-    service['entreprise'] = entreprise;
-    Navigator.push(ctx, MaterialPageRoute(
-      builder: (_) => ChangeNotifierProvider(
-        create: (_) => RendezVousProvider(),
-        child: CreateRendezVousScreen(service: service),
-      ),
-    ));
-  }
-
-  void _openItinerary(BuildContext ctx) {
-    if (_position == null) return;
-    Navigator.push(ctx, MaterialPageRoute(
-      builder: (_) => ItineraryScreen(
-        destination: _position!,
-        destinationName: _name,
-        userPosition: userPosition,
-      ),
-    ));
-  }
-
-  Widget _buildServicesButton(BuildContext context) {
+  Widget _buildServicesButton(BuildContext context, int servicesCount) {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: () {
-          Navigator.push(context, MaterialPageRoute(
-            builder: (_) => EntrepriseServicesScreen(entreprise: entreprise),
-          ));
-        },
+        onPressed: _openAllServices,
         icon: const Icon(Icons.storefront_rounded, size: 18),
         label: Text(
-          _services.isEmpty
-              ? 'Voir les services'
-              : 'Consulter les services (${_services.length})',
+          servicesCount > 0
+              ? 'Consulter les services ($servicesCount)'
+              : 'Voir les services',
           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
         ),
         style: ElevatedButton.styleFrom(
@@ -962,24 +1232,36 @@ class _EntrepriseModal extends StatelessWidget {
 }
 
 
+
 class _ActionIcon extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
   final VoidCallback? onTap;
 
-  const _ActionIcon({required this.icon, required this.label, required this.color, this.onTap});
+  const _ActionIcon({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
     return GestureDetector(
-      onTap: enabled ? () { HapticFeedback.lightImpact(); onTap!(); } : null,
+      onTap: enabled
+          ? () {
+              HapticFeedback.lightImpact();
+              onTap!();
+            }
+          : null,
       child: Opacity(
         opacity: enabled ? 1.0 : 0.4,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            width: 50, height: 50,
+            width: 50,
+            height: 50,
             decoration: BoxDecoration(
               color: color.withOpacity(0.12),
               shape: BoxShape.circle,
@@ -988,7 +1270,11 @@ class _ActionIcon extends StatelessWidget {
             child: Icon(icon, color: color, size: 24),
           ),
           const SizedBox(height: 5),
-          Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.w600), textAlign: TextAlign.center),
+          Text(
+            label,
+            style: TextStyle(fontSize: 10, color: Colors.grey[700], fontWeight: FontWeight.w600),
+            textAlign: TextAlign.center,
+          ),
         ]),
       ),
     );
@@ -1004,7 +1290,10 @@ class _DomChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () { HapticFeedback.selectionClick(); onTap(); },
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -1014,14 +1303,19 @@ class _DomChip extends StatelessWidget {
           boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 2))],
           border: selected ? null : Border.all(color: Colors.grey[200]!, width: 1),
         ),
-        child: Text(label, style: TextStyle(
-          fontSize: 12, fontWeight: FontWeight.w600,
-          color: selected ? Colors.white : Colors.grey[700],
-        )),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : Colors.grey[700],
+          ),
+        ),
       ),
     );
   }
 }
+
 
 class _GlassButton extends StatelessWidget {
   final Widget child;
@@ -1035,7 +1329,8 @@ class _GlassButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 44, height: 44,
+        width: 44,
+        height: 44,
         decoration: BoxDecoration(
           color: color ?? Colors.black.withOpacity(0.45),
           shape: BoxShape.circle,
