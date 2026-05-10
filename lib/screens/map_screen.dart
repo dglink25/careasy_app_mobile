@@ -881,7 +881,7 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
     if (name.contains('vidange') || name.contains('entretien')) return Icons.build;
     if (name.contains('pneu') || name.contains('gomme')) return Icons.circle;
     if (name.contains('climatisation') || name.contains('clim')) return Icons.ac_unit;
-    if (name.contains('diagnostic')) return Icons.diagnostics;
+    if (name.contains('diagnostic')) return Icons.medical_services;
     if (name.contains('réparation') || name.contains('reparation')) return Icons.handyman;
     return Icons.car_repair;
   }
