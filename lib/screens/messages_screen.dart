@@ -11,6 +11,7 @@ import 'home_screen.dart';
 import 'settings_screen.dart';
 import 'welcome_screen.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'dart:async';
 import 'dart:convert';
 import '../main.dart';
 import '../services/message_polling_service.dart';
@@ -32,19 +33,19 @@ class _MessagesScreenState extends State<MessagesScreen>
     with WidgetsBindingObserver {
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
+  static const _androidOptions =
+      AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions =
+      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
   final _storage = const FlutterSecureStorage(
     aOptions: _androidOptions,
     iOptions: _iOSOptions,
   );
 
-  int _currentIndex = 1;
-  Map<String, dynamic>? _userData;
-  bool _hasEntreprise = false;
+  // ── Refresh automatique ────────────────────────────────────────────────────
+  Timer? _refreshTimer;
 
-  // Recherche
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
@@ -55,39 +56,37 @@ class _MessagesScreenState extends State<MessagesScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadUserData();
-      context.read<MessageProvider>().loadConversations();
+      _reload();
       MessagePollingService().setActiveConversation(null);
       setupNotificationNavigation(context);
     });
 
-    _searchController.addListener(() {
-      setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
+    // Polling de secours toutes les 15 s (fallback si Pusher déconnecté)
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) context.read<MessageProvider>().loadConversations();
     });
+
+    _searchController.addListener(() {
+      setState(
+          () => _searchQuery = _searchController.text.trim().toLowerCase());
+    });
+  }
+
+  void _reload() {
+    context.read<MessageProvider>().loadConversations();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      context.read<MessageProvider>().loadConversations();
+      _reload();
       MessagePollingService().setActiveConversation(null);
     }
   }
 
-  Future<void> _loadUserData() async {
-    try {
-      final s = await _storage.read(key: 'user_data');
-      if (s != null) {
-        setState(() {
-          _userData = jsonDecode(s);
-          _hasEntreprise = _userData?['has_entreprise'] ?? false;
-        });
-      }
-    } catch (_) {}
-  }
-
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -100,101 +99,33 @@ class _MessagesScreenState extends State<MessagesScreen>
     return _dateFormat.format(t);
   }
 
-  void _showComingSoon(String f) => ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('$f — Bientôt disponible'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            duration: const Duration(seconds: 2)),
-      );
-
-  void _showCreateEntrepriseDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Créer une entreprise'),
-        content: const Text(
-          'Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une maintenant ?',
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Plus tard'),
+  // ── Navigation vers le chat ────────────────────────────────────────────────
+  Future<void> _openChat(
+      ConversationModel conv, MessageProvider provider) async {
+    await provider.markConversationAsRead(conv.id);
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider.value(
+          value: provider,
+          child: ChatScreen(
+            conversationId: conv.id,
+            otherUser: conv.otherUser,
+            serviceName: conv.serviceName,
+            entrepriseName: conv.entrepriseName,
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const CreateEntrepriseScreen(),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppConstants.primaryRed,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Créer'),
-          ),
-        ],
+        ),
       ),
     );
-  }
-  void _handleEntrepriseTap() {
-    if (_hasEntreprise) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()),
-      );
-    } else {
-      _showCreateEntrepriseDialog();
-    }
-  }
-
-  void _showProfileDialog() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()))
-        .then((_) => _loadUserData());
-  }
-
-  Future<void> _logout() async {
-    try {
-      final token = await _storage.read(key: 'auth_token');
-      if (token != null && token.isNotEmpty) {
-        try {
-          await http.post(
-            Uri.parse('${AppConstants.apiBaseUrl}/logout'),
-            headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-          ).timeout(const Duration(seconds: 5));
-        } catch (_) {}
-      }
-    } catch (_) {}
-    await _storage.delete(key: 'auth_token');
-    await _storage.delete(key: 'user_data');
-    await _storage.delete(key: 'fcm_token_pending');
-    await _storage.delete(key: 'remember_me');
-    await _storage.delete(key: 'login_time');
     if (mounted) {
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-        (_) => false,
-      );
+      MessagePollingService().setActiveConversation(null);
+      provider.loadConversations();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-    final userName = _userData?['name'] ?? 'Utilisateur';
-    final userPhoto = _userData?['profile_photo_url'] ?? '';
-
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
@@ -202,81 +133,86 @@ class _MessagesScreenState extends State<MessagesScreen>
         foregroundColor: Colors.white,
         elevation: 0,
         title: _isSearching
-            ? Container(
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: TextField(
-                  controller: _searchController,
-                  autofocus: true,
-                  style: const TextStyle(color: Colors.black87, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Rechercher une conversation...',
-                    hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
-                    prefixIcon: const Icon(Icons.search, color: AppConstants.primaryRed, size: 20),
-                    suffixIcon: IconButton(
-                      icon: Icon(Icons.close, color: Colors.grey[600], size: 18),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() { _isSearching = false; _searchQuery = ''; });
-                      },
-                    ),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  ),
-                ),
-              )
+            ? _buildSearchField()
             : const Text('Messages',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                style:
+                    TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         actions: [
           if (!_isSearching)
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: () => setState(() => _isSearching = true),
             ),
+          // Bouton refresh manuel
+          if (!_isSearching)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _reload,
+              tooltip: 'Actualiser',
+            ),
         ],
       ),
-      body: _isSearching
-          ? _buildSearchResults()
-          : _buildMessagesTab(),
+      body: _isSearching ? _buildSearchResults() : _buildConversationList(),
       bottomNavigationBar: const AppBottomNav(currentIndex: 1),
       floatingActionButton: const CarAIFab(),
     );
   }
 
-  // ── Recherche ──────────────────────────────────────────────────────
+  // ── Champ de recherche ─────────────────────────────────────────────────────
+  Widget _buildSearchField() {
+    return Container(
+      height: 40,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: TextField(
+        controller: _searchController,
+        autofocus: true,
+        style: const TextStyle(color: Colors.black87, fontSize: 14),
+        decoration: InputDecoration(
+          hintText: 'Rechercher une conversation...',
+          hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
+          prefixIcon: const Icon(Icons.search,
+              color: AppConstants.primaryRed, size: 20),
+          suffixIcon: IconButton(
+            icon: Icon(Icons.close, color: Colors.grey[600], size: 18),
+            onPressed: () {
+              _searchController.clear();
+              setState(() {
+                _isSearching = false;
+                _searchQuery = '';
+              });
+            },
+          ),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  // ── Résultats de recherche ─────────────────────────────────────────────────
   Widget _buildSearchResults() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       final query = _searchQuery;
       if (query.isEmpty) {
-        return Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.search, size: 64, color: Colors.grey[300]),
-            const SizedBox(height: 16),
-            Text('Tapez pour rechercher une conversation',
-                style: TextStyle(color: Colors.grey[500], fontSize: 14)),
-          ]),
-        );
+        return _emptySearch('Tapez pour rechercher une conversation');
       }
 
       final filtered = provider.conversations.where((conv) {
         final name = conv.otherUser.name.toLowerCase();
         final lastMsg = conv.lastMessage?.content.toLowerCase() ?? '';
         final service = (conv.serviceName ?? '').toLowerCase();
-        return name.contains(query) || lastMsg.contains(query) || service.contains(query);
+        final entreprise = (conv.entrepriseName ?? '').toLowerCase();
+        return name.contains(query) ||
+            lastMsg.contains(query) ||
+            service.contains(query) ||
+            entreprise.contains(query);
       }).toList();
 
       if (filtered.isEmpty) {
-        return Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
-            const SizedBox(height: 16),
-            Text('Aucune conversation trouvée',
-                style: TextStyle(color: Colors.grey[500], fontSize: 14)),
-          ]),
-        );
+        return _emptySearch('Aucune conversation trouvée');
       }
 
       return ListView.builder(
@@ -287,66 +223,32 @@ class _MessagesScreenState extends State<MessagesScreen>
     });
   }
 
-  // ── Liste de messages (onglet unique) ──────────────────────────────
-  Widget _buildMessagesTab() {
+  Widget _emptySearch(String msg) {
+    return Center(
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
+        const SizedBox(height: 16),
+        Text(msg,
+            style: TextStyle(color: Colors.grey[500], fontSize: 14)),
+      ]),
+    );
+  }
+
+  // ── Liste principale ───────────────────────────────────────────────────────
+  Widget _buildConversationList() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       if (provider.isLoading && provider.conversations.isEmpty) {
         return const Center(
-            child: CircularProgressIndicator(color: AppConstants.primaryRed));
+            child:
+                CircularProgressIndicator(color: AppConstants.primaryRed));
       }
 
-      if (provider.error != null) {
-        return Center(
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
-          const SizedBox(height: 16),
-          Text('Erreur de chargement',
-              style: TextStyle(fontSize: 18, color: Colors.grey[600])),
-          const SizedBox(height: 8),
-          Text(provider.error!, style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: provider.loadConversations,
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed,
-                foregroundColor: Colors.white),
-            child: const Text('Réessayer'),
-          ),
-        ]));
+      if (provider.error != null && provider.conversations.isEmpty) {
+        return _buildError(provider);
       }
 
       if (provider.conversations.isEmpty) {
-        return Center(
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration:
-                BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
-            child: Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 20),
-          Text('Aucune conversation',
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[800])),
-          const SizedBox(height: 8),
-          Text('Commencez à discuter avec des professionnels',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen())),
-            icon: const Icon(Icons.explore),
-            label: const Text('Découvrir des services'),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppConstants.primaryRed,
-                foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
-          ),
-        ]));
+        return _buildEmpty();
       }
 
       return RefreshIndicator(
@@ -362,9 +264,71 @@ class _MessagesScreenState extends State<MessagesScreen>
     });
   }
 
+  Widget _buildError(MessageProvider provider) {
+    return Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
+      const SizedBox(height: 16),
+      Text('Erreur de chargement',
+          style: TextStyle(fontSize: 18, color: Colors.grey[600])),
+      const SizedBox(height: 8),
+      Text(provider.error!,
+          style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+          textAlign: TextAlign.center),
+      const SizedBox(height: 16),
+      ElevatedButton(
+        onPressed: provider.loadConversations,
+        style: ElevatedButton.styleFrom(
+            backgroundColor: AppConstants.primaryRed,
+            foregroundColor: Colors.white),
+        child: const Text('Réessayer'),
+      ),
+    ]));
+  }
+
+  Widget _buildEmpty() {
+    return Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration:
+            BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
+        child:
+            Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[600]),
+      ),
+      const SizedBox(height: 20),
+      Text('Aucune conversation',
+          style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800])),
+      const SizedBox(height: 8),
+      Text('Commencez à discuter avec des professionnels',
+          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+          textAlign: TextAlign.center),
+      const SizedBox(height: 24),
+      ElevatedButton.icon(
+        onPressed: () => Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => const HomeScreen())),
+        icon: const Icon(Icons.explore),
+        label: const Text('Découvrir des services'),
+        style: ElevatedButton.styleFrom(
+            backgroundColor: AppConstants.primaryRed,
+            foregroundColor: Colors.white,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
+      ),
+    ]));
+  }
+
+  // ── Tuile conversation ─────────────────────────────────────────────────────
   Widget _buildConvItem(ConversationModel conv, MessageProvider provider) {
     final hasUnread = conv.unreadCount > 0;
-    final isOnline = conv.otherUser.isOnline;
+    final isOnline = provider.getUserOnlineStatus(conv.otherUser.id) ||
+        conv.otherUser.isOnline;
+
+    // ── Label contextuel (vrai nom du service ou de l'entreprise) ─────────
+    final contextLabel = conv.contextLabel; // null si aucun service attaché
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -372,37 +336,17 @@ class _MessagesScreenState extends State<MessagesScreen>
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: hasUnread
-            ? BorderSide(color: AppConstants.primaryRed.withOpacity(0.3), width: 1)
+            ? BorderSide(
+                color: AppConstants.primaryRed.withOpacity(0.3), width: 1)
             : BorderSide.none,
       ),
       child: InkWell(
-        onTap: () async {
-          await provider.markConversationAsRead(conv.id);
-          if (mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChangeNotifierProvider.value(
-                  value: provider,
-                  child: ChatScreen(
-                    conversationId: conv.id,
-                    otherUser: conv.otherUser,
-                    serviceName: conv.serviceName,
-                    entrepriseName: conv.entrepriseName,
-                  ),
-                ),
-              ),
-            ).then((_) {
-              MessagePollingService().setActiveConversation(null);
-              provider.loadConversations();
-            });
-          }
-        },
+        onTap: () => _openChat(conv, provider),
         borderRadius: BorderRadius.circular(12),
-        child: Container(
+        child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(children: [
-            // Avatar
+            // ── Avatar + indicateur en ligne ─────────────────────────────
             Stack(children: [
               CircleAvatar(
                 radius: 28,
@@ -423,11 +367,9 @@ class _MessagesScreenState extends State<MessagesScreen>
               ),
               if (isOnline)
                 Positioned(
-                  bottom: 0,
-                  right: 0,
+                  bottom: 0, right: 0,
                   child: Container(
-                    width: 14,
-                    height: 14,
+                    width: 14, height: 14,
                     decoration: BoxDecoration(
                         color: Colors.green,
                         shape: BoxShape.circle,
@@ -437,35 +379,48 @@ class _MessagesScreenState extends State<MessagesScreen>
             ]),
             const SizedBox(width: 12),
 
-            // Contenu
+            // ── Contenu ──────────────────────────────────────────────────
             Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
               Row(children: [
                 Expanded(
-                  child: Text(conv.otherUser.name,
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight:
-                              hasUnread ? FontWeight.bold : FontWeight.w600,
-                          color: hasUnread
-                              ? AppConstants.primaryRed
-                              : Colors.black87)),
+                  child: Text(
+                    conv.otherUser.name,
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight:
+                            hasUnread ? FontWeight.bold : FontWeight.w600,
+                        color: hasUnread
+                            ? AppConstants.primaryRed
+                            : Colors.black87),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                if (conv.serviceName != null)
+
+                // ── Badge service/entreprise (vrai nom) ──────────────────
+                if (contextLabel != null)
                   Container(
                     margin: const EdgeInsets.only(right: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    constraints: const BoxConstraints(maxWidth: 100),
                     decoration: BoxDecoration(
                         color: Colors.blue[50],
                         borderRadius: BorderRadius.circular(4)),
-                    child: Text('Service',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.blue[700],
-                            fontWeight: FontWeight.w600)),
+                    child: Text(
+                      contextLabel,
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.blue[800],
+                          fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
                   ),
+
+                // ── Heure du dernier message ──────────────────────────────
                 Text(
                   conv.lastMessage != null
                       ? _formatTime(conv.lastMessage!.createdAt)
@@ -473,22 +428,30 @@ class _MessagesScreenState extends State<MessagesScreen>
                   style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
               ]),
+
               const SizedBox(height: 4),
+
+              // ── Aperçu du dernier message ─────────────────────────────
               if (conv.lastMessage != null)
                 Row(children: [
                   if (conv.lastMessage!.isMe)
-                    Text('Vous: ',
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: hasUnread ? Colors.grey[700] : Colors.grey[600],
-                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
+                    Text(
+                      'Vous: ',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[700],
+                          fontWeight: hasUnread
+                              ? FontWeight.w600
+                              : FontWeight.normal),
+                    ),
                   Expanded(
                     child: Text(
                       _lastMsgPreview(conv.lastMessage!),
                       style: TextStyle(
                           fontSize: 13,
-                          fontWeight:
-                              hasUnread ? FontWeight.w600 : FontWeight.normal,
+                          fontWeight: hasUnread
+                              ? FontWeight.w600
+                              : FontWeight.normal,
                           color: Colors.grey[600]),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -497,19 +460,22 @@ class _MessagesScreenState extends State<MessagesScreen>
                 ]),
             ])),
 
-            // Badge non lus
+            // ── Badge non-lus ─────────────────────────────────────────────
             if (hasUnread)
               Container(
                 margin: const EdgeInsets.only(left: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                     color: AppConstants.primaryRed,
                     borderRadius: BorderRadius.circular(12)),
-                child: Text('${conv.unreadCount}',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold)),
+                child: Text(
+                  '${conv.unreadCount}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold),
+                ),
               ),
           ]),
         ),
@@ -519,13 +485,19 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   String _lastMsgPreview(lastMsg) {
     switch (lastMsg.type) {
-      case 'image':    return 'Image';
-      case 'video':    return 'Vidéo';
+      case 'image':
+        return 'Image';
+      case 'video':
+        return 'Vidéo';
       case 'audio':
-      case 'vocal':    return 'Message vocal';
-      case 'document': return 'Document';
-      case 'location': return 'Localisation';
-      default:         return lastMsg.content ?? '';
+      case 'vocal':
+        return 'Message vocal';
+      case 'document':
+        return 'Document';
+      case 'location':
+        return 'Localisation';
+      default:
+        return lastMsg.content ?? '';
     }
   }
 }

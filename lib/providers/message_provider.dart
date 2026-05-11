@@ -10,12 +10,10 @@ import '../services/pusher_service.dart';
 import '../utils/constants.dart';
 
 class MessageProvider extends ChangeNotifier {
-  static const _androidOptions = AndroidOptions(
-    encryptedSharedPreferences: true,
-  );
-  static const _iOSOptions = IOSOptions(
-    accessibility: KeychainAccessibility.first_unlock,
-  );
+  static const _androidOptions =
+      AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions =
+      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: _androidOptions,
@@ -24,25 +22,25 @@ class MessageProvider extends ChangeNotifier {
 
   final PusherService _pusher = PusherService();
 
-  // ─── État ───────────────────────────────────────────────────────────
+  // ── État ────────────────────────────────────────────────────────────────────
   final Map<String, List<MessageModel>> _messages = {};
   List<ConversationModel> _conversations = [];
   final Map<String, Map<String, bool>> _typing = {};
   final Map<String, Map<String, bool>> _recording = {};
-  final Map<String, bool>      _onlineStatus = {};
-  final Map<String, DateTime?> _lastSeen     = {};
+  final Map<String, bool> _onlineStatus = {};
+  final Map<String, DateTime?> _lastSeen = {};
 
-  bool    _isLoading = false;
+  bool _isLoading = false;
   String? _error;
   String? _currentUserId;
   String? _activeConversationId;
-  Timer?  _onlineTimer;
+  Timer? _onlineTimer;
 
   String? get activeConversationId => _activeConversationId;
-  List<ConversationModel> get conversations  => _conversations;
-  bool                    get isLoading      => _isLoading;
-  String?                 get error          => _error;
-  String?                 get currentUserId  => _currentUserId;
+  List<ConversationModel> get conversations => _conversations;
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+  String? get currentUserId => _currentUserId;
 
   int get totalUnreadCount =>
       _conversations.fold(0, (sum, c) => sum + c.unreadCount);
@@ -88,7 +86,6 @@ class MessageProvider extends ChangeNotifier {
   }
 
   Future<void> reinitializeAfterLogin() async {
-    // Recharger l'userId depuis le storage (après login, il est maintenant disponible)
     await _loadCurrentUser();
     if (_currentUserId != null) {
       _pusher.setMessageProvider(this);
@@ -97,9 +94,18 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ── Helpers token ────────────────────────────────────────────────────────────
+  Future<String?> _getToken() => _storage.read(key: 'auth_token');
+
+  Map<String, String> _authHeaders(String token) => {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      };
+
+  // ══════════════════════════════════════════════════════════════════════════════
   //  GETTERS DONNÉES
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   List<MessageModel> getMessages(String convId) =>
       _messages[convId] ?? [];
 
@@ -125,32 +131,34 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  void updateUserOnlineStatus(String userId, bool isOnline, DateTime? lastSeen) {
+  void updateUserOnlineStatus(
+      String userId, bool isOnline, DateTime? lastSeen) {
     _onlineStatus[userId] = isOnline;
     if (lastSeen != null) _lastSeen[userId] = lastSeen;
 
-    final idx = _conversations.indexWhere((c) => c.otherUser.id == userId);
+    final idx =
+        _conversations.indexWhere((c) => c.otherUser.id == userId);
     if (idx != -1) {
       final old = _conversations[idx];
       _conversations[idx] = ConversationModel(
-        id            : old.id,
-        otherUser     : UserModel(
-          id       : old.otherUser.id,
-          name     : old.otherUser.name,
-          email    : old.otherUser.email,
-          photoUrl : old.otherUser.photoUrl,
-          isOnline : isOnline,
-          lastSeen : lastSeen ?? old.otherUser.lastSeen,
-          role     : old.otherUser.role,
-          phone    : old.otherUser.phone,
+        id: old.id,
+        otherUser: UserModel(
+          id: old.otherUser.id,
+          name: old.otherUser.name,
+          email: old.otherUser.email,
+          photoUrl: old.otherUser.photoUrl,
+          isOnline: isOnline,
+          lastSeen: lastSeen ?? old.otherUser.lastSeen,
+          role: old.otherUser.role,
+          phone: old.otherUser.phone,
         ),
-        lastMessage   : old.lastMessage,
-        unreadCount   : old.unreadCount,
-        updatedAt     : old.updatedAt,
-        serviceName   : old.serviceName,
+        lastMessage: old.lastMessage,
+        unreadCount: old.unreadCount,
+        updatedAt: old.updatedAt,
+        serviceName: old.serviceName,
         entrepriseName: old.entrepriseName,
-        serviceId     : old.serviceId,
-        entrepriseId  : old.entrepriseId,
+        serviceId: old.serviceId,
+        entrepriseId: old.entrepriseId,
       );
     }
     notifyListeners();
@@ -162,30 +170,29 @@ class MessageProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setRecordingIndicator(String convId, String userId, bool isRecording) {
+  void setRecordingIndicator(
+      String convId, String userId, bool isRecording) {
     _recording[convId] ??= {};
     _recording[convId]![userId] = isRecording;
     notifyListeners();
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  STATUT EN LIGNE
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> fetchOnlineStatus(String userId) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null || token.isEmpty) return;
 
       final resp = await http.get(
-        Uri.parse('${AppConstants.apiBaseUrl}/user/$userId/online-status'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept'       : 'application/json',
-        },
+        Uri.parse(
+            '${AppConstants.apiBaseUrl}/user/$userId/online-status'),
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
       ).timeout(const Duration(seconds: 8));
 
       if (resp.statusCode == 200) {
-        final data     = jsonDecode(resp.body) as Map<String, dynamic>;
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final isOnline = data['is_online'] == true;
         DateTime? lastSeen;
         final raw = data['last_seen_at'] ?? data['last_seen'];
@@ -203,31 +210,33 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  CONVERSATIONS
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> loadConversations() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null || token.isEmpty) throw Exception('Non authentifié');
-
-      // S'assurer que currentUserId est chargé
       if (_currentUserId == null) await _loadCurrentUser();
 
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/conversations'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept'       : 'application/json',
+          'Accept': 'application/json',
         },
       ).timeout(const Duration(seconds: 15));
 
       if (resp.statusCode == 200) {
-        final list = jsonDecode(resp.body) as List<dynamic>;
-        _conversations = list
+        final body = jsonDecode(resp.body);
+        final list = body is List
+            ? body
+            : (body is Map ? (body['data'] ?? body['conversations'] ?? []) : []);
+
+        _conversations = (list as List)
             .map((i) => ConversationModel.fromJson(
                 i as Map<String, dynamic>, _currentUserId ?? ''))
             .toList();
@@ -254,39 +263,36 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  MESSAGES
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> loadMessages(String convId) async {
     _messages[convId] ??= [];
-
-    // S'assurer que currentUserId est chargé avant de parser les messages
     if (_currentUserId == null) await _loadCurrentUser();
 
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null || token.isEmpty) throw Exception('Non authentifié');
 
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept'       : 'application/json',
+          'Accept': 'application/json',
         },
       ).timeout(const Duration(seconds: 15));
 
       if (resp.statusCode == 200) {
-        final data    = jsonDecode(resp.body) as Map<String, dynamic>;
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
         final rawMsgs = data['messages'] ?? data['data'] ?? [];
-        final msgs    = rawMsgs is List ? rawMsgs : [];
+        final msgs = rawMsgs is List ? rawMsgs : [];
 
         _messages[convId] = msgs
             .map((i) => MessageModel.fromJson(
                 i as Map<String, dynamic>, _currentUserId ?? ''))
             .toList();
-
-        // Trier par date croissante
-        _messages[convId]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        _messages[convId]!
+            .sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
         final otherUserData =
             data['other_user'] ?? data['user_one'] ?? data['user_two'];
@@ -305,9 +311,15 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
-  //  ENVOI DE MESSAGE
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  ENVOI DE MESSAGE — VERSION ROBUSTE
+  //
+  //  Corrections apportées :
+  //  1. Retry automatique (2 tentatives) en cas d'erreur réseau
+  //  2. Parsing de la réponse plus souple (JSON mal formé, wrapper data)
+  //  3. Gestion correcte de l'état 'sending' / 'sent' / 'error'
+  //  4. Support de l'annulation de message temporaire en cas d'erreur
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> sendMessage(
     String convId, {
     required String type,
@@ -319,114 +331,214 @@ class MessageProvider extends ChangeNotifier {
   }) async {
     if (_currentUserId == null) await _loadCurrentUser();
 
+    // Mapper le type Flutter → type API
     String apiType = type;
-    if (type == 'audio')    apiType = 'vocal';
+    if (type == 'audio') apiType = 'vocal';
     if (type == 'location') apiType = 'text';
 
+    // ── Message temporaire optimiste ────────────────────────────────────────
     final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
     final tempMsg = MessageModel(
-      id            : tempId,
+      id: tempId,
       conversationId: convId,
-      senderId      : _currentUserId ?? '',
-      content       : content ?? _defaultContent(apiType),
-      type          : type,
-      fileUrl       : filePath,
-      latitude      : latitude,
-      longitude     : longitude,
-      createdAt     : DateTime.now(),
-      isMe          : true,
-      status        : 'sending',
+      senderId: _currentUserId ?? '',
+      content: content ?? _defaultContent(apiType),
+      type: type,
+      fileUrl: filePath,
+      latitude: latitude,
+      longitude: longitude,
+      createdAt: DateTime.now(),
+      isMe: true,
+      status: 'sending',
     );
 
     _messages[convId] ??= [];
     _messages[convId]!.add(tempMsg);
     notifyListeners();
 
-    try {
-      final token = await _storage.read(key: 'auth_token');
-      if (token == null || token.isEmpty) throw Exception('Non authentifié');
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      _markTempError(convId, tempId);
+      throw Exception('Non authentifié');
+    }
 
-      Map<String, dynamic>? responseData;
+    // ── Envoi avec retry ────────────────────────────────────────────────────
+    Map<String, dynamic>? responseData;
+    Exception? lastError;
 
-      if (filePath != null) {
-        final req = http.MultipartRequest(
-          'POST',
-          Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/send-mobile'),
-        );
-        req.headers['Authorization'] = 'Bearer $token';
-        req.headers['Accept']        = 'application/json';
-        req.fields['type']           = apiType;
-        req.fields['temporary_id']   = tempId;
-        if (content != null && content.isNotEmpty) {
-          req.fields['content'] = content;
-        }
-        if (replyToId != null) req.fields['reply_to_id'] = replyToId;
-        req.files.add(await http.MultipartFile.fromPath('file', filePath));
-
-        final streamed = await req.send().timeout(const Duration(seconds: 60));
-        final r = await http.Response.fromStream(streamed);
-
-        if (r.statusCode == 200 || r.statusCode == 201) {
-          responseData = jsonDecode(r.body) as Map<String, dynamic>;
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (filePath != null) {
+          responseData = await _sendMultipart(
+              token, convId, apiType, content, filePath,
+              latitude: latitude,
+              longitude: longitude,
+              replyToId: replyToId,
+              temporaryId: tempId);
         } else {
-          throw Exception('HTTP ${r.statusCode}: ${r.body}');
+          responseData = await _sendJson(
+              token, convId, apiType, content,
+              latitude: latitude,
+              longitude: longitude,
+              replyToId: replyToId,
+              temporaryId: tempId);
         }
-      } else {
-        final body = <String, dynamic>{
-          'type'        : apiType,
-          'content'     : content ?? '',
-          'temporary_id': tempId,
-        };
-        if (latitude  != null) body['latitude']   = latitude;
-        if (longitude != null) body['longitude']  = longitude;
-        if (replyToId != null) body['reply_to_id'] = replyToId;
 
-        final r = await http.post(
-          Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/send-mobile'),
+        if (responseData != null) break; // succès
+      } catch (e) {
+        lastError = Exception(e.toString());
+        debugPrint(
+            '[MessageProvider] sendMessage attempt $attempt error: $e');
+        if (attempt < 2) {
+          await Future.delayed(const Duration(milliseconds: 800));
+        }
+      }
+    }
+
+    if (responseData == null) {
+      _markTempError(convId, tempId);
+      throw lastError ?? Exception("Impossible d'envoyer le message");
+    }
+
+    // ── Confirmer le message envoyé ─────────────────────────────────────────
+    _applyResponseData(responseData, convId, tempId,
+        originalType: type,
+        latitude: latitude,
+        longitude: longitude);
+  }
+
+  // ── Envoi JSON (texte, localisation) ────────────────────────────────────────
+  Future<Map<String, dynamic>?> _sendJson(
+    String token,
+    String convId,
+    String apiType,
+    String? content, {
+    double? latitude,
+    double? longitude,
+    String? replyToId,
+    String? temporaryId,
+  }) async {
+    final body = <String, dynamic>{
+      'type': apiType,
+      'content': content ?? '',
+      'temporary_id': temporaryId ?? '',
+    };
+    if (latitude != null) body['latitude'] = latitude;
+    if (longitude != null) body['longitude'] = longitude;
+    if (replyToId != null) body['reply_to_id'] = replyToId;
+
+    final resp = await http
+        .post(
+          Uri.parse(
+              '${AppConstants.apiBaseUrl}/conversation/$convId/send-mobile'),
           headers: {
             'Authorization': 'Bearer $token',
-            'Content-Type' : 'application/json',
-            'Accept'       : 'application/json',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
           },
           body: jsonEncode(body),
-        ).timeout(const Duration(seconds: 30));
+        )
+        .timeout(const Duration(seconds: 30));
 
-        if (r.statusCode == 200 || r.statusCode == 201) {
-          responseData = jsonDecode(r.body) as Map<String, dynamic>;
-        } else {
-          throw Exception('HTTP ${r.statusCode}: ${r.body}');
+    return _parseResponse(resp, convId);
+  }
+
+  // ── Envoi multipart (fichier) ────────────────────────────────────────────────
+  Future<Map<String, dynamic>?> _sendMultipart(
+    String token,
+    String convId,
+    String apiType,
+    String? content,
+    String filePath, {
+    double? latitude,
+    double? longitude,
+    String? replyToId,
+    String? temporaryId,
+  }) async {
+    final req = http.MultipartRequest(
+      'POST',
+      Uri.parse(
+          '${AppConstants.apiBaseUrl}/conversation/$convId/send-mobile'),
+    );
+    req.headers['Authorization'] = 'Bearer $token';
+    req.headers['Accept'] = 'application/json';
+    req.fields['type'] = apiType;
+    req.fields['temporary_id'] = temporaryId ?? '';
+    if (content != null && content.isNotEmpty) {
+      req.fields['content'] = content;
+    }
+    if (latitude != null) req.fields['latitude'] = latitude.toString();
+    if (longitude != null) req.fields['longitude'] = longitude.toString();
+    if (replyToId != null) req.fields['reply_to_id'] = replyToId;
+    req.files.add(await http.MultipartFile.fromPath('file', filePath));
+
+    final streamed = await req.send().timeout(const Duration(seconds: 60));
+    final resp = await http.Response.fromStream(streamed);
+    return _parseResponse(resp, convId);
+  }
+
+  // ── Parsing de la réponse HTTP ───────────────────────────────────────────────
+  Map<String, dynamic>? _parseResponse(http.Response resp, String convId) {
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      try {
+        final decoded = jsonDecode(resp.body);
+        if (decoded is Map<String, dynamic>) {
+          // Certains backends wrappent dans { data: {...} }
+          if (decoded.containsKey('data') && decoded['data'] is Map) {
+            return Map<String, dynamic>.from(decoded['data'] as Map);
+          }
+          return decoded;
         }
+      } catch (e) {
+        debugPrint('[MessageProvider] _parseResponse JSON error: $e');
       }
+    }
+    debugPrint(
+        '[MessageProvider] HTTP ${resp.statusCode}: ${resp.body.substring(0, resp.body.length.clamp(0, 200))}');
+    throw Exception('HTTP ${resp.statusCode}');
+  }
 
-      if (responseData != null) {
-        // Conserver lat/lng et type audio
-        if (latitude  != null) responseData['latitude']  ??= latitude;
-        if (longitude != null) responseData['longitude'] ??= longitude;
-        if (type == 'audio' &&
-            (responseData['type'] == 'vocal' || responseData['type'] == 'text')) {
-          responseData['type'] = 'audio';
-        }
+  // ── Appliquer la réponse au message temporaire ───────────────────────────────
+  void _applyResponseData(
+    Map<String, dynamic> data,
+    String convId,
+    String tempId, {
+    required String originalType,
+    double? latitude,
+    double? longitude,
+  }) {
+    // Préserver lat/lng et type audio
+    if (latitude != null) data['latitude'] ??= latitude;
+    if (longitude != null) data['longitude'] ??= longitude;
+    if (originalType == 'audio' &&
+        (data['type'] == 'vocal' || data['type'] == 'text')) {
+      data['type'] = 'audio';
+    }
+    // Toujours marquer is_me = true pour nos propres messages
+    data['is_me'] = true;
+    data['sender_id'] ??= _currentUserId;
 
-        // Forcer is_me = true pour notre propre message
-        responseData['is_me'] = true;
-        responseData['sender_id'] ??= _currentUserId;
+    final msgs = _messages[convId];
+    if (msgs == null) return;
 
-        _messages[convId]!.removeWhere((m) => m.id == tempId);
-        final confirmed = MessageModel.fromJson(responseData, _currentUserId ?? '');
-        _messages[convId]!.add(confirmed);
-        _messages[convId]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    // Supprimer le temporaire et ajouter le confirmé
+    msgs.removeWhere((m) => m.id == tempId);
+    final confirmed =
+        MessageModel.fromJson(data, _currentUserId ?? '');
+    msgs.add(confirmed);
+    msgs.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-        _updateConversationLastMessage(convId, confirmed);
-        notifyListeners();
-      }
-    } catch (e) {
-      debugPrint('[MessageProvider] sendMessage error: $e');
-      final idx = _messages[convId]?.indexWhere((m) => m.id == tempId) ?? -1;
-      if (idx != -1) {
-        _messages[convId]![idx] = _messages[convId]![idx].copyWith(status: 'error');
-        notifyListeners();
-      }
-      rethrow;
+    _updateConversationLastMessage(convId, confirmed);
+    notifyListeners();
+  }
+
+  void _markTempError(String convId, String tempId) {
+    final msgs = _messages[convId];
+    if (msgs == null) return;
+    final idx = msgs.indexWhere((m) => m.id == tempId);
+    if (idx != -1) {
+      msgs[idx] = msgs[idx].copyWith(status: 'error');
+      notifyListeners();
     }
   }
 
@@ -435,60 +547,50 @@ class MessageProvider extends ChangeNotifier {
     if (idx != -1) {
       final old = _conversations[idx];
       _conversations[idx] = ConversationModel(
-        id            : old.id,
-        otherUser     : old.otherUser,
-        lastMessage   : msg,
-        unreadCount   : old.unreadCount,
-        updatedAt     : DateTime.now(),
-        serviceName   : old.serviceName,
+        id: old.id,
+        otherUser: old.otherUser,
+        lastMessage: msg,
+        unreadCount: old.unreadCount,
+        updatedAt: DateTime.now(),
+        serviceName: old.serviceName,
         entrepriseName: old.entrepriseName,
-        serviceId     : old.serviceId,
-        entrepriseId  : old.entrepriseId,
+        serviceId: old.serviceId,
+        entrepriseId: old.entrepriseId,
       );
       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  RÉCEPTION TEMPS RÉEL — Appelé par PusherService
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   void receiveMessage(MessageModel msg, String convId) {
     _messages[convId] ??= [];
 
-    // Ne pas ajouter nos propres messages (déjà ajoutés via sendMessage)
-    if (msg.isMe) {
-      debugPrint('[MessageProvider] Message de soi ignoré en réception: ${msg.id}');
-      return;
-    }
+    if (msg.isMe) return; // déjà ajouté via sendMessage
 
-    // Déduplication par id ET temporaryId
+    // Déduplication
     final alreadyExists = _messages[convId]!.any((m) =>
         m.id == msg.id ||
         (msg.temporaryId != null && m.temporaryId == msg.temporaryId));
+    if (alreadyExists) return;
 
-    if (alreadyExists) {
-      debugPrint('[MessageProvider] Doublon ignoré: ${msg.id}');
-      return;
-    }
-
-    debugPrint('[MessageProvider] ✅ Nouveau message reçu: ${msg.id} dans $convId');
     _messages[convId]!.add(msg);
-    // Trier par date pour maintenir l'ordre correct
     _messages[convId]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     final idx = _conversations.indexWhere((c) => c.id == convId);
     if (idx != -1) {
       final old = _conversations[idx];
       _conversations[idx] = ConversationModel(
-        id            : old.id,
-        otherUser     : old.otherUser,
-        lastMessage   : msg,
-        unreadCount   : old.unreadCount + 1,
-        updatedAt     : DateTime.now(),
-        serviceName   : old.serviceName,
+        id: old.id,
+        otherUser: old.otherUser,
+        lastMessage: msg,
+        unreadCount: old.unreadCount + 1,
+        updatedAt: DateTime.now(),
+        serviceName: old.serviceName,
         entrepriseName: old.entrepriseName,
-        serviceId     : old.serviceId,
-        entrepriseId  : old.entrepriseId,
+        serviceId: old.serviceId,
+        entrepriseId: old.entrepriseId,
       );
       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     } else {
@@ -498,17 +600,18 @@ class MessageProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ─── Confirmation d'envoi (via Pusher) ─────────────────────────────
-  void confirmMessage(Map<String, dynamic> data, String convId, String currentUserId) {
+  void confirmMessage(
+      Map<String, dynamic> data, String convId, String currentUserId) {
     final msgs = _messages[convId];
     if (msgs == null) return;
 
     final tempId = data['temporary_id']?.toString();
-    final msgId  = data['id']?.toString();
+    final msgId = data['id']?.toString();
 
     int idx = -1;
     if (tempId != null) {
-      idx = msgs.indexWhere((m) => m.temporaryId == tempId || m.id == tempId);
+      idx = msgs.indexWhere(
+          (m) => m.temporaryId == tempId || m.id == tempId);
     }
     if (idx == -1 && msgId != null) {
       idx = msgs.indexWhere((m) => m.id == msgId);
@@ -516,12 +619,11 @@ class MessageProvider extends ChangeNotifier {
     if (idx == -1) return;
 
     final orig = msgs[idx];
-    if (orig.latitude  != null) data['latitude']  ??= orig.latitude;
+    if (orig.latitude != null) data['latitude'] ??= orig.latitude;
     if (orig.longitude != null) data['longitude'] ??= orig.longitude;
     if (orig.type == 'audio' && data['type'] == 'vocal') {
       data['type'] = 'audio';
     }
-    // Toujours forcer is_me = true pour la confirmation de nos propres messages
     data['is_me'] = true;
     data['sender_id'] ??= currentUserId;
 
@@ -544,68 +646,78 @@ class MessageProvider extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
-  // ═══════════════════════════════════════════════════════════════════
-  //  INDICATEURS ENVOYÉS AU SERVEUR
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  INDICATEURS
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> sendTypingIndicator(String convId, bool isTyping) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null) return;
-      await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/typing'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type' : 'application/json',
-        },
-        body: jsonEncode({'is_typing': isTyping}),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/conversation/$convId/typing'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'is_typing': isTyping}),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
-  Future<void> sendRecordingIndicator(String convId, bool isRecording) async {
+  Future<void> sendRecordingIndicator(
+      String convId, bool isRecording) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null) return;
-      await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/recording'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type' : 'application/json',
-        },
-        body: jsonEncode({'is_recording': isRecording}),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/conversation/$convId/recording'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'is_recording': isRecording}),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  MARQUER COMME LU
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> markConversationAsRead(String convId) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null) return;
 
-      await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/mark-read'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type' : 'application/json',
-        },
-      ).timeout(const Duration(seconds: 10));
+      await http
+          .post(
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/conversation/$convId/mark-read'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       final idx = _conversations.indexWhere((c) => c.id == convId);
       if (idx != -1) {
         final old = _conversations[idx];
         _conversations[idx] = ConversationModel(
-          id            : old.id,
-          otherUser     : old.otherUser,
-          lastMessage   : old.lastMessage,
-          unreadCount   : 0,
-          updatedAt     : old.updatedAt,
-          serviceName   : old.serviceName,
+          id: old.id,
+          otherUser: old.otherUser,
+          lastMessage: old.lastMessage,
+          unreadCount: 0,
+          updatedAt: old.updatedAt,
+          serviceName: old.serviceName,
           entrepriseName: old.entrepriseName,
-          serviceId     : old.serviceId,
-          entrepriseId  : old.entrepriseId,
+          serviceId: old.serviceId,
+          entrepriseId: old.entrepriseId,
         );
         notifyListeners();
       }
@@ -614,39 +726,44 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   //  STATUT EN LIGNE — Ping serveur
-  // ═══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> updateOnlineStatus() async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null || token.isEmpty) return;
-      await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/user/update-online-status'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type' : 'application/json',
-        },
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/user/update-online-status'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
   Future<void> saveFcmToken(String fcmToken) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _getToken();
       if (token == null || token.isEmpty) return;
-      await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type' : 'application/json',
-          'Accept'       : 'application/json',
-        },
-        body: jsonEncode({
-          'fcm_token': fcmToken,
-          'platform' : 'android',
-        }),
-      ).timeout(const Duration(seconds: 10));
+      await http
+          .post(
+            Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'fcm_token': fcmToken,
+              'platform': 'android',
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
     } catch (e) {
       debugPrint('[MessageProvider] saveFcmToken: $e');
     }
@@ -654,11 +771,16 @@ class MessageProvider extends ChangeNotifier {
 
   String _defaultContent(String type) {
     switch (type) {
-      case 'image':    return 'Image';
-      case 'video':    return 'Vidéo';
-      case 'vocal':    return 'Message vocal';
-      case 'document': return 'Document';
-      default:         return '';
+      case 'image':
+        return 'Image';
+      case 'video':
+        return 'Vidéo';
+      case 'vocal':
+        return 'Message vocal';
+      case 'document':
+        return 'Document';
+      default:
+        return '';
     }
   }
 
