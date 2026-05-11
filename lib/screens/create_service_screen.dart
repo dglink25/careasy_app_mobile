@@ -9,10 +9,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:careasy_app_mobile/screens/plans_abonnement_screen.dart';
 
 class CreateServiceScreen extends StatefulWidget {
-  
+  /// L'entreprise concernée (toujours fournie depuis MesServicesScreen).
   final Map<String, dynamic>? entreprise;
 
-  const CreateServiceScreen({super.key, this.entreprise});
+  /// Domaines déjà chargés par MesServicesScreen → aucun appel API.
+  final List<Map<String, dynamic>> preloadedDomaines;
+
+  const CreateServiceScreen({
+    super.key,
+    this.entreprise,
+    this.preloadedDomaines = const [],
+  });
 
   @override
   State<CreateServiceScreen> createState() => _CreateServiceScreenState();
@@ -30,11 +37,13 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
   bool _isSubmitting = false;
 
   // ── ENTREPRISES ─────────────────────────────────────────────────────────────
+  // Quand on arrive depuis MesServicesScreen, l'entreprise est déjà connue.
+  // On ne charge plus la liste des entreprises si elle est passée en paramètre.
   List<Map<String, dynamic>> _mesEntreprises = [];
-  bool _isLoadingEntreprises = true;
+  bool _isLoadingEntreprises = false;           // false par défaut si pré-sélectionnée
   Map<String, dynamic>? _selectedEntreprise;
 
-  // ── DOMAINES (de l'entreprise sélectionnée) ──────────────────────────────────
+  // ── DOMAINES ─────────────────────────────────────────────────────────────────
   List<Map<String, dynamic>> _domaines = [];
   bool _isLoadingDomaines = false;
   String? _selectedDomaineId;
@@ -65,15 +74,47 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
   final List<File>   _mediaFiles    = [];
   final List<String> _mediaPreviews = [];
 
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ── Flag : entreprise fournie depuis l'extérieur ──────────────────────────────
+  // Quand true, le champ entreprise est en lecture seule et on n'affiche
+  // pas le sélecteur multiple.
+  bool get _entreprisePreset => widget.entreprise != null;
+
   @override
   void initState() {
     super.initState();
+
+    // Initialiser les contrôleurs d'horaires
     for (final day in _dayNames.keys) {
       _dayStart[day] = TextEditingController(text: '08:00');
       _dayEnd[day]   = TextEditingController(text: '18:00');
     }
-    _loadMesEntreprises();
+
+    if (_entreprisePreset) {
+      // ── Cas normal : on vient de MesServicesScreen ──────────────────────
+      // 1. Pré-sélectionner l'entreprise directement (pas de chargement réseau)
+      _selectedEntreprise = Map<String, dynamic>.from(widget.entreprise!);
+      _mesEntreprises     = [_selectedEntreprise!];
+
+      // 2. Utiliser les domaines déjà chargés si disponibles
+      if (widget.preloadedDomaines.isNotEmpty) {
+        _domaines = List<Map<String, dynamic>>.from(widget.preloadedDomaines);
+        // Auto-sélectionner si un seul domaine
+        if (_domaines.length == 1) {
+          _selectedDomaineId = _domaines.first['id'];
+        }
+      } else {
+        // Fallback : charger les domaines de l'entreprise via API
+        WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _loadDomainesForEntreprise(_selectedEntreprise!));
+      }
+
+      // 3. Vérifier les limites d'essai
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _checkTrialLimits(_selectedEntreprise!));
+    } else {
+      // ── Cas générique : ouverture hors contexte MesServicesScreen ────────
+      _loadMesEntreprises();
+    }
   }
 
   @override
@@ -86,7 +127,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     super.dispose();
   }
 
-  // ── Chargement des entreprises du prestataire ─────────────────────────────────
+  // ── Chargement des entreprises (cas générique uniquement) ─────────────────────
   Future<void> _loadMesEntreprises() async {
     setState(() => _isLoadingEntreprises = true);
     try {
@@ -109,21 +150,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             _isLoadingEntreprises = false;
           });
 
-          // Pré-sélectionner si entreprise fournie en paramètre
-          if (widget.entreprise != null) {
-            final preId = widget.entreprise!['id']?.toString();
-            final found = validated.firstWhere(
-              (e) => e['id']?.toString() == preId,
-              orElse: () => <String, dynamic>{},
-            );
-            if (found.isNotEmpty) {
-              await _onEntrepriseSelected(found);
-            } else if (validated.length == 1) {
-              await _onEntrepriseSelected(validated.first);
-            }
-          } 
-          else if (validated.length == 1) {
-            // Une seule entreprise → sélection automatique
+          if (validated.length == 1) {
             await _onEntrepriseSelected(validated.first);
           }
         }
@@ -136,16 +163,11 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     }
   }
 
-  // ── Sélection d'une entreprise → charge ses domaines ─────────────────────────
-  Future<void> _onEntrepriseSelected(Map<String, dynamic> entreprise) async {
-    setState(() {
-      _selectedEntreprise = entreprise;
-      _selectedDomaineId  = null;
-      _domaines           = [];
-      _isLoadingDomaines  = true;
-    });
+  // ── Chargement des domaines d'une entreprise ──────────────────────────────────
+  Future<void> _loadDomainesForEntreprise(Map<String, dynamic> entreprise) async {
+    setState(() { _isLoadingDomaines = true; _domaines = []; _selectedDomaineId = null; });
 
-    // 1. Lire les domaines déjà présents dans l'objet entreprise
+    // 1. Depuis l'objet entreprise
     final rawDomaines = entreprise['domaines'];
     if (rawDomaines is List && rawDomaines.isNotEmpty) {
       final parsed = _parseDomaines(rawDomaines);
@@ -154,16 +176,14 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
           setState(() {
             _domaines          = parsed;
             _isLoadingDomaines = false;
-            if (parsed.length == 1) {
-              _selectedDomaineId = parsed.first['id'];
-            }
+            if (parsed.length == 1) _selectedDomaineId = parsed.first['id'];
           });
         }
         return;
       }
     }
 
-    // 2. Fallback : appel API /entreprises/{id} pour récupérer les domaines
+    // 2. Fallback API
     try {
       final token = await _storage.read(key: 'auth_token');
       final id    = entreprise['id']?.toString() ?? '';
@@ -179,9 +199,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
           setState(() {
             _domaines          = parsed;
             _isLoadingDomaines = false;
-            if (parsed.length == 1) {
-              _selectedDomaineId = parsed.first['id'];
-            }
+            if (parsed.length == 1) _selectedDomaineId = parsed.first['id'];
           });
         }
       } else {
@@ -191,8 +209,15 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       debugPrint('Erreur chargement domaines: $e');
       if (mounted) setState(() => _isLoadingDomaines = false);
     }
+  }
 
-    // Vérification limite essai
+  // ── Sélection d'une entreprise (cas générique) ────────────────────────────────
+  Future<void> _onEntrepriseSelected(Map<String, dynamic> entreprise) async {
+    setState(() {
+      _selectedEntreprise = entreprise;
+      _selectedDomaineId  = null;
+    });
+    await _loadDomainesForEntreprise(entreprise);
     _checkTrialLimits(entreprise);
   }
 
@@ -216,8 +241,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
 
     if (isInTrial && maxAllowed != null && current >= maxAllowed) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showTrialLimitDialog(
-            maxServices: maxAllowed, currentServices: current);
+        _showTrialLimitDialog(maxServices: maxAllowed, currentServices: current);
       });
     }
   }
@@ -314,12 +338,10 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     try {
       final token   = await _storage.read(key: 'auth_token');
       final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('${AppConstants.apiBaseUrl}/services'),
+        'POST', Uri.parse('${AppConstants.apiBaseUrl}/services'),
       );
       request.headers.addAll({
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
+        'Authorization': 'Bearer $token', 'Accept': 'application/json',
       });
 
       request.fields['name']           = _nameCtrl.text.trim();
@@ -339,8 +361,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       request.fields['is_always_open'] = _isAlwaysOpen ? '1' : '0';
       if (!_isAlwaysOpen) {
         for (final day in _dayNames.keys) {
-          request.fields['schedule[$day][is_open]'] =
-              _dayOpen[day]! ? '1' : '0';
+          request.fields['schedule[$day][is_open]'] = _dayOpen[day]! ? '1' : '0';
           if (_dayOpen[day]!) {
             request.fields['schedule[$day][start]'] = _dayStart[day]!.text;
             request.fields['schedule[$day][end]']   = _dayEnd[day]!.text;
@@ -392,9 +413,9 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   //  BUILD
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     const steps = ['Infos', 'Horaires', 'Photos'];
@@ -514,40 +535,41 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   //  STEP 1 — Infos de base
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   Widget _buildStep1() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-      // ── Sélection Entreprise ───────────────────────────────────────────────
+      // ── Section Entreprise ────────────────────────────────────────────────
       _sectionTitle(Icons.business_rounded, 'Entreprise',
-          'Sélectionnez l\'entreprise concernée'),
+          'Entreprise associée à ce service'),
       const SizedBox(height: 14),
 
-      _isLoadingEntreprises
-          ? _loadingWidget('Chargement de vos entreprises…')
-          : _mesEntreprises.isEmpty
-              ? _emptyWidget(
-                  Icons.business_outlined,
-                  'Aucune entreprise validée',
-                  'Votre entreprise doit être validée pour créer des services.',
-                )
-              : _buildEntrepriseSelector(),
+      // Cas normal (depuis MesServicesScreen) : lecture seule, pas de sélecteur
+      if (_entreprisePreset)
+        _buildEntrepriseReadOnly()
+      else if (_isLoadingEntreprises)
+        _loadingWidget('Chargement de vos entreprises…')
+      else if (_mesEntreprises.isEmpty)
+        _emptyWidget(Icons.business_outlined, 'Aucune entreprise validée',
+            'Votre entreprise doit être validée pour créer des services.')
+      else
+        _buildEntrepriseSelector(),
 
       const SizedBox(height: 20),
 
-      // ── Sélection Domaine ──────────────────────────────────────────────────
+      // ── Section Domaine ───────────────────────────────────────────────────
       _sectionTitle(Icons.category_outlined, 'Domaine d\'activité',
-          'Domaine associé à ce service'),
+          'Sélectionnez le domaine de ce service'),
       const SizedBox(height: 14),
 
       _buildDomaineSelector(),
 
       const SizedBox(height: 20),
 
-      // ── Infos service ──────────────────────────────────────────────────────
+      // ── Infos service ─────────────────────────────────────────────────────
       _sectionTitle(Icons.info_outline, 'Informations du service',
           'Nom et description'),
       const SizedBox(height: 14),
@@ -565,7 +587,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       ),
       const SizedBox(height: 20),
 
-      // ── Tarification ───────────────────────────────────────────────────────
+      // ── Tarification ──────────────────────────────────────────────────────
       _sectionTitle(Icons.payments_outlined, 'Tarification',
           'Définissez le prix de votre service'),
       const SizedBox(height: 14),
@@ -607,19 +629,107 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     ]),
   );
 
-  // ── Widget sélecteur d'entreprise ─────────────────────────────────────────────
+  // ── Entreprise en LECTURE SEULE (depuis MesServicesScreen) ────────────────────
+  Widget _buildEntrepriseReadOnly() {
+    final e    = _selectedEntreprise!;
+    final logo = e['logo']?.toString() ?? '';
+
+    // Domaines en chips depuis l'objet entreprise
+    final doms = e['domaines'];
+    final domList = doms is List
+        ? doms.whereType<Map>().map((d) => d['name']?.toString() ?? '').where((n) => n.isNotEmpty).toList()
+        : <String>[];
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(children: [
+        // Logo
+        Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+            image: logo.isNotEmpty
+                ? DecorationImage(image: NetworkImage(logo), fit: BoxFit.cover)
+                : null,
+          ),
+          child: logo.isEmpty
+              ? Icon(Icons.business, color: Colors.grey.shade400, size: 22)
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(
+                  e['name']?.toString() ?? 'Entreprise',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              // Badge "validée"
+              if (e['status'] == 'validated')
+                Row(mainAxisSize: MainAxisSize.min, children: const [
+                  SizedBox(width: 4),
+                  Icon(Icons.verified_rounded, size: 14, color: Color(0xFF4CAF50)),
+                  SizedBox(width: 2),
+                  Text('Validée',
+                      style: TextStyle(fontSize: 10, color: Color(0xFF4CAF50),
+                          fontWeight: FontWeight.w600)),
+                ]),
+            ]),
+            if (domList.isNotEmpty) ...[
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: domList
+                    .take(3)
+                    .map((d) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                              color: AppConstants.primaryRed.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(6)),
+                          child: Text(d,
+                              style: const TextStyle(fontSize: 10,
+                                  color: AppConstants.primaryRed,
+                                  fontWeight: FontWeight.w600)),
+                        ))
+                    .toList(),
+              ),
+            ],
+          ]),
+        ),
+        // Icône cadenas = lecture seule
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+              color: Colors.grey.shade100, borderRadius: BorderRadius.circular(8)),
+          child: Icon(Icons.lock_outline, size: 16, color: Colors.grey.shade400),
+        ),
+      ]),
+    );
+  }
+
+  // ── Widget sélecteur d'entreprise (cas générique) ─────────────────────────────
   Widget _buildEntrepriseSelector() {
-    // Une seule entreprise → affichage simplifié (pas de dropdown)
     if (_mesEntreprises.length == 1) {
       final e = _mesEntreprises.first;
       return _SelectedEntrepriseCard(entreprise: e);
     }
 
-    // Plusieurs entreprises → dropdown avec cards
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Dropdown
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -630,10 +740,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                   : Colors.grey.shade200,
               width: _selectedEntreprise != null ? 1.5 : 1,
             ),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.03), blurRadius: 8)
-            ],
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -642,12 +749,10 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
               hint: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(children: [
-                  Icon(Icons.business_outlined,
-                      size: 18, color: Colors.grey.shade400),
+                  Icon(Icons.business_outlined, size: 18, color: Colors.grey.shade400),
                   const SizedBox(width: 10),
                   Text('Sélectionnez une entreprise',
-                      style: TextStyle(
-                          color: Colors.grey.shade400, fontSize: 13)),
+                      style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
                 ]),
               ),
               borderRadius: BorderRadius.circular(14),
@@ -659,32 +764,24 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(children: [
-                      // Logo
                       Container(
-                        width: 32,
-                        height: 32,
+                        width: 32, height: 32,
                         decoration: BoxDecoration(
                           color: Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(8),
                           image: logo.isNotEmpty
-                              ? DecorationImage(
-                                  image: NetworkImage(logo),
-                                  fit: BoxFit.cover)
+                              ? DecorationImage(image: NetworkImage(logo), fit: BoxFit.cover)
                               : null,
                         ),
                         child: logo.isEmpty
-                            ? Icon(Icons.business,
-                                size: 16, color: Colors.grey.shade400)
+                            ? Icon(Icons.business, size: 16, color: Colors.grey.shade400)
                             : null,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: Text(
-                          e['name']?.toString() ?? '',
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w600),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        child: Text(e['name']?.toString() ?? '',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis),
                       ),
                     ]),
                   ),
@@ -699,8 +796,6 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             ),
           ),
         ),
-
-        // Carte récap de l'entreprise sélectionnée
         if (_selectedEntreprise != null) ...[
           const SizedBox(height: 10),
           _SelectedEntrepriseCard(entreprise: _selectedEntreprise!),
@@ -711,37 +806,25 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
 
   // ── Widget sélecteur de domaine ───────────────────────────────────────────────
   Widget _buildDomaineSelector() {
-    // Pas d'entreprise sélectionnée
     if (_selectedEntreprise == null) {
-      return _infoBox(
-        Icons.info_outline,
-        Colors.grey.shade400,
-        Colors.grey.shade50,
-        Colors.grey.shade200,
-        'Sélectionnez d\'abord une entreprise pour voir ses domaines.',
-      );
+      return _infoBox(Icons.info_outline, Colors.grey.shade400,
+          Colors.grey.shade50, Colors.grey.shade200,
+          'Sélectionnez d\'abord une entreprise pour voir ses domaines.');
     }
 
-    // Chargement
     if (_isLoadingDomaines) {
       return _loadingWidget('Chargement des domaines…');
     }
 
-    // Aucun domaine
     if (_domaines.isEmpty) {
-      return _infoBox(
-        Icons.warning_amber_rounded,
-        Colors.orange.shade600,
-        Colors.orange.shade50,
-        Colors.orange.shade200,
-        'Aucun domaine d\'activité trouvé pour cette entreprise.',
-      );
+      return _infoBox(Icons.warning_amber_rounded, Colors.orange.shade600,
+          Colors.orange.shade50, Colors.orange.shade200,
+          'Aucun domaine d\'activité trouvé pour cette entreprise.');
     }
 
-    // Un seul domaine → sélection automatique + badge
+    // Un seul domaine → badge sélectionné automatiquement
     if (_domaines.length == 1) {
       final d = _domaines.first;
-      // Auto-select
       if (_selectedDomaineId != d['id']) {
         WidgetsBinding.instance.addPostFrameCallback(
             (_) => setState(() => _selectedDomaineId = d['id']));
@@ -757,17 +840,15 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: AppConstants.primaryRed.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
+                color: AppConstants.primaryRed.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8)),
             child: const Icon(Icons.category_rounded,
                 color: AppConstants.primaryRed, size: 16),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(d['name']!,
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w700)),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
           ),
           const Icon(Icons.check_circle_rounded,
               color: AppConstants.primaryRed, size: 18),
@@ -775,7 +856,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       );
     }
 
-    // Plusieurs domaines → liste de chips sélectionnables
+    // Plusieurs domaines → chips sélectionnables
     return Wrap(
       spacing: 8,
       runSpacing: 8,
@@ -787,41 +868,27 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             duration: const Duration(milliseconds: 180),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: isSelected
-                  ? AppConstants.primaryRed
-                  : Colors.white,
+              color: isSelected ? AppConstants.primaryRed : Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: isSelected
-                    ? AppConstants.primaryRed
-                    : Colors.grey.shade200,
+                color: isSelected ? AppConstants.primaryRed : Colors.grey.shade200,
                 width: isSelected ? 1.5 : 1,
               ),
               boxShadow: isSelected
-                  ? [BoxShadow(
-                      color: AppConstants.primaryRed.withOpacity(0.2),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2))]
-                  : [BoxShadow(
-                      color: Colors.black.withOpacity(0.03), blurRadius: 4)],
+                  ? [BoxShadow(color: AppConstants.primaryRed.withOpacity(0.2),
+                      blurRadius: 8, offset: const Offset(0, 2))]
+                  : [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4)],
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(
-                isSelected
-                    ? Icons.check_circle_rounded
-                    : Icons.category_outlined,
+                isSelected ? Icons.check_circle_rounded : Icons.category_outlined,
                 size: 15,
                 color: isSelected ? Colors.white : Colors.grey.shade500,
               ),
               const SizedBox(width: 6),
-              Text(
-                d['name']!,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: isSelected ? Colors.white : Colors.grey.shade700,
-                ),
-              ),
+              Text(d['name']!,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                      color: isSelected ? Colors.white : Colors.grey.shade700)),
             ]),
           ),
         );
@@ -829,9 +896,9 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   //  STEP 2 — Horaires
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   Widget _buildStep2() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -879,9 +946,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                   color: isOpen
                       ? AppConstants.primaryRed.withOpacity(0.3)
                       : Colors.grey.shade200),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)
-              ],
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)],
             ),
             child: Column(children: [
               Padding(
@@ -890,8 +955,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                   Text(name,
                       style: TextStyle(
                           fontSize: 14,
-                          fontWeight:
-                              isOpen ? FontWeight.w700 : FontWeight.normal,
+                          fontWeight: isOpen ? FontWeight.w700 : FontWeight.normal,
                           color: isOpen ? Colors.black87 : Colors.grey.shade500)),
                   const Spacer(),
                   Switch(
@@ -908,8 +972,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                     Expanded(child: _timeField(_dayStart[day]!, 'Ouverture')),
                     Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Text('—',
-                            style: TextStyle(color: Colors.grey.shade400))),
+                        child: Text('—', style: TextStyle(color: Colors.grey.shade400))),
                     Expanded(child: _timeField(_dayEnd[day]!, 'Fermeture')),
                   ]),
                 ),
@@ -932,8 +995,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             ),
             builder: (ctx, child) => Theme(
               data: Theme.of(ctx).copyWith(
-                  colorScheme: const ColorScheme.light(
-                      primary: AppConstants.primaryRed)),
+                  colorScheme: const ColorScheme.light(primary: AppConstants.primaryRed)),
               child: child!,
             ),
           );
@@ -955,16 +1017,14 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             Text(ctrl.text.isEmpty ? hint : ctrl.text,
                 style: TextStyle(
                     fontSize: 13,
-                    color: ctrl.text.isEmpty
-                        ? Colors.grey.shade400
-                        : Colors.black87)),
+                    color: ctrl.text.isEmpty ? Colors.grey.shade400 : Colors.black87)),
           ]),
         ),
       );
 
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   //  STEP 3 — Médias + récap
-  // ════════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   Widget _buildStep3() => SingleChildScrollView(
     padding: const EdgeInsets.all(20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -983,9 +1043,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: Image.file(File(e.value),
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: double.infinity),
+                  fit: BoxFit.cover, width: double.infinity, height: double.infinity),
             ),
             Positioned(
               top: 4, right: 4,
@@ -996,8 +1054,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                 }),
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(
-                      color: Colors.red, shape: BoxShape.circle),
+                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
                   child: const Icon(Icons.close, size: 12, color: Colors.white),
                 ),
               ),
@@ -1011,18 +1068,14 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                      color: AppConstants.primaryRed.withOpacity(0.4),
-                      width: 1.5),
+                      color: AppConstants.primaryRed.withOpacity(0.4), width: 1.5),
                 ),
-                child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center, children: [
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Icon(Icons.add_photo_alternate_outlined,
                       color: AppConstants.primaryRed, size: 28),
                   const SizedBox(height: 4),
                   Text('Ajouter',
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: AppConstants.primaryRed,
+                      style: TextStyle(fontSize: 11, color: AppConstants.primaryRed,
                           fontWeight: FontWeight.w500)),
                 ]),
               ),
@@ -1043,13 +1096,11 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
           border: Border.all(color: Colors.grey.shade200),
         ),
         child: Column(children: [
-          _recapRow('Entreprise',
-              _selectedEntreprise?['name']?.toString() ?? '—'),
+          _recapRow('Entreprise', _selectedEntreprise?['name']?.toString() ?? '—'),
           _recapRow('Domaine', _domaines
               .firstWhere((d) => d['id'] == _selectedDomaineId,
                   orElse: () => {'name': '—'})['name']!),
-          _recapRow('Service',
-              _nameCtrl.text.isNotEmpty ? _nameCtrl.text : '—'),
+          _recapRow('Service', _nameCtrl.text.isNotEmpty ? _nameCtrl.text : '—'),
           _recapRow('Prix',
               _isPriceOnRequest
                   ? 'Sur devis'
@@ -1071,7 +1122,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
 
   // ── Boutons de navigation ─────────────────────────────────────────────────────
   Widget _buildNavButtons() {
-    final isLast = _currentStep == 2;
+    final isLast     = _currentStep == 2;
     final canProceed = !_isLoadingEntreprises && !_isLoadingDomaines;
 
     return Container(
@@ -1096,8 +1147,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                 foregroundColor: Colors.grey.shade700,
                 side: BorderSide(color: Colors.grey.shade300),
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),
@@ -1110,24 +1160,22 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                 ? null
                 : (isLast ? _submit : _next),
             style: ElevatedButton.styleFrom(
-              backgroundColor: isLast ? Colors.green.shade600 : AppConstants.primaryRed,
+              backgroundColor:
+                  isLast ? Colors.green.shade600 : AppConstants.primaryRed,
               foregroundColor: Colors.white,
               elevation: 0,
               disabledBackgroundColor: Colors.grey.shade200,
               padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             child: _isSubmitting
                 ? const SizedBox(width: 20, height: 20,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                 : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     Icon(isLast ? Icons.check : Icons.arrow_forward, size: 18),
                     const SizedBox(width: 8),
                     Text(isLast ? 'Créer le service' : 'Suivant',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 15)),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                   ]),
           ),
         ),
@@ -1138,24 +1186,21 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
   // ─────────────────────────────────────────────────────────────────────────────
   //  DIALOGS
   // ─────────────────────────────────────────────────────────────────────────────
-  void _showTrialLimitDialog(
-      {required int maxServices, required int currentServices}) {
+  void _showTrialLimitDialog({required int maxServices, required int currentServices}) {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => WillPopScope(
         onWillPop: () async => false,
         child: Dialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           child: Padding(
             padding: const EdgeInsets.all(28),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               Container(
                 width: 80, height: 80,
                 decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.1),
-                    shape: BoxShape.circle),
+                    color: Colors.orange.withOpacity(0.1), shape: BoxShape.circle),
                 child: const Icon(Icons.lock_outline_rounded,
                     color: Colors.orange, size: 44),
               ),
@@ -1169,16 +1214,13 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                 decoration: BoxDecoration(
                     color: Colors.orange.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color: Colors.orange.withOpacity(0.3))),
+                    border: Border.all(color: Colors.orange.withOpacity(0.3))),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.home_repair_service_outlined,
                       color: Colors.orange.shade700, size: 16),
                   const SizedBox(width: 8),
                   Text('$currentServices / $maxServices services utilisés',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                           color: Colors.orange.shade700)),
                 ]),
               ),
@@ -1188,8 +1230,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                 '$maxServices service${maxServices > 1 ? 's' : ''}. '
                 'Souscrivez à un plan payant pour en ajouter davantage.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 13, color: Colors.grey.shade600, height: 1.5),
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600, height: 1.5),
               ),
               const SizedBox(height: 24),
               SizedBox(
@@ -1206,8 +1247,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
                     backgroundColor: AppConstants.primaryRed,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ),
@@ -1287,9 +1327,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     decoration: BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(14),
-      boxShadow: [
-        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)
-      ],
+      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
     ),
     child: Row(children: [
       Container(
@@ -1302,11 +1340,9 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       const SizedBox(width: 12),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
           if (sub.isNotEmpty)
-            Text(sub,
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+            Text(sub, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
         ]),
       ),
     ]),
@@ -1315,11 +1351,8 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
   Widget _label(String t, {bool required = false}) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
     child: Row(children: [
-      Text(t,
-          style:
-              const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-      if (required)
-        const Text(' *', style: TextStyle(color: Colors.red)),
+      Text(t, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      if (required) const Text(' *', style: TextStyle(color: Colors.red)),
     ]),
   );
 
@@ -1346,10 +1379,8 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
         borderSide: BorderSide(color: Colors.grey.shade200)),
     focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide:
-            const BorderSide(color: AppConstants.primaryRed, width: 1.5)),
-    contentPadding:
-        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        borderSide: const BorderSide(color: AppConstants.primaryRed, width: 1.5)),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
   );
 
   Widget _toggleCard({
@@ -1369,10 +1400,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
               color: value
                   ? (color ?? AppConstants.primaryRed).withOpacity(0.3)
                   : Colors.grey.shade200),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withOpacity(0.03), blurRadius: 6)
-          ],
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 6)],
         ),
         child: Row(children: [
           Container(
@@ -1380,23 +1408,16 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
             decoration: BoxDecoration(
                 color: (color ?? AppConstants.primaryRed).withOpacity(0.1),
                 borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon,
-                color: color ?? AppConstants.primaryRed, size: 18),
+            child: Icon(icon, color: color ?? AppConstants.primaryRed, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600)),
-              Text(subtitle,
-                  style:
-                      TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+              Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             ]),
           ),
-          Switch(
-              value: value,
-              onChanged: onChanged,
+          Switch(value: value, onChanged: onChanged,
               activeColor: color ?? AppConstants.primaryRed),
         ]),
       );
@@ -1407,15 +1428,12 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       SizedBox(
         width: 90,
         child: Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade500,
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade500,
                 fontWeight: FontWeight.w500)),
       ),
       Expanded(
         child: Text(value,
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600)),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
       ),
     ]),
   );
@@ -1423,12 +1441,8 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
   Widget _loadingWidget(String msg) => Container(
     padding: const EdgeInsets.symmetric(vertical: 18),
     child: Row(children: [
-      const SizedBox(
-        width: 18,
-        height: 18,
-        child: CircularProgressIndicator(
-            strokeWidth: 2, color: AppConstants.primaryRed),
-      ),
+      const SizedBox(width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2, color: AppConstants.primaryRed)),
       const SizedBox(width: 12),
       Text(msg, style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
     ]),
@@ -1445,8 +1459,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
       Icon(icon, size: 40, color: Colors.grey.shade300),
       const SizedBox(height: 10),
       Text(title,
-          style: TextStyle(
-              fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
+          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
       const SizedBox(height: 4),
       Text(sub,
           style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
@@ -1454,8 +1467,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
     ]),
   );
 
-  Widget _infoBox(IconData icon, Color iconColor, Color bg, Color border,
-          String msg) =>
+  Widget _infoBox(IconData icon, Color iconColor, Color bg, Color border, String msg) =>
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
@@ -1465,10 +1477,7 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
         child: Row(children: [
           Icon(icon, size: 16, color: iconColor),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(msg,
-                style: TextStyle(fontSize: 12, color: iconColor)),
-          ),
+          Expanded(child: Text(msg, style: TextStyle(fontSize: 12, color: iconColor))),
         ]),
       );
 
@@ -1477,12 +1486,13 @@ class _CreateServiceScreenState extends State<CreateServiceScreen>
         content: Text(msg),
         backgroundColor: Colors.red.shade700,
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ));
 }
 
-
+// ─────────────────────────────────────────────────────────────────────────────
+//  Widget carte entreprise sélectionnée (cas générique / multiple entreprises)
+// ─────────────────────────────────────────────────────────────────────────────
 class _SelectedEntrepriseCard extends StatelessWidget {
   final Map<String, dynamic> entreprise;
   const _SelectedEntrepriseCard({required this.entreprise});
@@ -1493,8 +1503,7 @@ class _SelectedEntrepriseCard extends StatelessWidget {
     final name   = entreprise['name']?.toString() ?? 'Entreprise';
     final status = entreprise['status']?.toString() ?? '';
 
-    // Domaines en chips
-    final doms = entreprise['domaines'];
+    final doms    = entreprise['domaines'];
     final domList = doms is List
         ? doms.whereType<Map>().map((d) => d['name']?.toString() ?? '').where((n) => n.isNotEmpty).toList()
         : <String>[];
@@ -1507,17 +1516,14 @@ class _SelectedEntrepriseCard extends StatelessWidget {
         border: Border.all(color: AppConstants.primaryRed.withOpacity(0.2)),
       ),
       child: Row(children: [
-        // Logo
         Container(
-          width: 48,
-          height: 48,
+          width: 48, height: 48,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.grey.shade200),
             image: logo.isNotEmpty
-                ? DecorationImage(
-                    image: NetworkImage(logo), fit: BoxFit.cover)
+                ? DecorationImage(image: NetworkImage(logo), fit: BoxFit.cover)
                 : null,
           ),
           child: logo.isEmpty
@@ -1525,47 +1531,37 @@ class _SelectedEntrepriseCard extends StatelessWidget {
               : null,
         ),
         const SizedBox(width: 12),
-
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Expanded(
                 child: Text(name,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               if (status == 'validated')
                 Row(mainAxisSize: MainAxisSize.min, children: const [
                   SizedBox(width: 4),
-                  Icon(Icons.verified_rounded,
-                      size: 14, color: Color(0xFF4CAF50)),
+                  Icon(Icons.verified_rounded, size: 14, color: Color(0xFF4CAF50)),
                   SizedBox(width: 2),
                   Text('Validée',
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF4CAF50),
+                      style: TextStyle(fontSize: 10, color: Color(0xFF4CAF50),
                           fontWeight: FontWeight.w600)),
                 ]),
             ]),
             if (domList.isNotEmpty) ...[
               const SizedBox(height: 5),
               Wrap(
-                spacing: 4,
-                runSpacing: 4,
+                spacing: 4, runSpacing: 4,
                 children: domList
                     .take(3)
                     .map((d) => Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                              color:
-                                  AppConstants.primaryRed.withOpacity(0.1),
+                              color: AppConstants.primaryRed.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(6)),
                           child: Text(d,
-                              style: const TextStyle(
-                                  fontSize: 10,
+                              style: const TextStyle(fontSize: 10,
                                   color: AppConstants.primaryRed,
                                   fontWeight: FontWeight.w600)),
                         ))
@@ -1574,15 +1570,12 @@ class _SelectedEntrepriseCard extends StatelessWidget {
             ],
           ]),
         ),
-
-        // Coche
         Container(
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
               color: AppConstants.primaryRed.withOpacity(0.1),
               shape: BoxShape.circle),
-          child: const Icon(Icons.check_rounded,
-              size: 14, color: AppConstants.primaryRed),
+          child: const Icon(Icons.check_rounded, size: 14, color: AppConstants.primaryRed),
         ),
       ]),
     );
