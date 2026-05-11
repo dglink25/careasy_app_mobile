@@ -186,16 +186,14 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
         .toList();
   }
 
-  // ── Actions ───────────────────────────────────────────────────────────────
   Future<void> _onServiceSelected(Map<String, dynamic> service) async {
     HapticFeedback.lightImpact();
-    Navigator.pop(context); // Fermer le modal d'abord
-
-    await Future.delayed(const Duration(milliseconds: 150));
-    if (!mounted) return;
 
     if (_isRdv) {
-      // Injecter l'entreprise dans le service si absente
+      Navigator.pop(context);
+      await Future.delayed(const Duration(milliseconds: 150));
+      if (!mounted) return;
+
       final enriched = Map<String, dynamic>.from(service);
       enriched['entreprise'] ??= widget.entreprise;
 
@@ -209,24 +207,30 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
         ),
       );
     } else {
-      // Message : démarrer la conversation
+
       await _startConversation(service);
     }
   }
 
+  
   Future<void> _startConversation(Map<String, dynamic> service) async {
+    
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final messageProvider = context.read<MessageProvider>();
+
     try {
       final token = await _storage.read(key: 'auth_token');
       final userRaw = await _storage.read(key: 'user_data');
       final userId =
           userRaw != null ? jsonDecode(userRaw)['id']?.toString() : null;
-
       final entrepriseId = widget.entreprise['id']?.toString() ?? '';
 
+      // Afficher le loading AVANT de fermer le modal
       if (!mounted) return;
       showDialog(
         context: context,
         barrierDismissible: false,
+        useRootNavigator: true,
         builder: (_) => const Center(
           child: CircularProgressIndicator(color: AppConstants.primaryRed),
         ),
@@ -247,7 +251,7 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
         }),
       );
 
-      if (mounted) Navigator.pop(context); // Fermer le loading
+      navigator.pop(); // Ferme le CircularProgressIndicator
 
       if (resp.statusCode == 200 || resp.statusCode == 201) {
         final data = jsonDecode(resp.body);
@@ -262,39 +266,51 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
           throw Exception('Format inattendu');
         }
 
-        if (mounted) {
-          final otherUser = UserModel(
-            id: entrepriseId,
-            name: _entrepriseName,
-            photoUrl: _logo.isNotEmpty ? _logo : null,
-            role: 'entreprise',
-            isOnline: false,
-          );
-          Navigator.push(
-            context,
-            _slideRoute(
-              ChangeNotifierProvider.value(
-                value: context.read<MessageProvider>(),
-                child: ChatScreen(
-                  conversationId: conversationId,
-                  otherUser: otherUser,
-                  serviceName: service['name']?.toString() ?? '',
-                  entrepriseName: _entrepriseName,
-                ),
+        final otherUser = UserModel(
+          id: entrepriseId,
+          name: _entrepriseName,
+          photoUrl: _logo.isNotEmpty ? _logo : null,
+          role: 'entreprise',
+          isOnline: false,
+        );
+
+        
+        navigator.pop(); // Ferme le modal de sélection de service
+
+        navigator.push(
+          _slideRoute(
+            ChangeNotifierProvider.value(
+              value: messageProvider,
+              child: ChatScreen(
+                conversationId: conversationId,
+                otherUser: otherUser,
+                serviceName: service['name']?.toString() ?? '',
+                entrepriseName: _entrepriseName,
               ),
             ),
-          );
-        }
-      } else {
-        if (mounted) {
-          _showError('Impossible de démarrer la conversation (${resp.statusCode})');
-        }
+          ),
+        );
+      } 
+      
+      else {
+        
+        navigator.pop(); // Ferme le modal de sélection
+        ScaffoldMessenger.of(navigator.context).showSnackBar(SnackBar(
+          content: Text('Impossible de démarrer la conversation (${resp.statusCode})'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
       }
     } catch (e) {
-      if (mounted) {
-        try { Navigator.pop(context); } catch (_) {}
-        _showError('Erreur de connexion');
-      }
+      try { navigator.pop(); } catch (_) {} // Ferme le loading si encore ouvert
+      try { navigator.pop(); } catch (_) {} // Ferme le modal si encore ouvert
+      ScaffoldMessenger.of(navigator.context).showSnackBar(SnackBar(
+        content: const Text('Erreur de connexion'),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
     }
   }
 
