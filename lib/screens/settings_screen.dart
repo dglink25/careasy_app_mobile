@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
 import '../utils/constants.dart';
+import '../widgets/connectivity_banner.dart';         
 import 'edit_profile_screen.dart';
 import 'welcome_screen.dart';
 import 'carai_screen.dart';
@@ -36,11 +37,14 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  static const _androidOptions =
+      AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions =
+      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
 
   final _storage = const FlutterSecureStorage(
-    aOptions: _androidOptions, iOptions: _iOSOptions,
+    aOptions: _androidOptions,
+    iOptions: _iOSOptions,
   );
 
   Map<String, dynamic>? _userData;
@@ -50,14 +54,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    // Charger d'abord le cache local pour un affichage rapide
-    _loadUserDataFromCache().then((_) {
-      // Puis rafraîchir depuis l'API pour avoir les données à jour
-      _refreshUserDataFromApi();
-    });
+    _loadUserDataFromCache().then((_) => _refreshUserDataFromApi());
   }
 
-  // ─── Chargement depuis le cache local (rapide) ────────────────────────────
+  // ─── Cache local (rapide) ─────────────────────────────────────────────────
   Future<void> _loadUserDataFromCache() async {
     try {
       final s = await _storage.read(key: 'user_data');
@@ -65,7 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final decoded = jsonDecode(s);
         if (mounted) {
           setState(() {
-            _userData = Map<String, dynamic>.from(decoded as Map);
+            _userData  = Map<String, dynamic>.from(decoded as Map);
             _isLoading = false;
           });
         }
@@ -78,7 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── Rafraîchissement depuis l'API (données à jour) ──────────────────────
+  // ─── Rafraîchissement API ────────────────────────────────────────────────
   Future<void> _refreshUserDataFromApi() async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -88,19 +88,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
+          'Accept':        'application/json',
         },
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        if (data.isNotEmpty) {
-          // Mettre à jour le cache local
-          await _storage.write(key: 'user_data', value: jsonEncode(data));
-          // Mettre à jour l'UI
+        // Le backend renvoie { success, user: {...} } OU les champs directement
+        final userData = (data['user'] as Map<String, dynamic>?) ?? data;
+        if (userData.isNotEmpty) {
+          await _storage.write(key: 'user_data', value: jsonEncode(userData));
           if (mounted) {
             setState(() {
-              _userData = data;
+              _userData  = userData;
               _isLoading = false;
             });
           }
@@ -108,18 +108,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       debugPrint('Erreur _refreshUserDataFromApi: $e');
-      // Pas grave, on a déjà les données du cache
     }
   }
 
-  // Méthode publique pour recharger (appelée après modification du profil)
+  // Méthode publique pour le bouton refresh
   Future<void> _loadUserData() async {
     if (mounted) setState(() => _isLoading = true);
     await _loadUserDataFromCache();
     await _refreshUserDataFromApi();
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────────────────
+  // ─── BUILD ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final size          = MediaQuery.of(context).size;
@@ -132,11 +131,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         backgroundColor: AppConstants.primaryRed,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text('Paramètres',
-            style: TextStyle(fontSize: isSmallScreen ? 18 : 20, fontWeight: FontWeight.bold)),
+        title: Text(
+          'Paramètres',
+          style: TextStyle(
+              fontSize: isSmallScreen ? 18 : 20,
+              fontWeight: FontWeight.bold),
+        ),
         centerTitle: false,
         actions: [
-          // Bouton refresh manuel
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Actualiser',
@@ -148,9 +150,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      body: _isLoading && _userData == null
-          ? const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed))
-          : _buildContent(context, size, isSmallScreen, isTablet),
+      // ════════════════════════════════════════════════════════════════════════
+      // BODY : ConnectivityBanner + contenu principal dans une Column
+      // ════════════════════════════════════════════════════════════════════════
+      body: Column(
+        children: [
+          // ── Bannière hors-ligne (s'affiche automatiquement si pas de réseau)
+          ConnectivityBanner(
+            pingUrl: '${AppConstants.apiBaseUrl}/test',
+          ),
+          // ── Contenu principal
+          Expanded(
+            child: _isLoading && _userData == null
+                ? const Center(
+                    child: CircularProgressIndicator(
+                        color: AppConstants.primaryRed))
+                : _buildContent(context, size, isSmallScreen, isTablet),
+          ),
+        ],
+      ),
       bottomNavigationBar: const AppBottomNav(currentIndex: 4),
       floatingActionButton: const CarAIFab(),
     );
@@ -159,10 +177,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _handleEntrepriseTap() {
     final hasEnt = _userData?['has_entreprise'] ?? false;
     if (hasEnt) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()),
-      );
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()));
     } else {
       _showCreateEntrepriseDialog();
     }
@@ -174,22 +190,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Créer votre entreprise',
-          style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text('Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une ?'),
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const Text(
+            'Vous n\'avez pas encore d\'entreprise. Voulez-vous en créer une ?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Annuler')),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CreateEntrepriseScreen()),
-              );
+              Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const CreateEntrepriseScreen()));
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppConstants.primaryRed,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
             child: const Text('Créer'),
           ),
@@ -198,15 +217,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── CONTENU PRINCIPAL ───────────────────────────────────────────────────────
-  Widget _buildContent(BuildContext context, Size size, bool isSmallScreen, bool isTablet) {
+  // ─── CONTENU ──────────────────────────────────────────────────────────────
+  Widget _buildContent(
+      BuildContext context, Size size, bool isSmallScreen, bool isTablet) {
     return Container(
       padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
       child: isTablet
           ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(flex: 3, child: _buildProfileSection(context, size, isSmallScreen)),
+              Expanded(
+                  flex: 3,
+                  child: _buildProfileSection(context, size, isSmallScreen)),
               const SizedBox(width: 20),
-              Expanded(flex: 7, child: _buildSettingsList(context, isSmallScreen)),
+              Expanded(
+                  flex: 7,
+                  child: _buildSettingsList(context, isSmallScreen)),
             ])
           : SingleChildScrollView(
               child: Column(children: [
@@ -219,37 +243,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── SECTION PROFIL ──────────────────────────────────────────────────────────
-  Widget _buildProfileSection(BuildContext context, Size size, bool isSmallScreen) {
+  // ─── SECTION PROFIL ───────────────────────────────────────────────────────
+  Widget _buildProfileSection(
+      BuildContext context, Size size, bool isSmallScreen) {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 10, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(children: [
         Stack(children: [
           Hero(
             tag: 'profile-photo',
             child: Container(
-              decoration: BoxDecoration(shape: BoxShape.circle,
-                  border: Border.all(color: AppConstants.primaryRed, width: 3)),
+              decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border:
+                      Border.all(color: AppConstants.primaryRed, width: 3)),
               child: CircleAvatar(
                 radius: isSmallScreen ? 40 : 50,
                 backgroundColor: Colors.grey[200],
                 backgroundImage: _userData?['profile_photo_url'] != null &&
-                    _userData!['profile_photo_url'].toString().isNotEmpty
+                        _userData!['profile_photo_url'].toString().isNotEmpty
                     ? NetworkImage(_userData!['profile_photo_url'])
                     : null,
                 child: _userData?['profile_photo_url'] == null ||
-                    _userData!['profile_photo_url'].toString().isEmpty
+                        _userData!['profile_photo_url'].toString().isEmpty
                     ? Text(
-                        _userData?['name'] != null && _userData!['name'].toString().isNotEmpty
-                            ? _userData!['name'][0].toUpperCase() : 'U',
+                        _userData?['name'] != null &&
+                                _userData!['name'].toString().isNotEmpty
+                            ? _userData!['name'][0].toUpperCase()
+                            : 'U',
                         style: TextStyle(
                             fontSize: isSmallScreen ? 32 : 40,
                             fontWeight: FontWeight.bold,
@@ -259,40 +291,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           Positioned(
-            bottom: 0, right: 0,
+            bottom: 0,
+            right: 0,
             child: GestureDetector(
               onTap: () => _showImagePickerOptions(context),
               child: Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                    color: AppConstants.primaryRed, shape: BoxShape.circle,
+                    color: AppConstants.primaryRed,
+                    shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2)),
-                child: const Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                child:
+                    const Icon(Icons.camera_alt, color: Colors.white, size: 16),
               ),
             ),
           ),
         ]),
         const SizedBox(height: 16),
-        Text(_userData?['name'] ?? 'Utilisateur',
-            style: TextStyle(
-                fontSize: isSmallScreen ? 18 : 22,
-                fontWeight: FontWeight.bold)),
+        Text(
+          _userData?['name'] ?? 'Utilisateur',
+          style: TextStyle(
+              fontSize: isSmallScreen ? 18 : 22,
+              fontWeight: FontWeight.bold),
+        ),
         const SizedBox(height: 4),
         Text(
           _userData?['email'] ?? _userData?['phone'] ?? 'Non renseigné',
           style: TextStyle(
-              fontSize: isSmallScreen ? 12 : 14,
-              color: Colors.grey[600]),
+              fontSize: isSmallScreen ? 12 : 14, color: Colors.grey[600]),
         ),
         const SizedBox(height: 8),
-        if (_userData?['phone'] != null && _userData!['phone'].toString().isNotEmpty)
+        if (_userData?['phone'] != null &&
+            _userData!['phone'].toString().isNotEmpty)
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(Icons.phone, size: isSmallScreen ? 12 : 14, color: Colors.grey[500]),
             const SizedBox(width: 4),
-            Text(_userData!['phone'],
-                style: TextStyle(
-                    fontSize: isSmallScreen ? 12 : 14,
-                    color: Colors.grey[600])),
+            Text(
+              _userData!['phone'],
+              style: TextStyle(
+                  fontSize: isSmallScreen ? 12 : 14,
+                  color: Colors.grey[600]),
+            ),
           ]),
         const SizedBox(height: 4),
         Container(
@@ -316,7 +355,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: OutlinedButton.styleFrom(
             foregroundColor: AppConstants.primaryRed,
             side: const BorderSide(color: AppConstants.primaryRed),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             minimumSize: Size(isSmallScreen ? 150 : 200, 40),
           ),
         ),
@@ -325,57 +365,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildSettingsList(BuildContext context, bool isSmallScreen) {
-    final userRole = _userData?['role'] ?? '';
+    final userRole      = _userData?['role'] ?? '';
     final isPrestataire = userRole == 'prestataire';
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 10, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(children: [
         _buildSectionHeader('Compte', Icons.account_circle),
         _buildSettingsItem(
-          icon: Icons.person_outline, title: 'Informations personnelles',
-          subtitle: 'Nom, email, téléphone',
-          onTap: () => _navigateToEditProfile(context), isSmallScreen: isSmallScreen),
+            icon: Icons.person_outline,
+            title: 'Informations personnelles',
+            subtitle: 'Nom, email, téléphone',
+            onTap: () => _navigateToEditProfile(context),
+            isSmallScreen: isSmallScreen),
 
         if (isPrestataire)
           _buildSettingsItem(
-            icon: Icons.business, title: 'Mes entreprises', subtitle: 'Gérer vos entreprises',
-            onTap: () => _navigateToMesEntreprises(context), isSmallScreen: isSmallScreen),
+              icon: Icons.business,
+              title: 'Mes entreprises',
+              subtitle: 'Gérer vos entreprises',
+              onTap: () => _navigateToMesEntreprises(context),
+              isSmallScreen: isSmallScreen),
 
         if (isPrestataire)
           _buildSettingsItem(
-            icon: Icons.subscriptions_outlined, title: 'Plans & Abonnements',
-            subtitle: 'Gérer votre abonnement',
-            onTap: () => _navigateToPlansAbonnement(context), isSmallScreen: isSmallScreen),
+              icon: Icons.subscriptions_outlined,
+              title: 'Plans & Abonnements',
+              subtitle: 'Gérer votre abonnement',
+              onTap: () => _navigateToPlansAbonnement(context),
+              isSmallScreen: isSmallScreen),
         _buildDivider(),
 
         _buildSectionHeader('Préférences', Icons.settings),
         _buildSettingsItem(
-          icon: Icons.notifications_none, title: 'Notifications', subtitle: 'Gérer vos alertes',
-          onTap: () => _navigateToNotificationsSettings(context), isSmallScreen: isSmallScreen),
+            icon: Icons.notifications_none,
+            title: 'Notifications',
+            subtitle: 'Gérer vos alertes',
+            onTap: () => _navigateToNotificationsSettings(context),
+            isSmallScreen: isSmallScreen),
         _buildSettingsItem(
-          icon: Icons.palette_outlined, title: 'Apparence', subtitle: 'Thème, langue',
-          onTap: () => _navigateToAppearanceSettings(context), isSmallScreen: isSmallScreen,
-          trailing: _buildThemeIndicator()),
+            icon: Icons.palette_outlined,
+            title: 'Apparence',
+            subtitle: 'Thème, langue',
+            onTap: () => _navigateToAppearanceSettings(context),
+            isSmallScreen: isSmallScreen,
+            trailing: _buildThemeIndicator()),
         _buildSettingsItem(
-          icon: Icons.lock_outline, title: 'Confidentialité & sécurité',
-          subtitle: 'Mot de passe, données',
-          onTap: () => _navigateToSecuritySettings(context), isSmallScreen: isSmallScreen),
+            icon: Icons.lock_outline,
+            title: 'Confidentialité & sécurité',
+            subtitle: 'Mot de passe, email, téléphone',
+            onTap: () => _navigateToSecuritySettings(context),
+            isSmallScreen: isSmallScreen),
         _buildDivider(),
 
         _buildSectionHeader('Support', Icons.help_outline),
         _buildSettingsItem(
-          icon: Icons.help_outline, title: 'Aide & support', subtitle: 'FAQ, contact',
-          onTap: () => _navigateToHelp(context), isSmallScreen: isSmallScreen),
+            icon: Icons.help_outline,
+            title: 'Aide & support',
+            subtitle: 'FAQ, contact',
+            onTap: () => _navigateToHelp(context),
+            isSmallScreen: isSmallScreen),
         _buildSettingsItem(
-          icon: Icons.info_outline, title: 'À propos', subtitle: 'Version',
-          onTap: () => _navigateToAbout(context), isSmallScreen: isSmallScreen),
+            icon: Icons.info_outline,
+            title: 'À propos',
+            subtitle: 'Version',
+            onTap: () => _navigateToAbout(context),
+            isSmallScreen: isSmallScreen),
         _buildDivider(),
 
         Container(
@@ -389,7 +453,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
@@ -399,12 +464,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── DÉCONNEXION ─────────────────────────────────────────────────────────────
+  // ─── DÉCONNEXION ──────────────────────────────────────────────────────────
   Future<void> _logout() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Déconnexion'),
         content: const Text('Voulez-vous vraiment vous déconnecter ?'),
         actions: [
@@ -414,8 +480,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8))),
             child: const Text('Oui'),
           ),
         ],
@@ -424,7 +492,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirm != true || !mounted) return;
 
     showDialog(
-      context: context, barrierDismissible: false,
+      context: context,
+      barrierDismissible: false,
       builder: (_) => const Center(
           child: CircularProgressIndicator(color: AppConstants.primaryRed)),
     );
@@ -437,7 +506,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Uri.parse('${AppConstants.apiBaseUrl}/logout'),
             headers: {
               'Authorization': 'Bearer $token',
-              'Accept': 'application/json',
+              'Accept':        'application/json',
             },
           ).timeout(const Duration(seconds: 5));
         } catch (_) {}
@@ -451,8 +520,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (mounted) {
         try { context.read<MessageProvider>().stopOnlineTimer(); } catch (_) {}
-        try { context.read<AuthProvider>().clearError(); } catch (_) {}
-        try { context.read<NotificationProvider>().stopPolling(); } catch (_) {}
+        try { context.read<AuthProvider>().clearError();         } catch (_) {}
+        try { context.read<NotificationProvider>().stopPolling();} catch (_) {}
       }
     } catch (_) {}
 
@@ -465,7 +534,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── PHOTO DE PROFIL ──────────────────────────────────────────────────────────
+  // ─── PHOTO DE PROFIL ──────────────────────────────────────────────────────
   void _showImagePickerOptions(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -474,35 +543,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (ctx) => Container(
         padding: const EdgeInsets.all(20),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 40, height: 4,
-              decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2))),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 20),
           const Text('Photo de profil',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 20),
           Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
             _buildImagePickerOption(
-                icon: Icons.photo_library, label: 'Galerie',
+                icon: Icons.photo_library,
+                label: 'Galerie',
                 onTap: () => _pickImage(ImageSource.gallery, ctx)),
             _buildImagePickerOption(
-                icon: Icons.camera_alt, label: 'Appareil photo',
+                icon: Icons.camera_alt,
+                label: 'Appareil photo',
                 onTap: () => _pickImage(ImageSource.camera, ctx)),
             _buildImagePickerOption(
-                icon: Icons.delete, label: 'Supprimer',
-                onTap: () => _deleteProfilePhoto(ctx), color: Colors.red),
+                icon: Icons.delete,
+                label: 'Supprimer',
+                onTap: () => _deleteProfilePhoto(ctx),
+                color: Colors.red),
           ]),
           const SizedBox(height: 20),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Annuler')),
         ]),
       ),
     );
   }
 
   Widget _buildImagePickerOption({
-    required IconData icon, required String label,
-    required VoidCallback onTap, Color color = AppConstants.primaryRed,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color color = AppConstants.primaryRed,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -514,10 +593,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Icon(icon, color: color, size: 24),
         ),
         const SizedBox(height: 8),
-        Text(label, style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[700],
-            fontWeight: FontWeight.w500)),
+        Text(label,
+            style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[700],
+                fontWeight: FontWeight.w500)),
       ]),
     );
   }
@@ -526,7 +606,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Navigator.pop(ctx);
     try {
       final picker = ImagePicker();
-      final file = await picker.pickImage(
+      final file   = await picker.pickImage(
           source: source, maxWidth: 1024, maxHeight: 1024, imageQuality: 85);
       if (file != null) await _uploadProfilePhoto(File(file.path));
     } catch (e) {
@@ -535,19 +615,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _uploadProfilePhoto(File imageFile) async {
-    showDialog(context: context, barrierDismissible: false,
+    showDialog(
+        context: context,
+        barrierDismissible: false,
         builder: (_) => const Center(
             child: CircularProgressIndicator(color: AppConstants.primaryRed)));
     try {
       final token = await _storage.read(key: 'auth_token');
       var req = http.MultipartRequest(
-          'POST', Uri.parse('${AppConstants.apiBaseUrl}/user/profile-photo'));
+          'POST',
+          Uri.parse('${AppConstants.apiBaseUrl}/user/profile-photo'));
       req.headers['Authorization'] = 'Bearer $token';
       req.files.add(await http.MultipartFile.fromPath(
           'profile_photo', imageFile.path,
           filename: path.basename(imageFile.path),
           contentType: MediaType('image', 'jpeg')));
-      var res = await req.send();
+      var res  = await req.send();
       var body = jsonDecode(await res.stream.bytesToString());
       if (context.mounted) Navigator.pop(context);
       if (res.statusCode == 200 && body['profile_photo_url'] != null) {
@@ -570,9 +653,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Supprimer la photo'),
-        content: const Text('Voulez-vous vraiment supprimer votre photo de profil ?'),
+        content: const Text(
+            'Voulez-vous vraiment supprimer votre photo de profil ?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -588,16 +673,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (confirm != true || !mounted) return;
 
-    showDialog(context: context, barrierDismissible: false,
+    showDialog(
+        context: context,
+        barrierDismissible: false,
         builder: (_) => const Center(
             child: CircularProgressIndicator(color: AppConstants.primaryRed)));
     try {
       final token = await _storage.read(key: 'auth_token');
-      final resp = await http.delete(
+      final resp  = await http.delete(
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile-photo'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
+          'Accept':        'application/json',
         },
       );
       if (context.mounted) Navigator.pop(context);
@@ -614,32 +701,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── NAVIGATION ────────────────────────────────────────────────────────────────
+  // ─── NAVIGATION ─────────────────────────────────────────────────────────
   void _navigateToEditProfile(BuildContext context) {
-    Navigator.push(context,
-        MaterialPageRoute(builder: (_) => EditProfileScreen(userData: _userData)))
-        .then((_) => _loadUserData());
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => EditProfileScreen(userData: _userData)),
+    ).then((_) => _loadUserData()); // ← synchronisation au retour
   }
 
   void _navigateToMesEntreprises(BuildContext context) =>
       Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()));
+          MaterialPageRoute(
+              builder: (_) => const entreprises.MesEntreprisesScreen()));
 
   void _navigateToPlansAbonnement(BuildContext context) =>
       Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const plans.PlansAbonnementScreen()));
+          MaterialPageRoute(
+              builder: (_) => const plans.PlansAbonnementScreen()));
 
   void _navigateToNotificationsSettings(BuildContext context) =>
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => const notifications.NotificationsSettingsScreen()));
+      Navigator.push(context,
+          MaterialPageRoute(
+              builder: (_) =>
+                  const notifications.NotificationsSettingsScreen()));
 
   void _navigateToAppearanceSettings(BuildContext context) =>
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => const appearance.AppearanceSettingsScreen()));
+      Navigator.push(context,
+          MaterialPageRoute(
+              builder: (_) =>
+                  const appearance.AppearanceSettingsScreen()));
 
   void _navigateToSecuritySettings(BuildContext context) =>
-      Navigator.push(context, MaterialPageRoute(
-          builder: (_) => const security.SecuritySettingsScreen()));
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => const security.SecuritySettingsScreen()),
+      ).then((_) => _loadUserData()); // ← synchronisation : email/phone peut avoir changé
 
   void _navigateToHelp(BuildContext context) =>
       Navigator.push(context,
@@ -649,7 +747,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Navigator.push(context,
           MaterialPageRoute(builder: (_) => const about.AboutScreen()));
 
-  // ─── WIDGETS UTILITAIRES ───────────────────────────────────────────────────────
+  // ─── WIDGETS UTILITAIRES ─────────────────────────────────────────────────
   Widget _buildSectionHeader(String title, IconData icon) {
     return Container(
       width: double.infinity,
@@ -657,17 +755,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Row(children: [
         Icon(icon, size: 18, color: AppConstants.primaryRed),
         const SizedBox(width: 8),
-        Text(title, style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppConstants.primaryRed)),
+        Text(title,
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppConstants.primaryRed)),
       ]),
     );
   }
 
   Widget _buildSettingsItem({
-    required IconData icon, required String title, String? subtitle,
-    required VoidCallback onTap, required bool isSmallScreen, Widget? trailing,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required VoidCallback onTap,
+    required bool isSmallScreen,
+    Widget? trailing,
   }) {
     return Material(
       color: Colors.transparent,
@@ -688,17 +791,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: AppConstants.primaryRed),
             ),
             const SizedBox(width: 16),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: TextStyle(
-                  fontSize: isSmallScreen ? 14 : 16,
-                  fontWeight: FontWeight.w600)),
-              if (subtitle != null) ...[
-                const SizedBox(height: 2),
-                Text(subtitle, style: TextStyle(
-                    fontSize: isSmallScreen ? 11 : 13,
-                    color: Colors.grey[600])),
-              ],
-            ])),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            fontSize: isSmallScreen ? 14 : 16,
+                            fontWeight: FontWeight.w600)),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(subtitle,
+                          style: TextStyle(
+                              fontSize: isSmallScreen ? 11 : 13,
+                              color: Colors.grey[600])),
+                    ],
+                  ]),
+            ),
             if (trailing != null) trailing,
             Icon(Icons.arrow_forward_ios,
                 size: isSmallScreen ? 14 : 16,
@@ -719,10 +828,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.light_mode, size: 12, color: Colors.grey[600]),
         const SizedBox(width: 4),
-        Text('Clair', style: TextStyle(
-            fontSize: 10,
-            color: Colors.grey[700],
-            fontWeight: FontWeight.w600)),
+        Text('Clair',
+            style: TextStyle(
+                fontSize: 10,
+                color: Colors.grey[700],
+                fontWeight: FontWeight.w600)),
       ]),
     );
   }
@@ -731,30 +841,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Divider(height: 1, indent: 16, endIndent: 16, color: Colors.grey[200]);
 
   void _showInfoDialog(BuildContext context) {
-    showDialog(context: context, builder: (_) => AlertDialog(
-      title: const Text('Paramètres'),
-      content: const Text(
-          'Gérez vos préférences, vos informations personnelles et les paramètres de votre compte.'),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Fermer'))
-      ],
-    ));
+    showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+              title: const Text('Paramètres'),
+              content: const Text(
+                  'Gérez vos préférences, vos informations personnelles et les paramètres de votre compte.'),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Fermer'))
+              ],
+            ));
   }
 
   void _showSuccess(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg), backgroundColor: Colors.green,
+      content: Text(msg),
+      backgroundColor: Colors.green,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg), backgroundColor: Colors.red,
+      content: Text(msg),
+      backgroundColor: Colors.red,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }
 }
