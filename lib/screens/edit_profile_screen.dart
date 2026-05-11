@@ -1,4 +1,3 @@
-// lib/screens/edit_profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
@@ -6,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../utils/constants.dart';
 import '../theme/app_theme.dart';
+import 'change_contact_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final Map<String, dynamic>? userData;
@@ -30,7 +30,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _phoneController;
 
   bool _isLoading = false;
-  bool _isEmailEditable = true;
   Map<String, dynamic>? _userData;
 
   @override
@@ -147,7 +146,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 bottom: 0,
                 right: 0,
                 child: GestureDetector(
-                  onTap: () => Navigator.pop(context), // Retour à l'écran paramètres pour changer la photo
+                  onTap: () => Navigator.pop(context),
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
@@ -219,54 +218,55 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           ),
           const SizedBox(height: 16),
           
-          _buildTextField(
-            controller: _emailController,
+          // Email - modifiable via ChangeContactScreen
+          _buildEditableField(
             label: 'Email',
+            value: _emailController.text,
             icon: Icons.email_outlined,
-            keyboardType: TextInputType.emailAddress,
-            enabled: _isEmailEditable,
-            validator: (value) {
-              if (value == null || value.isEmpty) {
-                return 'L\'email est requis';
+            onTap: () async {
+              final result = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChangeContactScreen(
+                    type: ContactType.email,
+                    currentValue: _emailController.text,
+                  ),
+                ),
+              );
+              if (result == true) {
+                // Recharger les données utilisateur
+                await _refreshUserData();
+                setState(() {
+                  _emailController.text = _userData?['email'] ?? '';
+                });
               }
-              if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
-                return 'Email invalide';
-              }
-              return null;
             },
             isSmallScreen: isSmallScreen,
           ),
-          const SizedBox(height: 8),
-          if (!_isEmailEditable)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 12,
-                    color: Colors.orange[700],
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'Pour changer votre email, allez dans Confidentialité & sécurité',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.orange[700],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           const SizedBox(height: 16),
           
-          _buildTextField(
-            controller: _phoneController,
+          // Téléphone - modifiable via ChangeContactScreen
+          _buildEditableField(
             label: 'Téléphone',
+            value: _phoneController.text.isEmpty ? 'Non renseigné' : _phoneController.text,
             icon: Icons.phone_outlined,
-            keyboardType: TextInputType.phone,
+            onTap: () async {
+              final result = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChangeContactScreen(
+                    type: ContactType.phone,
+                    currentValue: _phoneController.text,
+                  ),
+                ),
+              );
+              if (result == true) {
+                await _refreshUserData();
+                setState(() {
+                  _phoneController.text = _userData?['phone'] ?? '';
+                });
+              }
+            },
             isSmallScreen: isSmallScreen,
           ),
         ],
@@ -327,6 +327,75 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
+  Widget _buildEditableField({
+    required String label,
+    required String value,
+    required IconData icon,
+    required VoidCallback onTap,
+    required bool isSmallScreen,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: isSmallScreen ? 12 : 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey[700],
+          ),
+        ),
+        const SizedBox(height: 4),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: isSmallScreen ? 12 : 14,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[300]!),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  size: isSmallScreen ? 18 : 20,
+                  color: AppConstants.primaryRed,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 14 : 16,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  color: Colors.grey[400],
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Cliquez pour modifier votre $label',
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.grey[500],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildActionButtons(bool isSmallScreen) {
     return Row(
       children: [
@@ -363,6 +432,29 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
+  Future<void> _refreshUserData() async {
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      final response = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      );
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['user'] != null) {
+          _userData = data['user'] as Map<String, dynamic>;
+          await _storage.write(key: 'user_data', value: jsonEncode(_userData));
+        }
+      }
+    } catch (e) {
+      print('Error refreshing user data: $e');
+    }
+  }
+
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -387,9 +479,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        // Mettre à jour le cache local avec les données retournées par le serveur
         _userData ??= {};
-        // Priorité aux données renvoyées par le serveur
         if (data['user'] != null) {
           final serverUser = data['user'] as Map<String, dynamic>;
           serverUser.forEach((k, v) { _userData![k] = v; });
@@ -406,7 +496,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         }
       } else {
         if (mounted) {
-          // Afficher le premier message d'erreur disponible
           String msg = 'Erreur lors de la mise à jour';
           if (data['errors'] != null) {
             final errors = data['errors'] as Map<String, dynamic>;

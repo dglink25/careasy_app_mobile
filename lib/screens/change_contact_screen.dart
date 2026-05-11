@@ -1,3 +1,4 @@
+// lib/screens/change_contact_screen.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -35,17 +36,14 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     iOptions: _iOSOptions,
   );
 
-  // ── Étapes ──────────────────────────────────────────────────────────────
-  // 0 = saisie du nouveau contact
-  // 1 = saisie du code OTP
-  // 2 = succès
+ 
   int _step = 0;
 
-  // ── Formulaire ───────────────────────────────────────────────────────────
+  // Formulaire
   final _formKey   = GlobalKey<FormState>();
   final _inputCtrl = TextEditingController();
 
-  // ── OTP ──────────────────────────────────────────────────────────────────
+  // OTP
   final List<TextEditingController> _otpCtrls =
       List.generate(6, (_) => TextEditingController());
   final List<FocusNode> _otpNodes = List.generate(6, (_) => FocusNode());
@@ -60,7 +58,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
   String?  _errorMessage;
   int?     _attemptsLeft;
 
-  // ── Animation ─────────────────────────────────────────────────────────────
+  // Animation
   late AnimationController _animCtrl;
   late Animation<double>   _fadeAnim;
 
@@ -85,7 +83,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     super.dispose();
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  // Helpers
   String get _typeLabel =>
       widget.type == ContactType.email ? 'email' : 'téléphone';
 
@@ -113,7 +111,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     return null;
   }
 
-  // ─── Countdown ───────────────────────────────────────────────────────────
+  // Countdown
   void _startCountdown(int seconds) {
     _timer?.cancel();
     setState(() => _countdown = seconds);
@@ -126,7 +124,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     });
   }
 
-  // ─── Étape 1 : Envoyer l'OTP ─────────────────────────────────────────────
+  // Étape 1 : Envoyer l'OTP
   Future<void> _sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() { _isLoading = true; _errorMessage = null; });
@@ -154,6 +152,13 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
         await _animCtrl.reverse();
         setState(() => _step = 1);
         await _animCtrl.forward(from: 0);
+        
+        // Focus sur le premier champ OTP
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && _otpNodes.isNotEmpty) {
+            _otpNodes.first.requestFocus();
+          }
+        });
       } else {
         setState(() => _errorMessage =
             data['message'] as String? ?? 'Erreur lors de l\'envoi du code');
@@ -165,7 +170,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     }
   }
 
-  // ─── Étape 2 : Vérifier le code ──────────────────────────────────────────
+  // Étape 2 : Vérifier le code
   Future<void> _verifyOtp() async {
     final code = _otpCtrls.map((c) => c.text).join();
     if (code.length < 6) {
@@ -196,7 +201,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
           _errorMessage = data['message'] as String? ?? 'Code invalide';
           // Vider les champs OTP
           for (final c in _otpCtrls) { c.clear(); }
-          _otpNodes.first.requestFocus();
+          if (_otpNodes.isNotEmpty) _otpNodes.first.requestFocus();
         });
       }
     } catch (e) {
@@ -206,38 +211,37 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     }
   }
 
-  // ─── Étape 3 : Mettre à jour le contact ──────────────────────────────────
+  // Étape 3 : Mettre à jour le contact
   Future<void> _applyContactChange() async {
     if (_verifyToken == null) return;
     setState(() => _isLoading = true);
 
     try {
       final token = await _storage.read(key: 'auth_token');
-      final endpoint = widget.type == ContactType.email
-          ? '/user/email'
-          : '/user/profile'; // Le phone passe par updateProfile
-
+      
       Map<String, dynamic> requestBody;
+      Uri url;
+      
       if (widget.type == ContactType.email) {
-        // Le backend updateEmail attend email + password OU verify_token
-        // Ajoutez verify_token pour skip la vérification mot de passe
+        url = Uri.parse('${AppConstants.apiBaseUrl}/user/email');
         requestBody = {
-          'email':        _inputCtrl.text.trim(),
+          'email': _inputCtrl.text.trim(),
           'verify_token': _verifyToken,
         };
       } else {
+        url = Uri.parse('${AppConstants.apiBaseUrl}/user/profile');
         requestBody = {
-          'phone':        _inputCtrl.text.trim(),
+          'phone': _inputCtrl.text.trim(),
           'verify_token': _verifyToken,
         };
       }
 
       final resp = await http.put(
-        Uri.parse('${AppConstants.apiBaseUrl}$endpoint'),
+        url,
         headers: {
-          'Authorization':  'Bearer $token',
-          'Content-Type':   'application/json',
-          'Accept':         'application/json',
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
         body: jsonEncode(requestBody),
       ).timeout(const Duration(seconds: 15));
@@ -269,7 +273,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
         String msg = 'Erreur lors de la mise à jour';
         if (data['errors'] != null) {
           final errors = data['errors'] as Map<String, dynamic>;
-          msg = (errors.values.first as List).first?.toString() ?? msg;
+          msg = errors.values.first[0]?.toString() ?? msg;
         } else if (data['message'] != null) {
           msg = data['message'] as String;
         }
@@ -282,7 +286,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     }
   }
 
-  // ─── OTP field handler ───────────────────────────────────────────────────
+  // OTP field handler
   void _onOtpChanged(String value, int index) {
     if (value.length == 1 && index < 5) {
       _otpNodes[index + 1].requestFocus();
@@ -291,12 +295,11 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
       _otpNodes[index - 1].requestFocus();
     }
     // Auto-submit quand les 6 chiffres sont saisis
-    if (_otpCtrls.every((c) => c.text.length == 1)) {
+    if (_otpCtrls.every((c) => c.text.length == 1) && !_isLoading) {
       _verifyOtp();
     }
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -343,7 +346,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     );
   }
 
-  // ── Indicateur de progression ────────────────────────────────────────────
+  // Indicateur de progression
   Widget _buildProgressIndicator() {
     return Row(
       children: List.generate(3, (i) {
@@ -372,7 +375,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     );
   }
 
-  // ── Étape 0 : Saisie du nouveau contact ──────────────────────────────────
+  // Étape 0 : Saisie du nouveau contact
   Widget _buildStepInput() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -405,7 +408,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     );
   }
 
-  // ── Étape 1 : Saisie du code OTP ─────────────────────────────────────────
+  // Étape 1 : Saisie du code OTP
   Widget _buildStepOtp() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -446,9 +449,9 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
               _animCtrl.forward(from: 0);
             });
           },
-          child: const Text(
-            'Changer de $_typeLabel', // runtime const — correction ci-dessous
-            style: TextStyle(color: Colors.grey),
+          child: Text(
+            'Changer de $_typeLabel',
+            style: const TextStyle(color: Colors.grey),
           ),
         ),
       ],
@@ -474,7 +477,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     );
   }
 
-  // ── Étape 2 : Succès ─────────────────────────────────────────────────────
+  // Étape 2 : Succès
   Widget _buildStepSuccess() {
     return Column(
       children: [
@@ -519,7 +522,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
     );
   }
 
-  // ── Widgets de construction ──────────────────────────────────────────────
+  // Widgets de construction
   Widget _buildHeader({
     required IconData icon,
     required String title,
@@ -633,7 +636,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
                 contentPadding: EdgeInsets.zero,
               ),
               onChanged: (v) {
-                setState(() {}); // rebuild pour la bordure
+                setState(() {});
                 _onOtpChanged(v, i);
               },
             ),
