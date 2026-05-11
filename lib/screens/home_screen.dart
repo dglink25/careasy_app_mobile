@@ -32,6 +32,11 @@ import 'rendez_vous/create_rendez_vous_screen.dart';
 import 'carai_screen.dart';
 import 'map_screen.dart';
 
+import '../widgets/connectivity_home_banner.dart';   
+import '../services/connectivity_service.dart'; 
+import '../services/cache_service.dart';         
+
+
 // ─── Widget étoiles réutilisable ──────────────────────────────────────────────
 class StarRatingRow extends StatelessWidget {
   final double rating;
@@ -72,7 +77,6 @@ class StarRatingRow extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Étoiles
         ...List.generate(5, (i) {
           final filled = i < rating.floor();
           final half = !filled && i < rating;
@@ -87,7 +91,6 @@ class StarRatingRow extends StatelessWidget {
           );
         }),
         const SizedBox(width: 4),
-        // Note chiffre
         Text(
           rating.toStringAsFixed(1),
           style: TextStyle(
@@ -125,6 +128,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   final _storage = const FlutterSecureStorage(
     aOptions: _androidOptions, iOptions: _iOSOptions,
   );
+
+  // ▼▼▼ AJOUT : services hors-ligne ▼▼▼
+  final _cache = CacheService();
+  final _connectivity = ConnectivityService();
+  bool _isFromCache = false; // true = données chargées depuis le cache
+  // ▲▲▲ AJOUT ▲▲▲
+
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
   int _currentIndex = 0;
@@ -203,6 +213,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     await Future.wait([_fetchServices(), _fetchEntreprises(), _fetchDomaines()]);
   }
 
+  // ── SERVICES ────────────────────────────────────────────────────────────────
   Future<void> _fetchServices() async {
     setState(() => _isLoadingServices = true);
     try {
@@ -210,15 +221,30 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final response = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/services'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 10)); // ← timeout explicite
+
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
-        setState(() { _services = data; _isLoadingServices = false; });
+        // ▼ Sauvegarde dans le cache
+        await _cache.saveServices(data);
+        setState(() { _services = data; _isLoadingServices = false; _isFromCache = false; });
         for (int i = 0; i < data.length; i++) { _startImageCarousel(i); }
-      } else { setState(() => _isLoadingServices = false); }
-    } catch (e) { debugPrint('Erreur chargement services: $e'); setState(() => _isLoadingServices = false); }
+        return;
+      }
+    } catch (e) {
+      debugPrint('Erreur chargement services: $e');
+    }
+
+    // ▼ Fallback cache si réseau indisponible
+    final cached = await _cache.getServices();
+    if (cached != null) {
+      setState(() { _services = cached; _isFromCache = true; });
+      for (int i = 0; i < cached.length; i++) { _startImageCarousel(i); }
+    }
+    setState(() => _isLoadingServices = false);
   }
 
+  // ── ENTREPRISES ─────────────────────────────────────────────────────────────
   Future<void> _fetchEntreprises() async {
     setState(() => _isLoadingEntreprises = true);
     try {
@@ -226,13 +252,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final response = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/entreprises'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
-        setState(() { _entreprises = jsonDecode(response.body); _isLoadingEntreprises = false; });
-      } else { setState(() => _isLoadingEntreprises = false); }
-    } catch (e) { debugPrint('Erreur chargement entreprises: $e'); setState(() => _isLoadingEntreprises = false); }
+        final List<dynamic> data = jsonDecode(response.body);
+        // ▼ Sauvegarde dans le cache
+        await _cache.saveEntreprises(data);
+        setState(() { _entreprises = data; _isLoadingEntreprises = false; _isFromCache = false; });
+        return;
+      }
+    } catch (e) {
+      debugPrint('Erreur chargement entreprises: $e');
+    }
+
+    // ▼ Fallback cache
+    final cached = await _cache.getEntreprises();
+    if (cached != null) {
+      setState(() { _entreprises = cached; _isFromCache = true; });
+    }
+    setState(() => _isLoadingEntreprises = false);
   }
 
+  // ── DOMAINES ────────────────────────────────────────────────────────────────
   Future<void> _fetchDomaines() async {
     setState(() => _isLoadingDomaines = true);
     try {
@@ -240,12 +281,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       final response = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/domaines'),
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-      );
+      ).timeout(const Duration(seconds: 8));
+
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
-        setState(() { _domaines = data; _domaines.insert(0, {'id': null, 'name': 'Tous'}); _isLoadingDomaines = false; });
-      } else { setState(() => _isLoadingDomaines = false); }
-    } catch (e) { debugPrint('Erreur chargement domaines: $e'); setState(() => _isLoadingDomaines = false); }
+        // ▼ Sauvegarde dans le cache
+        await _cache.saveDomaines(data);
+        setState(() {
+          _domaines = data;
+          _domaines.insert(0, {'id': null, 'name': 'Tous'});
+          _isLoadingDomaines = false;
+        });
+        return;
+      }
+    } catch (e) {
+      debugPrint('Erreur chargement domaines: $e');
+    }
+
+    // ▼ Fallback cache
+    final cached = await _cache.getDomaines();
+    if (cached != null) {
+      setState(() {
+        _domaines = cached;
+        if (_domaines.isEmpty || _domaines.first['name'] != 'Tous') {
+          _domaines.insert(0, {'id': null, 'name': 'Tous'});
+        }
+      });
+    }
+    setState(() => _isLoadingDomaines = false);
   }
 
   void _startImageCarousel(int serviceIndex) {
@@ -594,9 +657,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _showServiceDetails(Map<String, dynamic> service) => Navigator.push(context, MaterialPageRoute(builder: (_) => ServiceDetailScreen(service: service)));
-
   void _showError(String message) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))));
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ═══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final userName      = _userData?['name'] ?? 'Utilisateur';
@@ -657,93 +722,103 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
           const NotificationBell(),
-
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Colors.white),
             tooltip: 'Carte des entreprises',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const MapScreen()),
-            ),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MapScreen())),
           ),
         ],
       ),
 
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: () async {
-                await _fetchData();
-                if (mounted) context.read<NotificationProvider>().fetchNotifications(silent: true);
-              },
-              color: AppConstants.primaryRed,
-              child: _isSearching && _searchController.text.isNotEmpty
-                  ? _buildSearchResults()
-                  : CustomScrollView(
-                      controller: _serviceScrollController,
-                      slivers: [
-                        SliverAppBar(
-                          pinned: true, floating: true, elevation: 2,
-                          backgroundColor: Colors.white,
-                          automaticallyImplyLeading: false,
-                          expandedHeight: 60,
-                          flexibleSpace: FlexibleSpaceBar(
-                            background: Container(
-                              height: 60,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                              child: _isLoadingDomaines
-                                  ? const Center(child: CircularProgressIndicator())
-                                  : ListView.builder(
-                                      scrollDirection: Axis.horizontal,
-                                      itemCount: _domaines.length,
-                                      itemBuilder: (_, index) {
-                                        final domaine = _domaines[index];
-                                        final isSelected = _selectedDomaine == domaine['name'];
-                                        return Padding(
-                                          padding: const EdgeInsets.only(right: 8),
-                                          child: FilterChip(
-                                            label: Text(domaine['name'] ?? '', style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal, fontSize: 13)),
-                                            selected: isSelected,
-                                            onSelected: (selected) => setState(() => _selectedDomaine = selected ? domaine['name'] : null),
-                                            backgroundColor: Colors.grey[100],
-                                            selectedColor: AppConstants.primaryRed,
-                                            checkmarkColor: Colors.white,
-                                            elevation: isSelected ? 2 : 0,
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: isSelected ? AppConstants.primaryRed : Colors.grey[300]!)),
-                                          ),
-                                        );
-                                      },
-                                    ),
+      
+      body: ConnectivityHomeBanner(
+        onReconnected: () async {
+          // Rechargement complet + mise à jour des notifications
+          await _fetchData();
+          if (mounted) context.read<NotificationProvider>().fetchNotifications(silent: true);
+        },
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: () async {
+                  await _fetchData();
+                  if (mounted) context.read<NotificationProvider>().fetchNotifications(silent: true);
+                },
+                color: AppConstants.primaryRed,
+                child: _isSearching && _searchController.text.isNotEmpty
+                    ? _buildSearchResults()
+                    : CustomScrollView(
+                        controller: _serviceScrollController,
+                        slivers: [
+                          // ── Filtre domaines ───────────────────────────────
+                          SliverAppBar(
+                            pinned: true, floating: true, elevation: 2,
+                            backgroundColor: Colors.white,
+                            automaticallyImplyLeading: false,
+                            expandedHeight: 60,
+                            flexibleSpace: FlexibleSpaceBar(
+                              background: Container(
+                                height: 60,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                child: _isLoadingDomaines
+                                    ? const Center(child: CircularProgressIndicator())
+                                    : ListView.builder(
+                                        scrollDirection: Axis.horizontal,
+                                        itemCount: _domaines.length,
+                                        itemBuilder: (_, index) {
+                                          final domaine = _domaines[index];
+                                          final isSelected = _selectedDomaine == domaine['name'];
+                                          return Padding(
+                                            padding: const EdgeInsets.only(right: 8),
+                                            child: FilterChip(
+                                              label: Text(domaine['name'] ?? '', style: TextStyle(color: isSelected ? Colors.white : Colors.black87, fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal, fontSize: 13)),
+                                              selected: isSelected,
+                                              onSelected: (selected) => setState(() => _selectedDomaine = selected ? domaine['name'] : null),
+                                              backgroundColor: Colors.grey[100],
+                                              selectedColor: AppConstants.primaryRed,
+                                              checkmarkColor: Colors.white,
+                                              elevation: isSelected ? 2 : 0,
+                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: isSelected ? AppConstants.primaryRed : Colors.grey[300]!)),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                              ),
                             ),
                           ),
-                        ),
-                        SliverPadding(
-                          padding: EdgeInsets.all(size.width * 0.04),
-                          sliver: SliverList(
-                            delegate: SliverChildListDelegate([
-                              _buildSectionHeader('Services populaires', onSeeAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AllServicesScreen(initialServices: _services, initialDomaines: _domaines)))),
-                              const SizedBox(height: 12),
-                              _isLoadingServices
-                                  ? _buildServicesShimmer()
-                                  : _filteredServices.isEmpty
-                                      ? _buildEmptyState('Aucun service trouvé', Icons.search_off)
-                                      : _buildServicesList(),
-                              const SizedBox(height: 24),
-                              _buildSectionHeader('Entreprises', onSeeAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AllEntreprisesScreen(initialEntreprises: _entreprises, initialDomaines: _domaines)))),
-                              const SizedBox(height: 12),
-                              _isLoadingEntreprises
-                                  ? _buildEntreprisesShimmer()
-                                  : _entreprises.isEmpty
-                                      ? _buildEmptyState('Aucune entreprise trouvée', Icons.business)
-                                      : _buildEntreprisesList(),
-                              const SizedBox(height: 20),
-                            ]),
+
+                          SliverPadding(
+                            padding: EdgeInsets.all(size.width * 0.04),
+                            sliver: SliverList(
+                              delegate: SliverChildListDelegate([
+                                // ▼ Badge "données du cache" optionnel
+                                if (_isFromCache) _buildCacheBadge(),
+
+                                _buildSectionHeader('Services populaires', onSeeAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AllServicesScreen(initialServices: _services, initialDomaines: _domaines)))),
+                                const SizedBox(height: 12),
+                                _isLoadingServices
+                                    ? _buildServicesShimmer()
+                                    : _filteredServices.isEmpty
+                                        ? _buildEmptyState('Aucun service trouvé', Icons.search_off)
+                                        : _buildServicesList(),
+                                const SizedBox(height: 24),
+                                _buildSectionHeader('Entreprises', onSeeAll: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AllEntreprisesScreen(initialEntreprises: _entreprises, initialDomaines: _domaines)))),
+                                const SizedBox(height: 12),
+                                _isLoadingEntreprises
+                                    ? _buildEntreprisesShimmer()
+                                    : _entreprises.isEmpty
+                                        ? _buildEmptyState('Aucune entreprise trouvée', Icons.business)
+                                        : _buildEntreprisesList(),
+                                const SizedBox(height: 20),
+                              ]),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-            ),
+                        ],
+                      ),
+              ),
+      ),
+      // ▲▲▲ FIN MODIFICATION ▲▲▲
 
       floatingActionButton: const CarAIFab(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
@@ -769,6 +844,38 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  // ─── Badge "données du cache" ───────────────────────────────────────────────
+  Widget _buildCacheBadge() {
+    return FutureBuilder<DateTime?>(
+      future: _cache.getLastSync(),
+      builder: (context, snap) {
+        final sync = snap.data;
+        String label = 'Données hors ligne';
+        if (sync != null) {
+          final diff = DateTime.now().difference(sync);
+          if (diff.inMinutes < 60) label = 'Données de il y a ${diff.inMinutes} min';
+          else if (diff.inHours < 24) label = 'Données de il y a ${diff.inHours} h';
+          else label = 'Données de il y a ${diff.inDays} j';
+        }
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.orange.withOpacity(0.3)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.history, size: 14, color: Colors.orange),
+            const SizedBox(width: 6),
+            Expanded(child: Text(label, style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.w600))),
+          ]),
+        );
+      },
+    );
+  }
+
+  // ─── Reste des méthodes (inchangées) ───────────────────────────────────────
   Widget _buildSearchResults() {
     if (_searchResults.isEmpty) {
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -875,21 +982,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildServicesList() => ListView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: _filteredServices.length, itemBuilder: (_, i) => _buildServiceCard(_filteredServices[i], i));
 
-  // ════════════════════════════════════════════════════════════════════════════
-  //  CARTE SERVICE — avec badge de notation ⭐
-  // ════════════════════════════════════════════════════════════════════════════
   Widget _buildServiceCard(Map<String, dynamic> service, int index) {
     final entreprise    = service['entreprise'] ?? {};
     final hasPromo      = service['has_promo'] ?? false;
     final isPromoActive = service['is_promo_active'] ?? false;
     final medias        = service['medias'] is List ? service['medias'] : [];
     final curIdx        = _currentImageIndex[index] ?? 0;
-
-    // ── Données notation ────────────────────────────────────────────────
     final int totalReviews   = (service['total_reviews'] as num?)?.toInt() ?? 0;
-    final double avgRating   = totalReviews > 0
-        ? (service['average_rating'] as num?)?.toDouble() ?? 0.0
-        : 0.0;
+    final double avgRating   = totalReviews > 0 ? (service['average_rating'] as num?)?.toDouble() ?? 0.0 : 0.0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -898,8 +998,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         shadowColor: Colors.black.withOpacity(0.05),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-          // ── Image + badges ──────────────────────────────────────────────
           Stack(children: [
             ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
@@ -910,47 +1008,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         errorBuilder: (_, __, ___) => Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])))
                     : Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400]))),
             ),
-            // Indicateurs carrousel
             if (medias.length > 1)
               Positioned(bottom: 8, left: 0, right: 0,
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(medias.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 2), width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: i == curIdx % medias.length ? Colors.white : Colors.white.withOpacity(0.5)))))),
-            // Badge promo
             if (hasPromo && isPromoActive)
               Positioned(top: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)), child: Text('-${service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)))),
-            // ★ Badge notation en haut à droite
             if (totalReviews > 0)
               Positioned(
                 top: 8, right: 8,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.65),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))],
-                  ),
+                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.65), borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))]),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
                     const SizedBox(width: 3),
-                    Text(
-                      avgRating.toStringAsFixed(1),
-                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
+                    Text(avgRating.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
                     const SizedBox(width: 3),
-                    Text(
-                      '($totalReviews)',
-                      style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11),
-                    ),
+                    Text('($totalReviews)', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11)),
                   ]),
                 ),
               ),
           ]),
-
-          // ── Contenu carte ───────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Logo entreprise
                 Container(width: 40, height: 40, decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10), image: entreprise['logo'] != null ? DecorationImage(image: NetworkImage(entreprise['logo']), fit: BoxFit.cover) : null), child: entreprise['logo'] == null ? Icon(Icons.business, size: 20, color: Colors.grey[600]) : null),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -958,12 +1040,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   const SizedBox(height: 2),
                   Text(entreprise['name'] ?? 'Entreprise', style: TextStyle(fontSize: 13, color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 4),
-                  // ★ Étoiles sous le nom
-                  StarRatingRow(
-                    rating: avgRating,
-                    totalReviews: totalReviews,
-                    starSize: 13,
-                  ),
+                  StarRatingRow(rating: avgRating, totalReviews: totalReviews, starSize: 13),
                   const SizedBox(height: 4),
                   Row(children: [
                     Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
@@ -971,7 +1048,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Text(service['is_always_open'] == true ? '24h/24' : service['start_time'] != null && service['end_time'] != null ? '${service['start_time']} - ${service['end_time']}' : 'Horaires variables', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
                   ]),
                 ])),
-                // Prix
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (service['is_price_on_request'] == true)
                     Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)), child: Text('Sur devis', style: TextStyle(fontSize: 11, color: Colors.blue[700], fontWeight: FontWeight.w600)))
@@ -1020,16 +1096,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildServicesShimmer() => ListView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: 3, itemBuilder: (_, __) => Container(height: 200, margin: const EdgeInsets.only(bottom: 16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: [BoxShadow(color: Colors.grey[200]!, blurRadius: 8, offset: const Offset(0, 2))]),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 120, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: const BorderRadius.vertical(top: Radius.circular(16)))), Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 16, width: 150, color: Colors.grey[300]), const SizedBox(height: 8), Container(height: 12, width: 100, color: Colors.grey[300])]))])));
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 120, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: const BorderRadius.vertical(top: Radius.circular(16)))), Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 16, width: 150, color: Colors.grey[300]), const SizedBox(height: 8), Container(height: 12, width: 100, color: Colors.grey[300])]))])));
 
   Widget _buildEntreprisesShimmer() => SizedBox(height: 200, child: ListView.builder(scrollDirection: Axis.horizontal, itemCount: 3, itemBuilder: (_, __) => Container(width: 160, margin: const EdgeInsets.only(right: 12), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.grey[200]!, blurRadius: 8, offset: const Offset(0, 2))]),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 100, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: const BorderRadius.vertical(top: Radius.circular(12)))), Padding(padding: const EdgeInsets.all(8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 12, width: 100, color: Colors.grey[300]), const SizedBox(height: 8), Container(height: 10, width: 60, color: Colors.grey[300])]))]))));
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 100, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: const BorderRadius.vertical(top: Radius.circular(12)))), Padding(padding: const EdgeInsets.all(8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Container(height: 12, width: 100, color: Colors.grey[300]), const SizedBox(height: 8), Container(height: 10, width: 60, color: Colors.grey[300])]))]))));
 
   Widget _buildEmptyState(String message, IconData icon) => Container(padding: const EdgeInsets.symmetric(vertical: 32), child: Center(child: Column(children: [Icon(icon, size: 48, color: Colors.grey[400]), const SizedBox(height: 8), Text(message, style: TextStyle(fontSize: 14, color: Colors.grey[600]))])));
 
   void _handleEntrepriseTap() => Navigator.push(context, MaterialPageRoute(builder: (_) => const MesEntreprisesScreen()));
-
   void _showProfileDialog() => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())).then((_) => _loadUserData());
-
   Widget _buildInfoRow(IconData icon, String label, String value) => Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [Icon(icon, size: 16, color: Colors.grey[600]), const SizedBox(width: 8), Text('$label: ', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700], fontSize: 13)), Expanded(child: Text(value, style: const TextStyle(fontSize: 13), overflow: TextOverflow.ellipsis))]));
 }
