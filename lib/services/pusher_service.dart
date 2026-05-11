@@ -8,6 +8,7 @@ import '../providers/message_provider.dart';
 import '../providers/rendez_vous_provider.dart';
 import '../models/message_model.dart';
 import '../utils/constants.dart';
+import 'notification_prefs_service.dart';
 
 class PusherService {
   static final PusherService _instance = PusherService._internal();
@@ -139,7 +140,6 @@ class PusherService {
     });
   }
 
-
   Future<dynamic> _authorize(String channelName, String socketId) async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -166,6 +166,7 @@ class PusherService {
     }
     return null;
   }
+
   Future<void> _subscribeAllPending() async {
     final todo = Set<String>.from(_pendingChannels);
     for (final ch in todo) {
@@ -193,7 +194,6 @@ class PusherService {
       debugPrint('[Pusher] Erreur souscription $channelName: $e');
     }
   }
-
 
   void _onEvent(PusherEvent event) {
     if (event.eventName.startsWith('pusher')) return;
@@ -249,6 +249,7 @@ class PusherService {
     }
   }
 
+  // ── PATCH : _onNewMessage avec vérification des préférences push ──────────
   void _onNewMessage(Map<String, dynamic> data) {
     final Map<String, dynamic> msgData;
     if (data['message'] is Map) {
@@ -264,7 +265,42 @@ class PusherService {
     if (senderId == _currentUserId) return;
 
     final msg = MessageModel.fromJson(msgData, _currentUserId!);
+
+    // Mise à jour UI dans tous les cas
     _messageProvider!.receiveMessage(msg, convId);
+
+    // Notification locale uniquement si push activé ET type 'message' activé
+    NotificationPrefsService.canShow(type: 'message').then((canShow) {
+      if (!canShow) return;
+      final senderName = data['sender_name']?.toString() ?? 'Nouveau message';
+      final body = msg.content.isNotEmpty
+          ? (msg.content.length > 80
+              ? '${msg.content.substring(0, 80)}…'
+              : msg.content)
+          : _mediaTypeLabel(msg.type);
+      NotificationServiceRef.show(
+        id:      convId.hashCode.abs() % 10000 + 1000,
+        title:   senderName,
+        body:    body,
+        payload: jsonEncode({
+          'type'           : 'message',
+          'conversation_id': convId,
+          'sender_name'    : senderName,
+          'sender_id'      : senderId,
+        }),
+      );
+    });
+  }
+
+  /// Retourne un label lisible selon le type de média.
+  String _mediaTypeLabel(String type) {
+    switch (type) {
+      case 'image'   : return 'Photo';
+      case 'video'   : return 'Vidéo';
+      case 'vocal'   : return 'Message vocal';
+      case 'document': return 'Document';
+      default        : return 'Nouveau message';
+    }
   }
 
   void _onMessageSent(Map<String, dynamic> data) {
@@ -317,7 +353,6 @@ class PusherService {
     }
   }
 
-
   void _onRdvNotification(Map<String, dynamic> data, String eventName) {
     debugPrint('[Pusher] RDV event: $eventName — rdv_id=${data['rdv_id']}');
 
@@ -327,6 +362,7 @@ class PusherService {
     _showRdvLocalNotification(data, eventName);
   }
 
+  // ── PATCH : _showRdvLocalNotification avec vérification des préférences push
   void _showRdvLocalNotification(Map<String, dynamic> data, String eventName) {
     try {
       final title = data['title']?.toString() ?? _rdvEventTitle(eventName);
@@ -336,15 +372,18 @@ class PusherService {
 
       if (title.isEmpty && body.isEmpty) return;
 
-
-      NotificationServiceRef.show(
-        id:      rdvId.isNotEmpty
-                   ? (rdvId.hashCode + 20000).abs()
-                   : DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        title:   title,
-        body:    body,
-        payload: jsonEncode({'type': type, 'rdv_id': rdvId}),
-      );
+      // Vérifier les préférences push + type 'rdv'
+      NotificationPrefsService.canShow(type: 'rdv').then((canShow) {
+        if (!canShow) return;
+        NotificationServiceRef.show(
+          id:      rdvId.isNotEmpty
+                     ? (rdvId.hashCode + 20000).abs()
+                     : DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          title:   title,
+          body:    body,
+          payload: jsonEncode({'type': type, 'rdv_id': rdvId}),
+        );
+      });
     } catch (e) {
       debugPrint('[Pusher] _showRdvLocalNotification error: $e');
     }
@@ -369,7 +408,6 @@ class PusherService {
       default             : return 'rdv_pending';
     }
   }
-
 
   Future<void> subscribeToConversation(String conversationId) async {
     final ch = 'private-conversation.$conversationId';

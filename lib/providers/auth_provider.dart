@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/user_model.dart';
 import '../utils/constants.dart';
+import '../services/notification_prefs_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
@@ -89,6 +90,9 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _storage.write(key: 'auth_token', value: token);
       await _storage.write(key: 'user_data',  value: jsonEncode(userData));
+      NotificationPrefsService.invalidate();
+      NotificationPrefsService.load(); // précharger
+
       _token       = token;
       _currentUser = UserModel.fromJson(userData);
       _error       = null;
@@ -104,6 +108,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> logout() async {
     _isLoading = true; notifyListeners();
     try {
+      NotificationPrefsService.invalidate();
       // Révoquer le token côté serveur si possible
       final token = _token;
       if (token != null && token.isNotEmpty) {
