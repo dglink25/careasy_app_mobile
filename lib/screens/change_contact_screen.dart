@@ -58,6 +58,19 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
   String?  _errorMessage;
   int?     _attemptsLeft;
 
+  String _normalizeIdentifier(String raw) {
+    if (widget.type == ContactType.email) return raw.trim().toLowerCase();
+    
+    String digits = raw.replaceAll(RegExp(r'\D'), '');
+    // Retirer le code pays Bénin si présent
+    if (digits.startsWith('229')) digits = digits.substring(3);
+   
+    if (RegExp(r'^0\d{9}$').hasMatch(digits)) return '+229$digits';
+    // Format 8 chiffres → +22901XXXXXXXX
+    if (RegExp(r'^\d{8}$').hasMatch(digits)) return '+22901$digits';
+    return raw.trim();
+  }
+
   // Animation
   late AnimationController _animCtrl;
   late Animation<double>   _fadeAnim;
@@ -131,7 +144,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
 
     try {
       final body = jsonEncode({
-        'identifier': _inputCtrl.text.trim(),
+        'identifier': _normalizeIdentifier(_inputCtrl.text),
         'type': widget.type == ContactType.email ? 'email' : 'phone',
       });
 
@@ -184,7 +197,7 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
         Uri.parse('${AppConstants.apiBaseUrl}/verify-contact/check'),
         headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
         body: jsonEncode({
-          'identifier': _inputCtrl.text.trim(),
+          'identifier': _normalizeIdentifier(_inputCtrl.text),
           'type': widget.type == ContactType.email ? 'email' : 'phone',
           'code': code,
         }),
@@ -228,10 +241,11 @@ class _ChangeContactScreenState extends State<ChangeContactScreen>
           'email': _inputCtrl.text.trim(),
           'verify_token': _verifyToken,
         };
-      } else {
-        url = Uri.parse('${AppConstants.apiBaseUrl}/user/profile');
+      } 
+      else {
+        url = Uri.parse('${AppConstants.apiBaseUrl}/user/phone');
         requestBody = {
-          'phone': _inputCtrl.text.trim(),
+          'phone': _normalizeIdentifier(_inputCtrl.text),
           'verify_token': _verifyToken,
         };
       }
