@@ -5,14 +5,16 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../providers/rendez_vous_provider.dart';
 import 'rendez_vous/create_rendez_vous_screen.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../widgets/cached_image.dart';   // ← widget image mis en cache
 
-// ─── Widget étoiles inline (copie locale pour éviter dépendance circulaire) ──
+// ─── Widget étoiles inline ────────────────────────────────────────────────────
 class _StarRow extends StatelessWidget {
   final double rating;
   final double size;
@@ -50,7 +52,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
   late PageController _pageController;
   bool _isSharing = false;
 
-  // Données des avis chargées depuis l'API
+  // ── Carousel automatique ──────────────────────────────────────────────────
+  Timer? _carouselTimer;
+
+  // ── Avis ──────────────────────────────────────────────────────────────────
   List<Map<String, dynamic>> _reviews = [];
   bool _isLoadingReviews = false;
   bool _reviewsLoaded = false;
@@ -64,40 +69,57 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
   @override
   void initState() {
     super.initState();
-    // 4 onglets : Description, Avis, Horaires, Contact
     _tabController = TabController(length: 4, vsync: this);
     _pageController = PageController();
     _tabController.addListener(() {
-      // Charger les avis quand l'onglet Avis est sélectionné
-      if (_tabController.index == 1 && !_reviewsLoaded) {
-        _fetchReviews();
+      if (_tabController.index == 1 && !_reviewsLoaded) _fetchReviews();
+    });
+
+    // Démarrer le carousel si plusieurs images
+    final medias = widget.service['medias'];
+    if (medias is List && medias.length > 1) {
+      _startCarousel(medias.length);
+    }
+  }
+
+  // ── Carousel automatique (5 s) ────────────────────────────────────────────
+  void _startCarousel(int count) {
+    _carouselTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      final next = (_currentImageIndex + 1) % count;
+      setState(() => _currentImageIndex = next);
+      if (_pageController.hasClients) {
+        _pageController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeInOut,
+        );
       }
     });
   }
 
   @override
   void dispose() {
+    _carouselTimer?.cancel();
     _tabController.dispose();
     _pageController.dispose();
     super.dispose();
   }
 
-  // ─── Chargement des avis depuis l'API ──────────────────────────────────────
+  // ── Avis ──────────────────────────────────────────────────────────────────
   Future<void> _fetchReviews() async {
     if (_isLoadingReviews) return;
     setState(() => _isLoadingReviews = true);
-
     try {
       final token = await _storage.read(key: 'auth_token');
       final serviceId = widget.service['id']?.toString() ?? '';
-      if (serviceId.isEmpty) { setState(() { _isLoadingReviews = false; _reviewsLoaded = true; }); return; }
-
+      if (serviceId.isEmpty) {
+        setState(() { _isLoadingReviews = false; _reviewsLoaded = true; });
+        return;
+      }
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/services/$serviceId/reviews'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
+        headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200) {
@@ -119,7 +141,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     }
   }
 
-  // ─── Formatage téléphone ────────────────────────────────────────────────────
+  // ── Téléphone / WhatsApp ──────────────────────────────────────────────────
   String _formatPhoneNumber(String phone) {
     if (phone.isEmpty) return '';
     String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
@@ -135,7 +157,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     try {
       final uri = Uri.parse('tel:${_formatPhoneNumber(phoneNumber)}');
       if (await canLaunchUrl(uri)) await launchUrl(uri);
-    } catch (e) {
+    } catch (_) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erreur lors de l\'appel')));
     }
   }
@@ -145,11 +167,12 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       final clean = _formatPhoneNumber(phoneNumber).replaceAll('+', '');
       final uri = Uri.parse('https://wa.me/$clean');
       if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
+    } catch (_) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erreur lors de l\'ouverture de WhatsApp')));
     }
   }
 
+  // ── Partage ───────────────────────────────────────────────────────────────
   String _formatScheduleForShare() {
     Map<String, dynamic> schedule = {};
     final scheduleRaw = widget.service['schedule'];
@@ -162,15 +185,12 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     const dayNames = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
     if (widget.service['is_always_open'] == true || widget.service['is_open_24h'] == true) return 'Ouvert 24h/24 et 7j/7';
     if (schedule.isEmpty) return 'Horaires non définis';
-    StringBuffer buffer = StringBuffer();
+    final buffer = StringBuffer();
     for (int i = 0; i < days.length; i++) {
-      final day = days[i];
-      final daySchedule = schedule[day] is Map ? Map<String, dynamic>.from(schedule[day]) : {};
-      bool isOpen = daySchedule['is_open'] == true || daySchedule['is_open'] == '1' || daySchedule['is_open'] == 1;
+      final daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]]) : {};
+      final isOpen = daySchedule['is_open'] == true || daySchedule['is_open'] == '1' || daySchedule['is_open'] == 1;
       if (isOpen) {
-        String start = daySchedule['start']?.toString().substring(0, 5) ?? '--:--';
-        String end = daySchedule['end']?.toString().substring(0, 5) ?? '--:--';
-        buffer.writeln('${dayNames[i]} : $start - $end');
+        buffer.writeln('${dayNames[i]} : ${daySchedule['start']?.toString().substring(0, 5) ?? '--:--'} - ${daySchedule['end']?.toString().substring(0, 5) ?? '--:--'}');
       } else { buffer.writeln(' ${dayNames[i]} : Fermé'); }
     }
     return buffer.toString().trim();
@@ -180,17 +200,18 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     if (_isSharing) return;
     setState(() => _isSharing = true);
     try {
-      final serviceName    = widget.service['name'] ?? 'Service';
-      final entreprise     = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
-      final entrepriseName = entreprise['name'] ?? 'Entreprise';
+      final serviceName       = widget.service['name'] ?? 'Service';
+      final entreprise        = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
+      final entrepriseName    = entreprise['name'] ?? 'Entreprise';
       final entrepriseAddress = entreprise['address'] ?? 'Adresse non renseignée';
-      final hasPromo       = widget.service['has_promo'] ?? false;
-      final isPromoActive  = widget.service['is_promo_active'] ?? false;
-      String priceText     = '';
+      final hasPromo          = widget.service['has_promo'] ?? false;
+      final isPromoActive     = widget.service['is_promo_active'] ?? false;
+      String priceText;
       if (widget.service['is_price_on_request'] == true) { priceText = 'Prix : Sur devis'; }
-      else if (hasPromo && isPromoActive) { final pricePromo = widget.service['price_promo'] ?? 0; final priceOriginal = widget.service['price'] ?? 0; final discount = widget.service['discount_percentage'] ?? 0; priceText = 'Prix : $priceOriginal FCFA → $pricePromo FCFA (-$discount%)'; }
+      else if (hasPromo && isPromoActive) { priceText = 'Prix : ${widget.service['price']} FCFA → ${widget.service['price_promo']} FCFA (-${widget.service['discount_percentage'] ?? 0}%)'; }
       else { final price = widget.service['price'] ?? 'Non défini'; priceText = 'Prix : ${price != 'Non défini' ? '$price FCFA' : price}'; }
-      final description = widget.service['descriptions'] ?? 'Aucune description disponible';
+
+      final description  = widget.service['descriptions'] ?? 'Aucune description disponible';
       final scheduleText = _formatScheduleForShare();
       final callPhone    = entreprise['call_phone'] ?? '';
       final whatsappPhone = entreprise['whatsapp_phone'] ?? '';
@@ -198,21 +219,19 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       if (callPhone.isNotEmpty) contactText += '\nTéléphone : $callPhone';
       if (whatsappPhone.isNotEmpty) contactText += '\nWhatsApp : $whatsappPhone';
       final shareText = '''$serviceName\n\nEntreprise : $entrepriseName\nAdresse : $entrepriseAddress\n$priceText\n\nDescription :\n$description\n\nHoraires d'ouverture :\n$scheduleText\n\nContact :$contactText\n\n--- Trouvé sur CarEasy ---\nTéléchargez l'application : https://careasy.app/download'''.trim();
+
       final medias = widget.service['medias'] is List ? widget.service['medias'] : [];
       XFile? imageFile;
       if (medias.isNotEmpty && medias.first != null && medias.first.toString().isNotEmpty) {
         try {
-          final imageUrl = medias.first.toString();
-          final uri = Uri.parse(imageUrl);
-          final response = await http.get(uri);
+          final response = await http.get(Uri.parse(medias.first.toString()));
           if (response.statusCode == 200) {
             final tempDir = await getTemporaryDirectory();
-            final filePath = '${tempDir.path}/service_share_${DateTime.now().millisecondsSinceEpoch}.jpg';
-            final file = File(filePath);
+            final file = File('${tempDir.path}/service_share_${DateTime.now().millisecondsSinceEpoch}.jpg');
             await file.writeAsBytes(response.bodyBytes);
-            imageFile = XFile(filePath);
+            imageFile = XFile(file.path);
           }
-        } catch (e) { debugPrint('Erreur téléchargement image: $e'); }
+        } catch (_) {}
       }
       if (imageFile != null) {
         await Share.shareXFiles([imageFile], text: shareText, subject: serviceName);
@@ -233,28 +252,25 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     ));
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final entreprise = widget.service['entreprise'] is Map
-        ? Map<String, dynamic>.from(widget.service['entreprise'])
-        : {};
-    final medias        = widget.service['medias'] is List ? widget.service['medias'] : [];
+    final entreprise    = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
+    final medias        = widget.service['medias'] is List ? List<String>.from(widget.service['medias']) : <String>[];
     final hasPromo      = widget.service['has_promo'] ?? false;
     final isPromoActive = widget.service['is_promo_active'] ?? false;
     final size          = MediaQuery.of(context).size;
     final isSmallScreen = size.width < 380;
-
-    // Données notation
-    final int totalReviews   = (widget.service['total_reviews'] as num?)?.toInt() ?? 0;
-    final double avgRating   = totalReviews > 0
-        ? (widget.service['average_rating'] as num?)?.toDouble() ?? 0.0
-        : 0.0;
+    final int totalReviews = (widget.service['total_reviews'] as num?)?.toInt() ?? 0;
+    final double avgRating = totalReviews > 0 ? (widget.service['average_rating'] as num?)?.toDouble() ?? 0.0 : 0.0;
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       body: CustomScrollView(
         slivers: [
-          // ── App Bar avec image ────────────────────────────────────────────
+          // ── SliverAppBar avec carousel automatique ────────────────────────
           SliverAppBar(
             expandedHeight: size.height * 0.4,
             pinned: true,
@@ -264,59 +280,113 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
               background: Stack(
                 fit: StackFit.expand,
                 children: [
+                  // ── Carousel d'images ──────────────────────────────────
                   if (medias.isNotEmpty)
                     PageView.builder(
                       controller: _pageController,
                       itemCount: medias.length,
                       onPageChanged: (i) => setState(() => _currentImageIndex = i),
-                      itemBuilder: (_, i) => Image.network(medias[i], fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Container(color: Colors.grey[300],
-                              child: Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey[600])))),
+                      itemBuilder: (_, i) => CachedImage(
+                        url: medias[i],
+                        fit: BoxFit.cover,
+                        errorWidget: Container(
+                          color: Colors.grey[300],
+                          child: Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey[600])),
+                        ),
+                      ),
                     )
                   else
-                    Container(color: Colors.grey[300], child: Center(child: Icon(Icons.image_not_supported, size: 50, color: Colors.grey[600]))),
-                  Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, Colors.black.withOpacity(0.7)]))),
+                    Container(
+                      color: Colors.grey[300],
+                      child: Center(child: Icon(Icons.image_not_supported, size: 50, color: Colors.grey[600])),
+                    ),
+
+                  // ── Gradient bas ───────────────────────────────────────
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black.withOpacity(0.7)],
+                      ),
+                    ),
+                  ),
+
+                  // ── Indicateurs de page ────────────────────────────────
                   if (medias.length > 1)
-                    Positioned(bottom: 20, left: 0, right: 0,
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(medias.length,
-                            (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 4), width: 8, height: 8,
-                                decoration: BoxDecoration(shape: BoxShape.circle, color: i == _currentImageIndex ? Colors.white : Colors.white.withOpacity(0.5)))))),
-                  // Nom + entreprise
+                    Positioned(
+                      bottom: 72,
+                      left: 0, right: 0,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(medias.length, (i) => AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                          width: i == _currentImageIndex ? 20 : 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            shape: i == _currentImageIndex ? BoxShape.rectangle : BoxShape.circle,
+                            borderRadius: i == _currentImageIndex ? BorderRadius.circular(4) : null,
+                            color: i == _currentImageIndex
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.5),
+                          ),
+                        )),
+                      ),
+                    ),
+
+                  // ── Titre + entreprise ─────────────────────────────────
                   Positioned(
                     bottom: 20, left: 20, right: 20,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(widget.service['name'] ?? 'Service',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.service['name'] ?? 'Service',
                           style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-                          maxLines: 2, overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        Container(width: 30, height: 30,
-                            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8),
-                                image: entreprise['logo'] != null ? DecorationImage(image: NetworkImage(entreprise['logo']), fit: BoxFit.cover) : null),
-                            child: entreprise['logo'] == null ? Icon(Icons.business, size: 16, color: AppConstants.primaryRed) : null),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(entreprise['name'] ?? 'Entreprise',
-                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
-                            maxLines: 1, overflow: TextOverflow.ellipsis)),
-                        // ★ Badge notation dans l'image
-                        if (totalReviews > 0)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: Colors.white.withOpacity(0.3)),
-                              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 8)],
+                          maxLines: 2, overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          // Logo entreprise
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: CachedImage(
+                              url: entreprise['logo']?.toString(),
+                              width: 30, height: 30, fit: BoxFit.cover,
+                              errorWidget: Container(
+                                width: 30, height: 30,
+                                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                                child: Icon(Icons.business, size: 16, color: AppConstants.primaryRed),
+                              ),
                             ),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 16),
-                              const SizedBox(width: 4),
-                              Text(avgRating.toStringAsFixed(1),
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
-                            ]),
                           ),
-                      ]),
-                    ]),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              entreprise['name'] ?? 'Entreprise',
+                              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (totalReviews > 0)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white.withOpacity(0.3)),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 8)],
+                              ),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 16),
+                                const SizedBox(width: 4),
+                                Text(avgRating.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+                              ]),
+                            ),
+                        ]),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -341,7 +411,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
           SliverToBoxAdapter(
             child: Column(children: [
 
-              // ── Section prix + bouton RDV + résumé notation ──────────────
+              // ── Prix + contacts rapides + rating ──────────────────────────
               Container(
                 padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
                 decoration: BoxDecoration(
@@ -350,48 +420,65 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                   boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 5))],
                 ),
                 child: Column(children: [
-
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Prix
                     Expanded(
                       flex: 2,
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         const Text('Prix', style: TextStyle(fontSize: 14, color: Colors.grey)),
                         const SizedBox(height: 4),
                         if (widget.service['is_price_on_request'] == true)
-                          Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(20)), child: Text('Sur devis', style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.w600, fontSize: 16)))
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(20)),
+                            child: Text('Sur devis', style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.w600, fontSize: 16)),
+                          )
                         else if (hasPromo && isPromoActive)
                           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             Row(children: [
                               Text('${widget.service['price_promo']} FCFA', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppConstants.primaryRed)),
                               const SizedBox(width: 8),
-                              Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(12)), child: Text('-${widget.service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12))),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(12)),
+                                child: Text('-${widget.service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 12)),
+                              ),
                             ]),
                             Text('${widget.service['price']} FCFA', style: TextStyle(fontSize: 16, color: Colors.grey[500], decoration: TextDecoration.lineThrough)),
                           ])
                         else
-                          Text(widget.service['price'] != null ? '${widget.service['price']} FCFA' : 'Prix non défini',
-                              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppConstants.primaryRed)),
+                          Text(
+                            widget.service['price'] != null ? '${widget.service['price']} FCFA' : 'Prix non défini',
+                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppConstants.primaryRed),
+                          ),
                       ]),
                     ),
-                    // Boutons contact rapide
                     Row(children: [
-                      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(15)),
-                          child: IconButton(icon: const Icon(Icons.phone, color: Colors.green), onPressed: entreprise['call_phone'] != null ? () => _makePhoneCall(entreprise['call_phone']) : null, constraints: const BoxConstraints(), padding: EdgeInsets.zero)),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(15)),
+                        child: IconButton(
+                          icon: const Icon(Icons.phone, color: Colors.green),
+                          onPressed: entreprise['call_phone'] != null ? () => _makePhoneCall(entreprise['call_phone']) : null,
+                          constraints: const BoxConstraints(), padding: EdgeInsets.zero,
+                        ),
+                      ),
                       const SizedBox(width: 8),
-                      Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
-                          child: IconButton(icon: const Icon(Icons.message, color: Color(0xFF25D366)), onPressed: entreprise['whatsapp_phone'] != null ? () => _openWhatsApp(entreprise['whatsapp_phone']) : null, constraints: const BoxConstraints(), padding: EdgeInsets.zero)),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
+                        child: IconButton(
+                          icon: const Icon(Icons.message, color: Color(0xFF25D366)),
+                          onPressed: entreprise['whatsapp_phone'] != null ? () => _openWhatsApp(entreprise['whatsapp_phone']) : null,
+                          constraints: const BoxConstraints(), padding: EdgeInsets.zero,
+                        ),
+                      ),
                     ]),
                   ]),
-
-                  // ★ Résumé notation compact sous le prix
                   if (totalReviews > 0) ...[
                     const SizedBox(height: 12),
                     _buildRatingSummaryBar(avgRating, totalReviews),
                   ],
-
                   const SizedBox(height: 16),
-                  // Bouton RDV
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -457,10 +544,16 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                   const Text('À propos de l\'entreprise', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
                   Row(children: [
-                    Container(width: 60, height: 60,
-                        decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(15),
-                            image: entreprise['logo'] != null ? DecorationImage(image: NetworkImage(entreprise['logo']), fit: BoxFit.cover) : null),
-                        child: entreprise['logo'] == null ? Icon(Icons.business, size: 30, color: Colors.grey[400]) : null),
+                    CachedImage(
+                      url: entreprise['logo']?.toString(),
+                      width: 60, height: 60,
+                      borderRadius: BorderRadius.circular(15),
+                      errorWidget: Container(
+                        width: 60, height: 60,
+                        decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(15)),
+                        child: Icon(Icons.business, size: 30, color: Colors.grey[400]),
+                      ),
+                    ),
                     const SizedBox(width: 16),
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(entreprise['name'] ?? 'Entreprise', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -474,7 +567,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                   ]),
                 ]),
               ),
-
               const SizedBox(height: 20),
             ]),
           ),
@@ -483,24 +575,18 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  WIDGET : Barre de résumé notation (style Play Store compact)
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Rating summary ────────────────────────────────────────────────────────
   Widget _buildRatingSummaryBar(double avgRating, int totalReviews) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFDE68A), width: 1),
+        border: Border.all(color: const Color(0xFFFDE68A)),
       ),
       child: Row(children: [
-        // Score global
         Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(
-            avgRating.toStringAsFixed(1),
-            style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w900, color: Color(0xFF92400E), height: 1),
-          ),
+          Text(avgRating.toStringAsFixed(1), style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w900, color: Color(0xFF92400E), height: 1)),
           _StarRow(rating: avgRating, size: 15),
           const SizedBox(height: 2),
           Text('$totalReviews avis', style: TextStyle(fontSize: 11, color: Colors.amber[800])),
@@ -508,22 +594,14 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
         const SizedBox(width: 16),
         const VerticalDivider(width: 1, thickness: 1, color: Color(0xFFFDE68A)),
         const SizedBox(width: 16),
-        // Message qualitatif
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(
-            _ratingLabel(avgRating),
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF78350F)),
-          ),
+          Text(_ratingLabel(avgRating), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF78350F))),
           const SizedBox(height: 4),
-          Text(
-            _ratingSubtitle(avgRating, totalReviews),
-            style: TextStyle(fontSize: 12, color: Colors.amber[900], height: 1.3),
-          ),
+          Text(_ratingSubtitle(avgRating, totalReviews), style: TextStyle(fontSize: 12, color: Colors.amber[900], height: 1.3)),
         ])),
-        // Icône
         Container(
           padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: const Color(0xFFFEF3C7), shape: BoxShape.circle),
+          decoration: const BoxDecoration(color: Color(0xFFFEF3C7), shape: BoxShape.circle),
           child: Icon(_ratingIcon(avgRating), color: const Color(0xFFF59E0B), size: 22),
         ),
       ]),
@@ -531,32 +609,19 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
   }
 
   String _ratingLabel(double r) {
-    if (r >= 4.5) return 'Excellent';
-    if (r >= 4.0) return 'Très bien';
-    if (r >= 3.5) return 'Bien';
-    if (r >= 3.0) return 'Correct';
-    if (r >= 2.0) return 'Moyen';
-    return 'À améliorer';
+    if (r >= 4.5) return 'Excellent'; if (r >= 4.0) return 'Très bien'; if (r >= 3.5) return 'Bien';
+    if (r >= 3.0) return 'Correct'; if (r >= 2.0) return 'Moyen'; return 'À améliorer';
   }
-
   String _ratingSubtitle(double r, int count) {
-    if (r >= 4.5) return 'Les clients adorent ce service !';
-    if (r >= 4.0) return 'Très apprécié par les clients.';
-    if (r >= 3.5) return 'Bonne expérience globale.';
-    if (r >= 3.0) return 'Service satisfaisant.';
-    return 'Expériences mitigées.';
+    if (r >= 4.5) return 'Les clients adorent ce service !'; if (r >= 4.0) return 'Très apprécié par les clients.';
+    if (r >= 3.5) return 'Bonne expérience globale.'; if (r >= 3.0) return 'Service satisfaisant.'; return 'Expériences mitigées.';
   }
-
   IconData _ratingIcon(double r) {
-    if (r >= 4.5) return Icons.favorite_rounded;
-    if (r >= 4.0) return Icons.thumb_up_rounded;
-    if (r >= 3.0) return Icons.sentiment_satisfied_rounded;
-    return Icons.sentiment_neutral_rounded;
+    if (r >= 4.5) return Icons.favorite_rounded; if (r >= 4.0) return Icons.thumb_up_rounded;
+    if (r >= 3.0) return Icons.sentiment_satisfied_rounded; return Icons.sentiment_neutral_rounded;
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  ONGLET : Description
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Onglet Description ────────────────────────────────────────────────────
   Widget _buildDescriptionTab() {
     final description = widget.service['descriptions'] ?? 'Aucune description disponible';
     if (description.isEmpty || description == 'Aucune description disponible') {
@@ -565,26 +630,17 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     return SingleChildScrollView(child: Text(description, style: const TextStyle(fontSize: 14, height: 1.6)));
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  ONGLET : Avis — style Play Store
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Onglet Avis ───────────────────────────────────────────────────────────
   Widget _buildReviewsTab(double avgRating, int totalReviews) {
-    if (totalReviews == 0) {
-      return _buildNoReviewsState();
-    }
-
+    if (totalReviews == 0) return _buildNoReviewsState();
     if (!_reviewsLoaded && !_isLoadingReviews) {
-      // Déclenchement différé
       WidgetsBinding.instance.addPostFrameCallback((_) => _fetchReviews());
     }
-
     return Column(children: [
-      // En-tête compact avec score
       _buildReviewsHeader(avgRating, totalReviews),
       const SizedBox(height: 12),
       const Divider(height: 1),
       const SizedBox(height: 8),
-      // Liste des avis
       Expanded(child: _isLoadingReviews
           ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
           : _reviews.isEmpty
@@ -598,28 +654,22 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     ]);
   }
 
-  Widget _buildNoReviewsState() {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.grey[100], shape: BoxShape.circle),
-          child: Icon(Icons.rate_review_outlined, size: 40, color: Colors.grey[400])),
-      const SizedBox(height: 16),
-      Text('Pas encore d\'avis', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey[600])),
-      const SizedBox(height: 6),
-      Text('Soyez le premier à noter ce service !', style: TextStyle(fontSize: 13, color: Colors.grey[500])),
-    ]));
-  }
+  Widget _buildNoReviewsState() => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+    Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.grey[100], shape: BoxShape.circle), child: Icon(Icons.rate_review_outlined, size: 40, color: Colors.grey[400])),
+    const SizedBox(height: 16),
+    Text('Pas encore d\'avis', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey[600])),
+    const SizedBox(height: 6),
+    Text('Soyez le premier à noter ce service !', style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+  ]));
 
   Widget _buildReviewsHeader(double avgRating, int totalReviews) {
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-      // Grand chiffre
       Column(children: [
-        Text(avgRating.toStringAsFixed(1),
-            style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: Color(0xFF1F2937), height: 1)),
+        Text(avgRating.toStringAsFixed(1), style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: Color(0xFF1F2937), height: 1)),
         _StarRow(rating: avgRating, size: 16),
         Text('sur 5', style: TextStyle(fontSize: 11, color: Colors.grey[500])),
       ]),
       const SizedBox(width: 20),
-      // Barres de progression par étoile
       Expanded(child: Column(
         mainAxisSize: MainAxisSize.min,
         children: List.generate(5, (i) {
@@ -636,13 +686,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
               Expanded(child: ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
-                  value: ratio,
-                  minHeight: 7,
+                  value: ratio, minHeight: 7,
                   backgroundColor: Colors.grey[200],
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    starNum >= 4 ? const Color(0xFF22C55E)
-                        : starNum == 3 ? const Color(0xFFF59E0B)
-                        : const Color(0xFFEF4444),
+                    starNum >= 4 ? const Color(0xFF22C55E) : starNum == 3 ? const Color(0xFFF59E0B) : const Color(0xFFEF4444),
                   ),
                 ),
               )),
@@ -655,7 +702,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     ]);
   }
 
-  // ─── Carte d'avis individuel — style Play Store ───────────────────────────
   Widget _buildReviewItem(Map<String, dynamic> review) {
     final clientName  = review['client']?['name']?.toString() ?? review['client_name']?.toString() ?? 'Client anonyme';
     final clientPhoto = review['client']?['profile_photo_url']?.toString() ?? review['client']?['photo_url']?.toString();
@@ -664,41 +710,32 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     final createdAt   = review['created_at']?.toString() ?? '';
     final initials    = clientName.isNotEmpty ? clientName[0].toUpperCase() : '?';
     final dateStr     = _formatReviewDate(createdAt);
-
-    // Couleur avatar basée sur le nom
-    final avatarColors = [
-      const Color(0xFF6366F1), const Color(0xFF8B5CF6), const Color(0xFFEC4899),
-      const Color(0xFF14B8A6), const Color(0xFF0EA5E9), const Color(0xFFF97316),
-      const Color(0xFF22C55E), const Color(0xFFEF4444),
-    ];
+    final avatarColors = [const Color(0xFF6366F1), const Color(0xFF8B5CF6), const Color(0xFFEC4899), const Color(0xFF14B8A6), const Color(0xFF0EA5E9), const Color(0xFFF97316), const Color(0xFF22C55E), const Color(0xFFEF4444)];
     final avatarColor = avatarColors[clientName.codeUnits.fold(0, (a, b) => a + b) % avatarColors.length];
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Avatar
-        Container(
-          width: 42, height: 42,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: avatarColor,
-              image: clientPhoto != null && clientPhoto.isNotEmpty
-                  ? DecorationImage(image: NetworkImage(clientPhoto), fit: BoxFit.cover)
-                  : null),
-          child: clientPhoto == null || clientPhoto.isEmpty
-              ? Center(child: Text(initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)))
-              : null,
+        // Avatar avec cache
+        ClipOval(
+          child: CachedImage(
+            url: clientPhoto,
+            width: 42, height: 42,
+            errorWidget: Container(
+              width: 42, height: 42,
+              color: avatarColor,
+              child: Center(child: Text(initials, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16))),
+            ),
+          ),
         ),
         const SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Ligne 1 : nom + date
           Row(children: [
             Expanded(child: Text(clientName, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF1F2937)), maxLines: 1, overflow: TextOverflow.ellipsis)),
-            if (dateStr.isNotEmpty)
-              Text(dateStr, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+            if (dateStr.isNotEmpty) Text(dateStr, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
           ]),
           const SizedBox(height: 4),
-          // Étoiles
           _StarRow(rating: rating.toDouble(), size: 14),
-          // Commentaire
           if (comment.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(comment, style: TextStyle(fontSize: 13, color: Colors.grey[800], height: 1.4)),
@@ -712,8 +749,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     if (dateStr.isEmpty) return '';
     try {
       final dt   = DateTime.parse(dateStr).toLocal();
-      final now  = DateTime.now();
-      final diff = now.difference(dt);
+      final diff = DateTime.now().difference(dt);
       if (diff.inDays == 0) return 'Aujourd\'hui';
       if (diff.inDays == 1) return 'Hier';
       if (diff.inDays < 7)  return 'Il y a ${diff.inDays} j';
@@ -723,15 +759,13 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     } catch (_) { return ''; }
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  ONGLET : Horaires
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Onglet Horaires ───────────────────────────────────────────────────────
   Widget _buildScheduleTab() {
     Map<String, dynamic> schedule = {};
     dynamic scheduleRaw = widget.service['schedule'];
     if (scheduleRaw != null) {
       if (scheduleRaw is String && scheduleRaw.isNotEmpty) {
-        try { final decoded = jsonDecode(scheduleRaw); if (decoded is Map) schedule = Map<String, dynamic>.from(decoded); } catch (e) {}
+        try { final decoded = jsonDecode(scheduleRaw); if (decoded is Map) schedule = Map<String, dynamic>.from(decoded); } catch (_) {}
       } else if (scheduleRaw is Map) { schedule = Map<String, dynamic>.from(scheduleRaw); }
     }
     const days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
@@ -759,13 +793,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       itemCount: days.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
-        final day = days[i];
-        final daySchedule = schedule[day] is Map ? Map<String, dynamic>.from(schedule[day]) : {};
-        bool isOpen = false;
-        if (daySchedule.isNotEmpty) {
-          final openValue = daySchedule['is_open'];
-          isOpen = openValue == true || openValue == '1' || openValue == 1;
-        }
+        final daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]]) : {};
+        final openValue = daySchedule['is_open'];
+        final isOpen = openValue == true || openValue == '1' || openValue == 1;
         String start = '--:--'; String end = '--:--';
         if (isOpen) {
           if (daySchedule['start'] != null) { start = daySchedule['start'].toString(); if (start.length > 5) start = start.substring(0, 5); }
@@ -779,8 +809,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
             Expanded(child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(color: isOpen ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
-              child: Text(isOpen ? '$start - $end' : 'Fermé',
-                  style: TextStyle(color: isOpen ? Colors.green : Colors.red, fontWeight: FontWeight.w600, fontSize: 13), textAlign: TextAlign.center),
+              child: Text(isOpen ? '$start - $end' : 'Fermé', style: TextStyle(color: isOpen ? Colors.green : Colors.red, fontWeight: FontWeight.w600, fontSize: 13), textAlign: TextAlign.center),
             )),
           ]),
         );
@@ -788,9 +817,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  //  ONGLET : Contact
-  // ══════════════════════════════════════════════════════════════════════════
+  // ── Onglet Contact ────────────────────────────────────────────────────────
   Widget _buildContactTab(Map<String, dynamic> entreprise) {
     return ListView(children: [
       if (entreprise['call_phone'] != null && entreprise['call_phone'].toString().isNotEmpty)

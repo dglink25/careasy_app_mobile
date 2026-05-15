@@ -36,6 +36,7 @@ import '../widgets/connectivity_home_banner.dart';
 import '../services/connectivity_service.dart'; 
 import '../services/cache_service.dart';       
 import '../widgets/accessibility_button.dart';  
+import '../widgets/cached_image.dart';
 
 
 // ─── Widget étoiles réutilisable ──────────────────────────────────────────────
@@ -557,42 +558,64 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
-
   void _showContactModal(Map<String, dynamic> service) {
     final entreprise = service['entreprise'] ?? {};
     final whatsapp = entreprise['whatsapp_phone'] ?? '';
     final phone    = entreprise['call_phone'] ?? '';
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
-        decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(margin: const EdgeInsets.only(top: 12), height: 4, width: 40, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              height: 4, width: 40,
+              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            ),
             Padding(
               padding: const EdgeInsets.all(20),
               child: Row(children: [
                 Hero(
                   tag: 'service-${service['id']}',
-                  child: Container(
-                    width: 60, height: 60,
-                    decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(16),
-                        image: service['medias'] != null && (service['medias'] as List).isNotEmpty
-                            ? DecorationImage(image: NetworkImage((service['medias'] as List).first), fit: BoxFit.cover)
-                            : null),
-                    child: service['medias'] == null || (service['medias'] as List).isEmpty ? Icon(Icons.build_circle, size: 30, color: AppConstants.primaryRed) : null,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: CachedImage(
+                      url: service['medias'] != null && (service['medias'] as List).isNotEmpty
+                          ? (service['medias'] as List).first.toString()
+                          : null,
+                      width: 60,
+                      height: 60,
+                      fit: BoxFit.cover,
+                      errorWidget: Container(
+                        width: 60, height: 60,
+                        color: Colors.grey[100],
+                        child: Icon(Icons.build_circle, size: 30, color: AppConstants.primaryRed),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(service['name'] ?? 'Service', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  Row(children: [Icon(Icons.business, size: 14, color: Colors.grey[600]), const SizedBox(width: 4), Expanded(child: Text(entreprise['name'] ?? 'Entreprise', style: TextStyle(fontSize: 14, color: Colors.grey[600])))]),
+                  Row(children: [
+                    Icon(Icons.business, size: 14, color: Colors.grey[600]),
+                    const SizedBox(width: 4),
+                    Expanded(child: Text(entreprise['name'] ?? 'Entreprise', style: TextStyle(fontSize: 14, color: Colors.grey[600]))),
+                  ]),
                 ])),
-                IconButton(icon: Icon(Icons.close, color: Colors.grey[600]), onPressed: () => Navigator.pop(context)),
+                IconButton(
+                  icon: Icon(Icons.close, color: Colors.grey[600]),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ]),
             ),
             const Divider(height: 1),
@@ -600,34 +623,51 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               padding: const EdgeInsets.all(20),
               child: Column(children: [
                 if (phone.isNotEmpty) ...[
-                  _buildContactButton(icon: Icons.phone, color: Colors.green, title: 'Appeler', subtitle: phone, onTap: () async {
-                    Navigator.pop(context);
-                    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-                    await _makePhoneCall(phone);
-                    if (context.mounted) Navigator.pop(context);
-                  }),
+                  _buildContactButton(
+                    icon: Icons.phone, color: Colors.green,
+                    title: 'Appeler', subtitle: phone,
+                    onTap: () async {
+                      Navigator.pop(context);
+                      showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+                      await _makePhoneCall(phone);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
                   const SizedBox(height: 12),
                 ],
                 if (whatsapp.isNotEmpty) ...[
-                  _buildContactButton(icon: Icons.chat, color: const Color(0xFF25D366), title: 'WhatsApp', subtitle: whatsapp, onTap: () async {
-                    Navigator.pop(context);
-                    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-                    await _openWhatsApp(whatsapp);
-                    if (context.mounted) Navigator.pop(context);
-                  }),
+                  _buildContactButton(
+                    icon: Icons.chat, color: const Color(0xFF25D366),
+                    title: 'WhatsApp', subtitle: whatsapp,
+                    onTap: () async {
+                      Navigator.pop(context);
+                      showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+                      await _openWhatsApp(whatsapp);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                  ),
                   const SizedBox(height: 12),
                 ],
-                _buildContactButton(icon: Icons.calendar_month, color: Colors.blue, title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention', onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => ChangeNotifierProvider(
-                      create: (_) => RendezVousProvider(),
-                      child: CreateRendezVousScreen(service: service),
-                    ),
-                  ));
-                }),
+                _buildContactButton(
+                  icon: Icons.calendar_month, color: Colors.blue,
+                  title: 'Prendre rendez-vous', subtitle: 'Planifier une intervention',
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => ChangeNotifierProvider(
+                        create: (_) => RendezVousProvider(),
+                        child: CreateRendezVousScreen(service: service),
+                      ),
+                    ));
+                  },
+                ),
                 const SizedBox(height: 12),
-                _buildContactButton(icon: Icons.message, color: Colors.purple, title: 'Message', subtitle: 'Envoyer un message à l\'entreprise pour ce service', onTap: () { Navigator.pop(context); _startConversationWithEntreprise(service); }),
+                _buildContactButton(
+                  icon: Icons.message, color: Colors.purple,
+                  title: 'Message',
+                  subtitle: 'Envoyer un message à l\'entreprise pour ce service',
+                  onTap: () { Navigator.pop(context); _startConversationWithEntreprise(service); },
+                ),
               ]),
             ),
             const SizedBox(height: 20),
@@ -636,7 +676,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
-
+  
+  
   Widget _buildContactButton({required IconData icon, required Color color, required String title, required String subtitle, required VoidCallback onTap}) {
     return Material(
       color: Colors.transparent,
@@ -877,7 +918,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  // ─── Reste des méthodes (inchangées) ───────────────────────────────────────
   Widget _buildSearchResults() {
     if (_searchResults.isEmpty) {
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -892,8 +932,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       padding: const EdgeInsets.all(16),
       itemCount: _searchResults.length,
       itemBuilder: (_, index) {
-        final item = _searchResults[index];
+        final item      = _searchResults[index];
         final isService = item['type'] == 'service';
+        final imageUrl  = isService
+            ? ((item['medias'] as List?)?.isNotEmpty == true ? item['medias'].first : null)
+            : item['logo'];
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           elevation: 2,
@@ -904,21 +947,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(children: [
-                Container(
-                  width: 60, height: 60,
-                  decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(12),
-                      image: item['logo'] != null || (isService && item['medias'] != null && (item['medias'] as List).isNotEmpty)
-                          ? DecorationImage(image: NetworkImage(isService ? (item['medias'] as List).first : item['logo']), fit: BoxFit.cover)
-                          : null),
-                  child: (item['logo'] == null && (!isService || ((item['medias'] as List?)?.isEmpty ?? true))) ? Icon(isService ? Icons.build : Icons.business, size: 24, color: Colors.grey[400]) : null,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: CachedImage(
+                    url: imageUrl?.toString(),
+                    width: 60, height: 60,
+                    errorWidget: Container(
+                      width: 60, height: 60,
+                      color: Colors.grey[200],
+                      child: Icon(isService ? Icons.build : Icons.business, size: 24, color: Colors.grey[400]),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(item['name'] ?? '', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
                   Row(children: [
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: isService ? Colors.blue.withOpacity(0.1) : Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Text(isService ? 'Service' : 'Entreprise', style: TextStyle(fontSize: 11, color: isService ? Colors.blue : Colors.green, fontWeight: FontWeight.w600))),
-                    if (isService && item['price'] != null) ...[const SizedBox(width: 8), Text('${item['price']} FCFA', style: TextStyle(fontSize: 12, color: AppConstants.primaryRed, fontWeight: FontWeight.w600))],
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(color: isService ? Colors.blue.withOpacity(0.1) : Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                      child: Text(isService ? 'Service' : 'Entreprise', style: TextStyle(fontSize: 11, color: isService ? Colors.blue : Colors.green, fontWeight: FontWeight.w600)),
+                    ),
+                    if (isService && item['price'] != null) ...[
+                      const SizedBox(width: 8),
+                      Text('${item['price']} FCFA', style: TextStyle(fontSize: 12, color: AppConstants.primaryRed, fontWeight: FontWeight.w600)),
+                    ],
                   ]),
                 ])),
                 Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[400]),
@@ -988,11 +1042,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final entreprise    = service['entreprise'] ?? {};
     final hasPromo      = service['has_promo'] ?? false;
     final isPromoActive = service['is_promo_active'] ?? false;
-    final medias        = service['medias'] is List ? service['medias'] : [];
+    final medias        = service['medias'] is List ? List<String>.from(service['medias']) : <String>[];
     final curIdx        = _currentImageIndex[index] ?? 0;
-    final int totalReviews   = (service['total_reviews'] as num?)?.toInt() ?? 0;
-    final double avgRating   = totalReviews > 0 ? (service['average_rating'] as num?)?.toDouble() ?? 0.0 : 0.0;
-
+    final int totalReviews  = (service['total_reviews'] as num?)?.toInt() ?? 0;
+    final double avgRating  = totalReviews > 0 ? (service['average_rating'] as num?)?.toDouble() ?? 0.0 : 0.0;
+  
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       child: Card(
@@ -1001,26 +1055,70 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Stack(children: [
+            // ── Image principale (cachée sur disque) ──────────────────────
             ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-              child: Container(
-                height: 160, width: double.infinity, color: Colors.grey[200],
+              child: SizedBox(
+                height: 160,
+                width: double.infinity,
                 child: medias.isNotEmpty
-                    ? Image.network(medias[curIdx % medias.length], fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])))
-                    : Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400]))),
+                    ? CachedImage(
+                        url: medias[curIdx % medias.length],
+                        fit: BoxFit.cover,
+                        errorWidget: Container(
+                          color: Colors.grey[200],
+                          child: Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])),
+                        ),
+                      )
+                    : Container(
+                        color: Colors.grey[200],
+                        child: Center(child: Icon(Icons.image_not_supported, size: 40, color: Colors.grey[400])),
+                      ),
+              ),
             ),
+  
+            // ── Indicateurs carousel ──────────────────────────────────────
             if (medias.length > 1)
-              Positioned(bottom: 8, left: 0, right: 0,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(medias.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 2), width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: i == curIdx % medias.length ? Colors.white : Colors.white.withOpacity(0.5)))))),
+              Positioned(
+                bottom: 8, left: 0, right: 0,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(medias.length, (i) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    width: i == curIdx % medias.length ? 16 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: i == curIdx % medias.length ? BoxShape.rectangle : BoxShape.circle,
+                      borderRadius: i == curIdx % medias.length ? BorderRadius.circular(3) : null,
+                      color: i == curIdx % medias.length ? Colors.white : Colors.white.withOpacity(0.5),
+                    ),
+                  )),
+                ),
+              ),
+  
+            // ── Badge promo ───────────────────────────────────────────────
             if (hasPromo && isPromoActive)
-              Positioned(top: 8, left: 8, child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)), child: Text('-${service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)))),
+              Positioned(
+                top: 8, left: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)),
+                  child: Text('-${service['discount_percentage'] ?? 0}%', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+              ),
+  
+            // ── Badge rating ──────────────────────────────────────────────
             if (totalReviews > 0)
               Positioned(
                 top: 8, right: 8,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.65), borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))]),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.65),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))],
+                  ),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
                     const SizedBox(width: 3),
@@ -1031,11 +1129,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
           ]),
+  
+          // ── Corps de la carte ─────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(width: 40, height: 40, decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10), image: entreprise['logo'] != null ? DecorationImage(image: NetworkImage(entreprise['logo']), fit: BoxFit.cover) : null), child: entreprise['logo'] == null ? Icon(Icons.business, size: 20, color: Colors.grey[600]) : null),
+                // Logo entreprise
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: CachedImage(
+                    url: entreprise['logo']?.toString(),
+                    width: 40, height: 40, fit: BoxFit.cover,
+                    errorWidget: Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(10)),
+                      child: Icon(Icons.business, size: 20, color: Colors.grey[600]),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(service['name'] ?? 'Service', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -1047,23 +1159,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   Row(children: [
                     Icon(Icons.access_time, size: 14, color: Colors.grey[500]),
                     const SizedBox(width: 4),
-                    Text(service['is_always_open'] == true ? '24h/24' : service['start_time'] != null && service['end_time'] != null ? '${service['start_time']} - ${service['end_time']}' : 'Horaires variables', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                    Text(
+                      service['is_always_open'] == true ? '24h/24' : service['start_time'] != null && service['end_time'] != null ? '${service['start_time']} - ${service['end_time']}' : 'Horaires variables',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
                   ]),
                 ])),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (service['is_price_on_request'] == true)
-                    Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)), child: Text('Sur devis', style: TextStyle(fontSize: 11, color: Colors.blue[700], fontWeight: FontWeight.w600)))
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)),
+                      child: Text('Sur devis', style: TextStyle(fontSize: 11, color: Colors.blue[700], fontWeight: FontWeight.w600)),
+                    )
                   else if (hasPromo && isPromoActive)
-                    Column(children: [Text('${service['price_promo']} FCFA', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppConstants.primaryRed)), Text('${service['price']} FCFA', style: TextStyle(fontSize: 11, color: Colors.grey[500], decoration: TextDecoration.lineThrough))])
+                    Column(children: [
+                      Text('${service['price_promo']} FCFA', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppConstants.primaryRed)),
+                      Text('${service['price']} FCFA', style: TextStyle(fontSize: 11, color: Colors.grey[500], decoration: TextDecoration.lineThrough)),
+                    ])
                   else
                     Text(service['price'] != null ? '${service['price']} FCFA' : '---', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppConstants.primaryRed)),
                 ]),
               ]),
               const SizedBox(height: 12),
               Row(children: [
-                Expanded(child: ElevatedButton.icon(onPressed: () => _showContactModal(service), icon: const Icon(Icons.contact_phone, size: 16), label: const Text('Contacter'), style: ElevatedButton.styleFrom(backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)))),
+                Expanded(child: ElevatedButton.icon(
+                  onPressed: () => _showContactModal(service),
+                  icon: const Icon(Icons.contact_phone, size: 16),
+                  label: const Text('Contacter'),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
+                )),
                 const SizedBox(width: 8),
-                Expanded(child: OutlinedButton.icon(onPressed: () => _showServiceDetails(service), icon: const Icon(Icons.info_outline, size: 16), label: const Text('Détails'), style: OutlinedButton.styleFrom(foregroundColor: AppConstants.primaryRed, side: const BorderSide(color: AppConstants.primaryRed), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)))),
+                Expanded(child: OutlinedButton.icon(
+                  onPressed: () => _showServiceDetails(service),
+                  icon: const Icon(Icons.info_outline, size: 16),
+                  label: const Text('Détails'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppConstants.primaryRed, side: const BorderSide(color: AppConstants.primaryRed), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
+                )),
               ]),
             ]),
           ),
@@ -1072,25 +1204,44 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+
   Widget _buildEntreprisesList() => SizedBox(height: 200, child: ListView.builder(scrollDirection: Axis.horizontal, itemCount: _entreprises.length, itemBuilder: (_, i) => _buildEntrepriseCard(_entreprises[i])));
 
   Widget _buildEntrepriseCard(Map<String, dynamic> entreprise) {
     return Container(
-      width: 160, margin: const EdgeInsets.only(right: 12),
+      width: 160,
+      margin: const EdgeInsets.only(right: 12),
       child: Card(
-        elevation: 2, shadowColor: Colors.black.withOpacity(0.05), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 2,
+        shadowColor: Colors.black.withOpacity(0.05),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: InkWell(
           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => EntrepriseDetailScreen(entreprise: entreprise))),
           borderRadius: BorderRadius.circular(12),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), child: Container(height: 100, width: double.infinity, color: Colors.grey[200],
-                child: entreprise['logo'] != null && entreprise['logo'].toString().isNotEmpty
-                    ? Image.network(entreprise['logo'], fit: BoxFit.cover, errorBuilder: (_, __, ___) => Center(child: Icon(Icons.business, size: 30, color: Colors.grey[400])))
-                    : Center(child: Icon(Icons.business, size: 30, color: Colors.grey[400])))),
-            Padding(padding: const EdgeInsets.all(8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(entreprise['name'] ?? 'Entreprise', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 4),
-            ])),
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              child: CachedImage(
+                url: entreprise['logo']?.toString(),
+                width: double.infinity,
+                height: 100,
+                fit: BoxFit.cover,
+                errorWidget: Container(
+                  height: 100,
+                  color: Colors.grey[200],
+                  child: Center(child: Icon(Icons.business, size: 30, color: Colors.grey[400])),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                entreprise['name'] ?? 'Entreprise',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ]),
         ),
       ),
