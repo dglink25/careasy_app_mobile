@@ -586,7 +586,7 @@ MENTIONS LÉGALES
 Application : CarEasy
 Éditeur : CarEasy Team
 Email : careasy26@gmail.com
-Site : www.careasy.com
+Site : https://careasy.cap-epac.bj
 
 DIRECTEUR DE LA PUBLICATION
 CarEasy Team
