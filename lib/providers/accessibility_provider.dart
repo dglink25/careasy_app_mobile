@@ -5,8 +5,8 @@ class AccessibilityProvider extends ChangeNotifier {
   static const String _kScaleKey = 'text_scale_factor';
 
   // ── Valeurs disponibles (5 niveaux) ───────────────────────────────────────
-  static const List<double> scales = [0.85, 0.95, 1.0, 1.15, 1.30, 1.45, 2.0];
-  static const List<String> scaleLabels = ['Très peu', 'Petit', 'Moyen', 'Normal', 'Grand', 'Plus Grand', 'Très grand'];
+  static const List<double> scales = [0.85, 0.95, 1.0, 1.15, 1.30, 1.45];
+  static const List<String> scaleLabels = [ 'Très peu', 'Petit', 'Moyen', 'Normal', 'Grand', 'Très grand'];
 
   double _scaleFactor = 1.0;
 
