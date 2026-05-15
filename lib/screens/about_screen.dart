@@ -124,8 +124,8 @@ class _AboutScreenState extends State<AboutScreen> {
           const SizedBox(height: 8),
           _buildInfoRow('Année', '2026', isSmallScreen),
           const SizedBox(height: 8),
-          _buildInfoRow('Site web', 'www.careasy.com', isSmallScreen,
-              isLink: true, onTap: () => _launchUrl('https://www.careasy.com')),
+          _buildInfoRow('Site web', 'https://careasy.cap-epac.bj', isSmallScreen,
+              isLink: true, onTap: () => _launchUrl('https://careasy.cap-epac.bj')),
         ],
       ),
     );
