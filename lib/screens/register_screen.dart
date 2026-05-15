@@ -621,9 +621,12 @@ class _RegisterScreenState extends State<RegisterScreen>
                               width: 24,
                               height: 24,
                               margin: const EdgeInsets.only(right: 12),
-                              child: const Icon(Icons.g_mobiledata,
-                                  size: 28, color: Color(0xFFDB4437)),
+                              child: Image.asset(
+                                'assets/images/google_logo.png',
+                                fit: BoxFit.contain,
+                              ),
                             ),
+
                             Text(
                               'Continuer avec Google',
                               style: TextStyle(
