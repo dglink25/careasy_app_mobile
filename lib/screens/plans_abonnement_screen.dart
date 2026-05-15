@@ -172,9 +172,18 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
 
         if (result == null) return;
         if (result.success) {
-          await _loadAbonnements();
-          _showResultSheet(success: true, ref: result.reference, planName: plan['name'] ?? '');
-        } else {
+            _showResultSheet(success: true, ref: result.reference, planName: plan['name'] ?? '');
+            _verifierEtRecharger(result.reference);
+            // Recharger en arrière-plan avec un délai pour laisser le temps au callback
+            Future.delayed(const Duration(seconds: 3), () async {
+                if (mounted) await _loadAbonnements();
+            });
+            // Second retry à 8s au cas où le webhook POST arrive en retard
+            Future.delayed(const Duration(seconds: 8), () async {
+                if (mounted) await _loadAbonnements();
+            });
+        }
+        else {
           _showResultSheet(success: false, ref: result.reference, planName: plan['name'] ?? '');
         }
         return;
@@ -182,6 +191,30 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
       _err(b['message'] ?? 'Erreur d\'initiation du paiement');
     } catch (_) { _err('Erreur de connexion'); }
     finally { if (mounted) _set(() => _initiating = false); }
+  }
+
+  Future<void> _verifierEtRecharger(String reference) async {
+      // Polling : jusqu'à 5 tentatives espacées de 3s
+      for (int i = 0; i < 5; i++) {
+          await Future.delayed(const Duration(seconds: 3));
+          if (!mounted) return;
+          try {
+              final token = await _storage.read(key: 'auth_token');
+              final res = await http.get(
+                  Uri.parse('${AppConstants.apiBaseUrl}/paiements/verifier/$reference'),
+                  headers: _hdr(token),
+              );
+              if (res.statusCode == 200) {
+                  final b = jsonDecode(res.body);
+                  if (b['data']?['paiement']?['statut'] == 'succes') {
+                      await _loadAbonnements();
+                      return; // abonnement créé, on arrête le polling
+                  }
+              }
+          } catch (_) {}
+      }
+      // Dernier rechargement de toute façon
+      if (mounted) await _loadAbonnements();
   }
 
   // ── Result bottom sheet ────────────────────────────────────────────────────────
@@ -198,6 +231,7 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
         onContinue: () {
           Navigator.pop(context);
           if (success) _tabCtrl.animateTo(1);
+          _loadAbonnements();
         },
       ),
     );
