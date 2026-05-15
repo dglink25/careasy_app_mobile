@@ -7,14 +7,15 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:path/path.dart' as path;
-
+import '../widgets/accessibility_button.dart';
 import '../providers/auth_provider.dart';
 import '../providers/message_provider.dart';
 import '../utils/constants.dart';
-import '../widgets/connectivity_banner.dart';         
+import '../widgets/connectivity_banner.dart';
 import 'edit_profile_screen.dart';
 import 'welcome_screen.dart';
 import 'carai_screen.dart';
+import '../providers/accessibility_provider.dart';
 
 import 'notifications_settings_screen.dart' as notifications;
 import 'security_settings_screen.dart' as security;
@@ -49,7 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
-  int  _currentIndex = 4;
+  int _currentIndex = 4;
 
   @override
   void initState() {
@@ -57,7 +58,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadUserDataFromCache().then((_) => _refreshUserDataFromApi());
   }
 
-  // ─── Cache local (rapide) ─────────────────────────────────────────────────
   Future<void> _loadUserDataFromCache() async {
     try {
       final s = await _storage.read(key: 'user_data');
@@ -65,7 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final decoded = jsonDecode(s);
         if (mounted) {
           setState(() {
-            _userData  = Map<String, dynamic>.from(decoded as Map);
+            _userData = Map<String, dynamic>.from(decoded as Map);
             _isLoading = false;
           });
         }
@@ -78,7 +78,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── Rafraîchissement API ────────────────────────────────────────────────
   Future<void> _refreshUserDataFromApi() async {
     try {
       final token = await _storage.read(key: 'auth_token');
@@ -88,19 +87,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept':        'application/json',
+          'Accept': 'application/json',
         },
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        // Le backend renvoie { success, user: {...} } OU les champs directement
         final userData = (data['user'] as Map<String, dynamic>?) ?? data;
         if (userData.isNotEmpty) {
           await _storage.write(key: 'user_data', value: jsonEncode(userData));
           if (mounted) {
             setState(() {
-              _userData  = userData;
+              _userData = userData;
               _isLoading = false;
             });
           }
@@ -111,19 +109,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // Méthode publique pour le bouton refresh
   Future<void> _loadUserData() async {
     if (mounted) setState(() => _isLoading = true);
     await _loadUserDataFromCache();
     await _refreshUserDataFromApi();
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final size          = MediaQuery.of(context).size;
+    final size = MediaQuery.of(context).size;
     final isSmallScreen = size.width < 360;
-    final isTablet      = size.width >= 600;
+    final isTablet = size.width >= 600;
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -150,16 +146,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      // ════════════════════════════════════════════════════════════════════════
-      // BODY : ConnectivityBanner + contenu principal dans une Column
-      // ════════════════════════════════════════════════════════════════════════
       body: Column(
         children: [
-          // ── Bannière hors-ligne (s'affiche automatiquement si pas de réseau)
           ConnectivityBanner(
             pingUrl: '${AppConstants.apiBaseUrl}/test',
           ),
-          // ── Contenu principal
           Expanded(
             child: _isLoading && _userData == null
                 ? const Center(
@@ -178,7 +169,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hasEnt = _userData?['has_entreprise'] ?? false;
     if (hasEnt) {
       Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const entreprises.MesEntreprisesScreen()));
+          MaterialPageRoute(
+              builder: (_) => const entreprises.MesEntreprisesScreen()));
     } else {
       _showCreateEntrepriseDialog();
     }
@@ -188,7 +180,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Créer votre entreprise',
             style: TextStyle(fontWeight: FontWeight.bold)),
         content: const Text(
@@ -217,7 +210,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── CONTENU ──────────────────────────────────────────────────────────────
   Widget _buildContent(
       BuildContext context, Size size, bool isSmallScreen, bool isTablet) {
     return Container(
@@ -226,7 +218,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
                   flex: 3,
-                  child: _buildProfileSection(context, size, isSmallScreen)),
+                  child:
+                      _buildProfileSection(context, size, isSmallScreen)),
               const SizedBox(width: 20),
               Expanded(
                   flex: 7,
@@ -243,7 +236,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── SECTION PROFIL ───────────────────────────────────────────────────────
   Widget _buildProfileSection(
       BuildContext context, Size size, bool isSmallScreen) {
     return Container(
@@ -301,8 +293,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: AppConstants.primaryRed,
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2)),
-                child:
-                    const Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                child: const Icon(Icons.camera_alt,
+                    color: Colors.white, size: 16),
               ),
             ),
           ),
@@ -324,7 +316,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (_userData?['phone'] != null &&
             _userData!['phone'].toString().isNotEmpty)
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(Icons.phone, size: isSmallScreen ? 12 : 14, color: Colors.grey[500]),
+            Icon(Icons.phone,
+                size: isSmallScreen ? 12 : 14, color: Colors.grey[500]),
             const SizedBox(width: 4),
             Text(
               _userData!['phone'],
@@ -355,8 +348,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: OutlinedButton.styleFrom(
             foregroundColor: AppConstants.primaryRed,
             side: const BorderSide(color: AppConstants.primaryRed),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
             minimumSize: Size(isSmallScreen ? 150 : 200, 40),
           ),
         ),
@@ -365,7 +358,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildSettingsList(BuildContext context, bool isSmallScreen) {
-    final userRole      = _userData?['role'] ?? '';
+    final userRole = _userData?['role'] ?? '';
     final isPrestataire = userRole == 'prestataire';
 
     return Container(
@@ -380,6 +373,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
       child: Column(children: [
+        // ── Compte ──────────────────────────────────────────────────────────
         _buildSectionHeader('Compte', Icons.account_circle),
         _buildSettingsItem(
             icon: Icons.person_outline,
@@ -403,9 +397,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               subtitle: 'Gérer votre abonnement',
               onTap: () => _navigateToPlansAbonnement(context),
               isSmallScreen: isSmallScreen),
+
         _buildDivider(),
 
+        // ── Préférences ──────────────────────────────────────────────────────
         _buildSectionHeader('Préférences', Icons.settings),
+
+        _buildSettingsItem(
+          icon: Icons.accessibility_new_rounded,
+          title: 'Accessibilité',
+          subtitle: 'Taille du texte, lisibilité',
+          onTap: () => AccessibilitySheet.show(context),
+          isSmallScreen: isSmallScreen,
+          trailing: Consumer<AccessibilityProvider>(
+            builder: (_, acc, __) => Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppConstants.primaryRed.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                acc.currentLabel,
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: AppConstants.primaryRed,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+
         _buildSettingsItem(
             icon: Icons.notifications_none,
             title: 'Notifications',
@@ -427,6 +451,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             isSmallScreen: isSmallScreen),
         _buildDivider(),
 
+        // ── Support ──────────────────────────────────────────────────────────
         _buildSectionHeader('Support', Icons.help_outline),
         _buildSettingsItem(
             icon: Icons.help_outline,
@@ -464,7 +489,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── DÉCONNEXION ──────────────────────────────────────────────────────────
+  // ─── Déconnexion ──────────────────────────────────────────────────────────
   Future<void> _logout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -472,7 +497,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Déconnexion'),
-        content: const Text('Voulez-vous vraiment vous déconnecter ?'),
+        content:
+            const Text('Voulez-vous vraiment vous déconnecter ?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -495,7 +521,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
-          child: CircularProgressIndicator(color: AppConstants.primaryRed)),
+          child: CircularProgressIndicator(
+              color: AppConstants.primaryRed)),
     );
 
     try {
@@ -506,7 +533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Uri.parse('${AppConstants.apiBaseUrl}/logout'),
             headers: {
               'Authorization': 'Bearer $token',
-              'Accept':        'application/json',
+              'Accept': 'application/json',
             },
           ).timeout(const Duration(seconds: 5));
         } catch (_) {}
@@ -519,9 +546,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _storage.delete(key: 'login_time');
 
       if (mounted) {
-        try { context.read<MessageProvider>().stopOnlineTimer(); } catch (_) {}
-        try { context.read<AuthProvider>().clearError();         } catch (_) {}
-        try { context.read<NotificationProvider>().stopPolling();} catch (_) {}
+        try {
+          context.read<MessageProvider>().stopOnlineTimer();
+        } catch (_) {}
+        try {
+          context.read<AuthProvider>().clearError();
+        } catch (_) {}
+        try {
+          context.read<NotificationProvider>().stopPolling();
+        } catch (_) {}
       }
     } catch (_) {}
 
@@ -534,12 +567,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── PHOTO DE PROFIL ──────────────────────────────────────────────────────
+  // ─── Photo de profil ──────────────────────────────────────────────────────
   void _showImagePickerOptions(BuildContext context) {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => Container(
         padding: const EdgeInsets.all(20),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -551,23 +585,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 20),
           const Text('Photo de profil',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              style:
+                  TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 20),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-            _buildImagePickerOption(
-                icon: Icons.photo_library,
-                label: 'Galerie',
-                onTap: () => _pickImage(ImageSource.gallery, ctx)),
-            _buildImagePickerOption(
-                icon: Icons.camera_alt,
-                label: 'Appareil photo',
-                onTap: () => _pickImage(ImageSource.camera, ctx)),
-            _buildImagePickerOption(
-                icon: Icons.delete,
-                label: 'Supprimer',
-                onTap: () => _deleteProfilePhoto(ctx),
-                color: Colors.red),
-          ]),
+          Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildImagePickerOption(
+                    icon: Icons.photo_library,
+                    label: 'Galerie',
+                    onTap: () => _pickImage(ImageSource.gallery, ctx)),
+                _buildImagePickerOption(
+                    icon: Icons.camera_alt,
+                    label: 'Appareil photo',
+                    onTap: () => _pickImage(ImageSource.camera, ctx)),
+                _buildImagePickerOption(
+                    icon: Icons.delete,
+                    label: 'Supprimer',
+                    onTap: () => _deleteProfilePhoto(ctx),
+                    color: Colors.red),
+              ]),
           const SizedBox(height: 20),
           TextButton(
               onPressed: () => Navigator.pop(ctx),
@@ -606,8 +643,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Navigator.pop(ctx);
     try {
       final picker = ImagePicker();
-      final file   = await picker.pickImage(
-          source: source, maxWidth: 1024, maxHeight: 1024, imageQuality: 85);
+      final file = await picker.pickImage(
+          source: source,
+          maxWidth: 1024,
+          maxHeight: 1024,
+          imageQuality: 85);
       if (file != null) await _uploadProfilePhoto(File(file.path));
     } catch (e) {
       _showError('Erreur lors de la sélection');
@@ -619,28 +659,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(
-            child: CircularProgressIndicator(color: AppConstants.primaryRed)));
+            child: CircularProgressIndicator(
+                color: AppConstants.primaryRed)));
     try {
       final token = await _storage.read(key: 'auth_token');
-      var req = http.MultipartRequest(
-          'POST',
+      var req = http.MultipartRequest('POST',
           Uri.parse('${AppConstants.apiBaseUrl}/user/profile-photo'));
       req.headers['Authorization'] = 'Bearer $token';
       req.files.add(await http.MultipartFile.fromPath(
           'profile_photo', imageFile.path,
           filename: path.basename(imageFile.path),
           contentType: MediaType('image', 'jpeg')));
-      var res  = await req.send();
+      var res = await req.send();
       var body = jsonDecode(await res.stream.bytesToString());
       if (context.mounted) Navigator.pop(context);
       if (res.statusCode == 200 && body['profile_photo_url'] != null) {
         setState(() {
           _userData!['profile_photo_url'] = body['profile_photo_url'];
         });
-        await _storage.write(key: 'user_data', value: jsonEncode(_userData));
+        await _storage.write(
+            key: 'user_data', value: jsonEncode(_userData));
         _showSuccess('Photo de profil mise à jour');
       } else {
-        _showError(body['message'] ?? 'Erreur lors du téléchargement');
+        _showError(
+            body['message'] ?? 'Erreur lors du téléchargement');
       }
     } catch (e) {
       if (context.mounted) Navigator.pop(context);
@@ -665,7 +707,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red, foregroundColor: Colors.white),
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white),
             child: const Text('Supprimer'),
           ),
         ],
@@ -677,20 +720,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(
-            child: CircularProgressIndicator(color: AppConstants.primaryRed)));
+            child: CircularProgressIndicator(
+                color: AppConstants.primaryRed)));
     try {
       final token = await _storage.read(key: 'auth_token');
-      final resp  = await http.delete(
+      final resp = await http.delete(
         Uri.parse('${AppConstants.apiBaseUrl}/user/profile-photo'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept':        'application/json',
+          'Accept': 'application/json',
         },
       );
       if (context.mounted) Navigator.pop(context);
       if (resp.statusCode == 200) {
-        setState(() { _userData!['profile_photo_url'] = null; });
-        await _storage.write(key: 'user_data', value: jsonEncode(_userData));
+        setState(() {
+          _userData!['profile_photo_url'] = null;
+        });
+        await _storage.write(
+            key: 'user_data', value: jsonEncode(_userData));
         _showSuccess('Photo de profil supprimée');
       } else {
         _showError('Erreur lors de la suppression');
@@ -701,53 +748,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ─── NAVIGATION ─────────────────────────────────────────────────────────
-  void _navigateToEditProfile(BuildContext context) {
-    Navigator.push(
+  // ─── Navigation ──────────────────────────────────────────────────────────
+  void _navigateToEditProfile(BuildContext context) => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => EditProfileScreen(userData: _userData)),
+      ).then((_) => _loadUserData());
+
+  void _navigateToMesEntreprises(BuildContext context) => Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) => EditProfileScreen(userData: _userData)),
-    ).then((_) => _loadUserData()); // ← synchronisation au retour
-  }
+          builder: (_) => const entreprises.MesEntreprisesScreen()));
 
-  void _navigateToMesEntreprises(BuildContext context) =>
-      Navigator.push(context,
-          MaterialPageRoute(
-              builder: (_) => const entreprises.MesEntreprisesScreen()));
-
-  void _navigateToPlansAbonnement(BuildContext context) =>
-      Navigator.push(context,
-          MaterialPageRoute(
-              builder: (_) => const plans.PlansAbonnementScreen()));
+  void _navigateToPlansAbonnement(BuildContext context) => Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => const plans.PlansAbonnementScreen()));
 
   void _navigateToNotificationsSettings(BuildContext context) =>
-      Navigator.push(context,
+      Navigator.push(
+          context,
           MaterialPageRoute(
               builder: (_) =>
                   const notifications.NotificationsSettingsScreen()));
 
   void _navigateToAppearanceSettings(BuildContext context) =>
-      Navigator.push(context,
+      Navigator.push(
+          context,
           MaterialPageRoute(
               builder: (_) =>
                   const appearance.AppearanceSettingsScreen()));
 
-  void _navigateToSecuritySettings(BuildContext context) =>
-      Navigator.push(
+  void _navigateToSecuritySettings(BuildContext context) => Navigator.push(
         context,
         MaterialPageRoute(
             builder: (_) => const security.SecuritySettingsScreen()),
-      ).then((_) => _loadUserData()); // ← synchronisation : email/phone peut avoir changé
+      ).then((_) => _loadUserData());
 
-  void _navigateToHelp(BuildContext context) =>
-      Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const help.HelpScreen()));
+  void _navigateToHelp(BuildContext context) => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => const help.HelpScreen()));
 
-  void _navigateToAbout(BuildContext context) =>
-      Navigator.push(context,
-          MaterialPageRoute(builder: (_) => const about.AboutScreen()));
+  void _navigateToAbout(BuildContext context) => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => const about.AboutScreen()));
 
-  // ─── WIDGETS UTILITAIRES ─────────────────────────────────────────────────
+  // ─── Widgets utilitaires ─────────────────────────────────────────────────
   Widget _buildSectionHeader(String title, IconData icon) {
     return Container(
       width: double.infinity,
@@ -764,6 +808,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ✅ Méthode unique — le paramètre [trailing] est optionnel
   Widget _buildSettingsItem({
     required IconData icon,
     required String title,

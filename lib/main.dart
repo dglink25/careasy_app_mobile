@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -12,7 +13,8 @@ import 'providers/service_provider.dart';
 import 'providers/theme_provider.dart';
 import 'providers/rendez_vous_provider.dart';
 import 'providers/notification_provider.dart';
-import 'services/notification_service.dart'; // ← firebaseMessagingBackgroundHandler est ici
+import 'providers/accessibility_provider.dart';          
+import 'services/notification_service.dart';
 import 'services/pusher_service.dart';
 import 'screens/splash_screen.dart';
 import 'screens/welcome_screen.dart';
@@ -34,7 +36,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── 1. Firebase (OBLIGATOIRE en premier) ──────────────────────────────────
+  // ── 1. Firebase ────────────────────────────────────────────────────────────
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
@@ -42,20 +44,27 @@ void main() async {
     debugPrint('[main] Firebase init error: $e');
   }
 
-  // ── 2. Service de notifications locales ───────────────────────────────────
+  // ── 2. Notifications locales ───────────────────────────────────────────────
   try {
     await NotificationService().initialize();
   } catch (e) {
     debugPrint('[main] NotificationService init error: $e');
   }
 
-  // ── 3. Localisation dates françaises ─────────────────────────────────────
+  // ── 3. Localisation française ──────────────────────────────────────────────
   await initializeDateFormatting('fr_FR', null);
 
-  // ── 4. Lancer l'application ───────────────────────────────────────────────
+  // ── 4. Charger la préférence d'accessibilité AVANT runApp ─────────────────
+  final accessibilityProvider = AccessibilityProvider();
+  await accessibilityProvider.load();
+
+  // ── 5. Lancer l'application ────────────────────────────────────────────────
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => ThemeProvider(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider.value(value: accessibilityProvider), // ← NOUVEAU
+      ],
       child: const CarEasyApp(),
     ),
   );
@@ -74,8 +83,8 @@ class CarEasyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => RendezVousProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
       ],
-      child: Consumer<ThemeProvider>(
-        builder: (context, themeProvider, _) {
+      child: Consumer2<ThemeProvider, AccessibilityProvider>(
+        builder: (context, themeProvider, accessibility, _) {
           return MaterialApp(
             title: 'CarEasy',
             debugShowCheckedModeBanner: false,
@@ -84,6 +93,23 @@ class CarEasyApp extends StatelessWidget {
             darkTheme: AppTheme.darkTheme,
             navigatorKey: navigatorKey,
             home: const SplashScreen(),
+
+            
+            builder: (context, child) {
+              // Récupérer le scaleFactor depuis le provider (réactif)
+              final scale = context.watch<AccessibilityProvider>().scaleFactor;
+              final mq    = MediaQuery.of(context);
+
+              return MediaQuery(
+                // textScaler remplace textScaleFactor (Flutter 3.3+)
+                // mais on garde les deux pour la compatibilité
+                data: mq.copyWith(
+                  textScaler: TextScaler.linear(scale),
+                ),
+                child: child!,
+              );
+            },
+
             routes: {
               '/welcome'       : (_) => const WelcomeScreen(),
               '/login'         : (_) => const LoginScreen(),
@@ -116,6 +142,7 @@ class CarEasyApp extends StatelessWidget {
     );
   }
 }
+
 void setupNotificationNavigation(BuildContext context) {
   NotificationService().onNotificationTap = (Map<String, dynamic> data) async {
     final type   = data['type']?.toString() ?? '';
@@ -174,7 +201,6 @@ void setupNotificationNavigation(BuildContext context) {
       isOnline: false,
     );
 
-    // Enrichir avec le statut en ligne si possible
     if (senderId.isNotEmpty) {
       try {
         const storage = FlutterSecureStorage(

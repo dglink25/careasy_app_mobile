@@ -21,6 +21,7 @@ import '../providers/rendez_vous_provider.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'carai_screen.dart';
+import '../widgets/accessibility_button.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -150,6 +151,10 @@ class _MessagesScreenState extends State<MessagesScreen>
               onPressed: _reload,
               tooltip: 'Actualiser',
             ),
+
+          if (!_isSearching)
+            const AccessibilityButton(),
+
         ],
       ),
       body: _isSearching ? _buildSearchResults() : _buildConversationList(),

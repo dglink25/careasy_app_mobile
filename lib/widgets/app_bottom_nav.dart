@@ -8,7 +8,6 @@ import '../providers/message_provider.dart';
 import '../providers/rendez_vous_provider.dart';
 import '../utils/constants.dart';
 
-// ── Imports des écrans (lazy — pas de circularité) ───────────────────────────
 import '../screens/home_screen.dart';
 import '../screens/messages_screen.dart';
 import '../screens/rendez_vous/rendez_vous_list_screen.dart';

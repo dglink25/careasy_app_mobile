@@ -34,7 +34,8 @@ import 'map_screen.dart';
 
 import '../widgets/connectivity_home_banner.dart';   
 import '../services/connectivity_service.dart'; 
-import '../services/cache_service.dart';         
+import '../services/cache_service.dart';       
+import '../widgets/accessibility_button.dart';  
 
 
 // ─── Widget étoiles réutilisable ──────────────────────────────────────────────
@@ -722,6 +723,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
           const NotificationBell(),
+          const AccessibilityButton(),
           IconButton(
             icon: const Icon(Icons.map_outlined, color: Colors.white),
             tooltip: 'Carte des entreprises',
