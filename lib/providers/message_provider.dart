@@ -42,6 +42,8 @@ class MessageProvider extends ChangeNotifier {
   String? get error => _error;
   String? get currentUserId => _currentUserId;
 
+  bool get isRealtimeConnected => _pusher.isConnected;
+
   int get totalUnreadCount =>
       _conversations.fold(0, (sum, c) => sum + c.unreadCount);
 
@@ -103,9 +105,6 @@ class MessageProvider extends ChangeNotifier {
         'Content-Type': 'application/json',
       };
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  GETTERS DONNÉES
-  // ══════════════════════════════════════════════════════════════════════════════
   List<MessageModel> getMessages(String convId) =>
       _messages[convId] ?? [];
 
@@ -177,9 +176,6 @@ class MessageProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  STATUT EN LIGNE
-  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> fetchOnlineStatus(String userId) async {
     try {
       final token = await _getToken();
@@ -311,15 +307,6 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  ENVOI DE MESSAGE — VERSION ROBUSTE
-  //
-  //  Corrections apportées :
-  //  1. Retry automatique (2 tentatives) en cas d'erreur réseau
-  //  2. Parsing de la réponse plus souple (JSON mal formé, wrapper data)
-  //  3. Gestion correcte de l'état 'sending' / 'sent' / 'error'
-  //  4. Support de l'annulation de message temporaire en cas d'erreur
-  // ══════════════════════════════════════════════════════════════════════════════
   Future<void> sendMessage(
     String convId, {
     required String type,
@@ -561,45 +548,43 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  RÉCEPTION TEMPS RÉEL — Appelé par PusherService
-  // ══════════════════════════════════════════════════════════════════════════════
-  void receiveMessage(MessageModel msg, String convId) {
-    _messages[convId] ??= [];
+ void receiveMessage(MessageModel msg, String convId) {
+     _messages[convId] ??= [];
 
-    if (msg.isMe) return; // déjà ajouté via sendMessage
+     if (msg.isMe) return; // déjà ajouté via sendMessage
 
-    // Déduplication
-    final alreadyExists = _messages[convId]!.any((m) =>
-        m.id == msg.id ||
-        (msg.temporaryId != null && m.temporaryId == msg.temporaryId));
-    if (alreadyExists) return;
+     // Déduplication
+     final alreadyExists = _messages[convId]!.any((m) =>
+         m.id == msg.id ||
+         (msg.temporaryId != null && m.temporaryId == msg.temporaryId));
+     if (alreadyExists) return;
 
-    _messages[convId]!.add(msg);
-    _messages[convId]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+     _messages[convId]!.add(msg);
+     _messages[convId]!.sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
-    final idx = _conversations.indexWhere((c) => c.id == convId);
-    if (idx != -1) {
-      final old = _conversations[idx];
-      _conversations[idx] = ConversationModel(
-        id: old.id,
-        otherUser: old.otherUser,
-        lastMessage: msg,
-        unreadCount: old.unreadCount + 1,
-        updatedAt: DateTime.now(),
-        serviceName: old.serviceName,
-        entrepriseName: old.entrepriseName,
-        serviceId: old.serviceId,
-        entrepriseId: old.entrepriseId,
-      );
-      _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    } else {
-      loadConversations();
-    }
+     final idx = _conversations.indexWhere((c) => c.id == convId);
+     if (idx != -1) {
+       final old = _conversations[idx];
+       _conversations[idx] = ConversationModel(
+         id: old.id,
+         otherUser: old.otherUser,
+         lastMessage: msg,
+         unreadCount: old.unreadCount + 1,
+         updatedAt: DateTime.now(),
+         serviceName: old.serviceName,
+         entrepriseName: old.entrepriseName,
+         serviceId: old.serviceId,
+         entrepriseId: old.entrepriseId,
+       );
+       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+     } 
+     else {
+      Future.microtask(loadConversations);
+     }
 
-    notifyListeners();
-  }
-
+     notifyListeners();
+   }
+  
   void confirmMessage(
       Map<String, dynamic> data, String convId, String currentUserId) {
     final msgs = _messages[convId];

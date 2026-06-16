@@ -9,6 +9,7 @@ import '../models/conversation_model.dart';
 import '../models/user_model.dart';
 import '../services/notification_service.dart';
 import '../utils/constants.dart';
+import 'pusher_service.dart';
 
 /// Singleton — un seul polling global pour toute l'app
 class MessagePollingService {
@@ -95,13 +96,15 @@ class MessagePollingService {
     // Premier appel immédiat pour initialiser les baselines
     await _initBaselines();
 
-    // Polling conversations toutes les 5 secondes
     _pollingTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _pollNewMessages(),
+      const Duration(seconds: 2),
+      (_) {
+        if (!PusherService().isConnected) {
+          _pollNewMessages();
+        }
+      },
     );
-
-    debugPrint('[Polling] ✓ Timer démarré (5s)');
+    debugPrint('[Polling]  Timer démarré (2s, actif seulement si Pusher down)');
   }
 
   void stop() {

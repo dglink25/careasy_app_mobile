@@ -455,6 +455,8 @@ class PusherService {
 
   bool get isConnected => _isInitialized;
   String? get currentUserId => _currentUserId;
+
+  bool get isReconnecting => _isConnecting;
 }
 
 // ── Référence indirecte à NotificationService ────────────────────────────────
