@@ -24,6 +24,7 @@ import '../models/message_model.dart';
 import '../utils/constants.dart';
 import '../services/notification_service.dart';
 import '../services/message_polling_service.dart';
+import '../services/message_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String conversationId;
@@ -1923,26 +1924,58 @@ class _ChatScreenState extends State<ChatScreen>
       ])));
 
   void _showOptions() => showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(height: 8),
-        ListTile(
-            leading: const Icon(Icons.search, color: AppConstants.primaryRed),
-            title: const Text('Rechercher dans la conversation'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _isSearching = true);
-            }),
-        ListTile(
-            leading: const Icon(Icons.clear_all),
-            title: const Text('Effacer la conversation'),
-            onTap: () {
-              Navigator.pop(context);
-              _showErr('Bientôt disponible');
-            }),
-      ]));
+    context: context,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
+      const SizedBox(height: 8),
+      ListTile(
+          leading: const Icon(Icons.search, color: AppConstants.primaryRed),
+          title: const Text('Rechercher dans la conversation'),
+          onTap: () {
+            Navigator.pop(context);
+            setState(() => _isSearching = true);
+          }),
+      ListTile(
+          leading: const Icon(Icons.delete_outline, color: Colors.red),
+          title: const Text('Supprimer la conversation',
+              style: TextStyle(color: Colors.red)),
+          onTap: () async {
+            Navigator.pop(context);
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (_) => AlertDialog(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                title: const Text('Supprimer la conversation'),
+                content: Text(
+                    'Supprimer la conversation avec ${widget.otherUser.name} ?'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Annuler')),
+                  ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white),
+                      child: const Text('Supprimer')),
+                ],
+              ),
+            );
+            if (confirm == true && mounted) {
+              final success = await MessageService()
+                  .deleteConversation(widget.conversationId);
+              if (mounted) {
+                if (success) {
+                  Navigator.pop(context); // retour vers MessagesScreen
+                } else {
+                  _showErr('Erreur lors de la suppression');
+                }
+              }
+            }
+          }),
+    ]));
 
   Widget _buildEmpty() => Center(
     child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [

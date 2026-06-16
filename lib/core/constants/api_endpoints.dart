@@ -1,5 +1,5 @@
 class ApiEndpoints {
-  static const String baseUrl = 'http://10.31.94.115:8000/api';
+  static const String baseUrl = 'https://careasy.cap-epac.bj/api';
   
   // Auth
   static const String login = '/login';
