@@ -356,7 +356,7 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      'La solution pour ne jamais tomber en panne au Bénin',
+                      'Avec CarEasy vos services automobiles à porter de main',
                       style: TextStyle(
                         fontSize: 14,
                         fontStyle: FontStyle.italic,
