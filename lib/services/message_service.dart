@@ -15,9 +15,7 @@ class MessageService {
   String? _cachedToken;
 
   Future<String?> _getToken() async {
-    if (_cachedToken != null) return _cachedToken;
-    _cachedToken = await _storage.read(key: 'auth_token');
-    return _cachedToken;
+    return await _storage.read(key: 'auth_token');
   }
 
   Future<Map<String, String>> _getHeaders() async {
