@@ -47,7 +47,8 @@ class MessageService {
         ).toList();
       }
       return [];
-    } catch (e) {
+    } 
+    catch (e) {
       print('Erreur getConversations: $e');
       return [];
     }
@@ -55,13 +56,14 @@ class MessageService {
 
   Future<bool> deleteConversation(String conversationId) async {
     try {
-      final token = await _getToken();
-      if (token == null) return false;
-
       final response = await http.delete(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$conversationId'),
         headers: await _getHeaders(),
       );
+
+      print('URL: ${AppConstants.apiBaseUrl}/conversation/$conversationId');
+      print('STATUS: ${response.statusCode}');
+      print('BODY: ${response.body}');
 
       return response.statusCode == 200;
     } catch (e) {

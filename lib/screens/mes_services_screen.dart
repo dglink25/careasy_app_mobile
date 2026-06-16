@@ -176,11 +176,13 @@ class _MesServicesScreenState extends State<MesServicesScreen>
       if (res.statusCode == 200) {
         _showSnack('Service supprimé avec succès');
         _fetchServices();
-      } else {
+      } 
+      else {
         final data = jsonDecode(res.body);
         _showSnack(data['message'] ?? 'Erreur lors de la suppression', isError: true);
       }
-    } catch (_) {
+    } 
+    catch (_) {
       _showSnack('Erreur de connexion', isError: true);
     }
   }

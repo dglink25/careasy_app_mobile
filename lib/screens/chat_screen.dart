@@ -1959,7 +1959,7 @@ class _ChatScreenState extends State<ChatScreen>
                       style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
                           foregroundColor: Colors.white),
-                      child: const Text('Supprimer')),
+                      child: const Text('Oui')),
                 ],
               ),
             );

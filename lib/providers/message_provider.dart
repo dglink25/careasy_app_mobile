@@ -631,9 +631,7 @@ class MessageProvider extends ChangeNotifier {
     if (changed) notifyListeners();
   }
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  INDICATEURS
-  // ══════════════════════════════════════════════════════════════════════════════
+
   Future<void> sendTypingIndicator(String convId, bool isTyping) async {
     try {
       final token = await _getToken();

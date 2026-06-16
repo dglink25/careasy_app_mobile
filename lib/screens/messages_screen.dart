@@ -357,7 +357,7 @@ class _MessagesScreenState extends State<MessagesScreen>
                   backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Supprimer'),
+                child: const Text('Oui'),
               ),
             ],
           ),

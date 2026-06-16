@@ -45,7 +45,13 @@ class ConversationModel {
 
     // ── Dernier message ────────────────────────────────────────────────────
     MessageModel? lastMessage;
-    final rawLast = json['last_message'] ?? json['messages'];
+  
+    final rawLast =
+    json['latest_message'] ??
+    json['latestMessage'] ??
+    json['last_message'] ??
+    json['messages'];
+
     if (rawLast is Map) {
       try {
         lastMessage = MessageModel.fromJson(

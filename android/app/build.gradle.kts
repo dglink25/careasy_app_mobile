@@ -32,7 +32,7 @@ android {
 
     defaultConfig {
         applicationId = "com.careasy.careasy_app_mobile"
-        minSdk = 23 
+        minSdk = flutter.minSdkVersion 
         targetSdk = 34  // Remplacer flutter.targetSdkVersion par une valeur fixe
         versionCode = flutter.versionCode
         versionName = flutter.versionName
