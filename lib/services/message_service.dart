@@ -55,6 +55,23 @@ class MessageService {
     }
   }
 
+  Future<bool> deleteConversation(String conversationId) async {
+    try {
+      final token = await _getToken();
+      if (token == null) return false;
+
+      final response = await http.delete(
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/$conversationId'),
+        headers: await _getHeaders(),
+      );
+
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Erreur deleteConversation: $e');
+      return false;
+    }
+  }
+
   // Récupérer les messages d'une conversation
   Future<List<MessageModel>> getMessages(String conversationId) async {
     try {

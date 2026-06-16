@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:convert';
 import '../main.dart';
 import '../services/message_polling_service.dart';
+import '../services/message_service.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
 import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
 import '../providers/rendez_vous_provider.dart';
@@ -331,163 +332,193 @@ class _MessagesScreenState extends State<MessagesScreen>
     final hasUnread = conv.unreadCount > 0;
     final isOnline = provider.getUserOnlineStatus(conv.otherUser.id) ||
         conv.otherUser.isOnline;
+    final contextLabel = conv.contextLabel;
 
-    // ── Label contextuel (vrai nom du service ou de l'entreprise) ─────────
-    final contextLabel = conv.contextLabel; // null si aucun service attaché
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: hasUnread ? 3 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: hasUnread
-            ? BorderSide(
-                color: AppConstants.primaryRed.withOpacity(0.3), width: 1)
-            : BorderSide.none,
-      ),
-      child: InkWell(
-        onTap: () => _openChat(conv, provider),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(children: [
-            // ── Avatar + indicateur en ligne ─────────────────────────────
-            Stack(children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.grey[200],
-                backgroundImage: conv.otherUser.photoUrl != null
-                    ? NetworkImage(conv.otherUser.photoUrl!)
-                    : null,
-                child: conv.otherUser.photoUrl == null
-                    ? Text(
-                        conv.otherUser.name.isNotEmpty
-                            ? conv.otherUser.name[0].toUpperCase()
-                            : '?',
-                        style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: AppConstants.primaryRed))
-                    : null,
+    return Dismissible(
+      key: Key('conv_${conv.id}'),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async {
+        return await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Supprimer la conversation'),
+            content: Text(
+              'Supprimer la conversation avec ${conv.otherUser.name} ?\nTous les messages seront perdus.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Annuler'),
               ),
-              if (isOnline)
-                Positioned(
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Supprimer'),
+              ),
+            ],
+          ),
+        );
+      },
+      onDismissed: (_) async {
+        final success = await MessageService().deleteConversation(conv.id);
+        if (mounted) {
+          if (success) {
+            provider.loadConversations();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Conversation avec ${conv.otherUser.name} supprimée'),
+                backgroundColor: Colors.green,
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          } else {
+            provider.loadConversations(); // réafficher si échec
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Erreur lors de la suppression'),
+                backgroundColor: Colors.red,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        }
+      },
+      background: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.delete_outline, color: Colors.white, size: 28),
+            SizedBox(height: 4),
+            Text('Supprimer',
+                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        elevation: hasUnread ? 3 : 1,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: hasUnread
+              ? BorderSide(color: AppConstants.primaryRed.withOpacity(0.3), width: 1)
+              : BorderSide.none,
+        ),
+        child: InkWell(
+          onTap: () => _openChat(conv, provider),
+          borderRadius: BorderRadius.circular(12),
+          // ... tout le contenu Padding inchangé
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(children: [
+              Stack(children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Colors.grey[200],
+                  backgroundImage: conv.otherUser.photoUrl != null
+                      ? NetworkImage(conv.otherUser.photoUrl!) : null,
+                  child: conv.otherUser.photoUrl == null
+                      ? Text(
+                          conv.otherUser.name.isNotEmpty
+                              ? conv.otherUser.name[0].toUpperCase() : '?',
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.bold,
+                              color: AppConstants.primaryRed))
+                      : null,
+                ),
+                if (isOnline) Positioned(
                   bottom: 0, right: 0,
                   child: Container(
                     width: 14, height: 14,
                     decoration: BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
+                        color: Colors.green, shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2)),
                   ),
                 ),
-            ]),
-            const SizedBox(width: 12),
-
-            // ── Contenu ──────────────────────────────────────────────────
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-              Row(children: [
-                Expanded(
-                  child: Text(
-                    conv.otherUser.name,
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight:
-                            hasUnread ? FontWeight.bold : FontWeight.w600,
-                        color: hasUnread
-                            ? AppConstants.primaryRed
-                            : Colors.black87),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-
-                // ── Badge service/entreprise (vrai nom) ──────────────────
-                if (contextLabel != null)
-                  Container(
-                    margin: const EdgeInsets.only(right: 6),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
-                    constraints: const BoxConstraints(maxWidth: 100),
-                    decoration: BoxDecoration(
-                        color: Colors.blue[50],
-                        borderRadius: BorderRadius.circular(4)),
-                    child: Text(
-                      contextLabel,
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.blue[800],
-                          fontWeight: FontWeight.w600),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                  ),
-
-                // ── Heure du dernier message ──────────────────────────────
-                Text(
-                  conv.lastMessage != null
-                      ? _formatTime(conv.lastMessage!.createdAt)
-                      : _formatTime(conv.updatedAt),
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                ),
               ]),
-
-              const SizedBox(height: 4),
-
-              // ── Aperçu du dernier message ─────────────────────────────
-              if (conv.lastMessage != null)
-                Row(children: [
-                  if (conv.lastMessage!.isMe)
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(
+                      child: Text(
+                        conv.otherUser.name,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: hasUnread ? FontWeight.bold : FontWeight.w600,
+                            color: hasUnread ? AppConstants.primaryRed : Colors.black87),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (contextLabel != null)
+                      Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        constraints: const BoxConstraints(maxWidth: 100),
+                        decoration: BoxDecoration(
+                            color: Colors.blue[50],
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Text(contextLabel,
+                            style: TextStyle(fontSize: 10, color: Colors.blue[800],
+                                fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis, maxLines: 1),
+                      ),
                     Text(
-                      'Vous: ',
-                      style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey[700],
-                          fontWeight: hasUnread
-                              ? FontWeight.w600
-                              : FontWeight.normal),
+                      conv.lastMessage != null
+                          ? _formatTime(conv.lastMessage!.createdAt)
+                          : _formatTime(conv.updatedAt),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
-                  Expanded(
-                    child: Text(
-                      _lastMsgPreview(conv.lastMessage!),
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: hasUnread
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                          color: Colors.grey[600]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                  ]),
+                  const SizedBox(height: 4),
+                  if (conv.lastMessage != null)
+                    Row(children: [
+                      if (conv.lastMessage!.isMe)
+                        Text('Vous: ',
+                            style: TextStyle(fontSize: 13, color: Colors.grey[700],
+                                fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
+                      Expanded(
+                        child: Text(
+                          _lastMsgPreview(conv.lastMessage!),
+                          style: TextStyle(fontSize: 13,
+                              fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                              color: Colors.grey[600]),
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ]),
                 ]),
-            ])),
-
-            // ── Badge non-lus ─────────────────────────────────────────────
-            if (hasUnread)
-              Container(
-                margin: const EdgeInsets.only(left: 8),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                    color: AppConstants.primaryRed,
-                    borderRadius: BorderRadius.circular(12)),
-                child: Text(
-                  '${conv.unreadCount}',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold),
-                ),
               ),
-          ]),
+              if (hasUnread)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: AppConstants.primaryRed,
+                      borderRadius: BorderRadius.circular(12)),
+                  child: Text('${conv.unreadCount}',
+                      style: const TextStyle(color: Colors.white, fontSize: 11,
+                          fontWeight: FontWeight.bold)),
+                ),
+            ]),
+          ),
         ),
       ),
     );
   }
-
+  
+  
   String _lastMsgPreview(lastMsg) {
     switch (lastMsg.type) {
       case 'image':
