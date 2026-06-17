@@ -2,24 +2,32 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/message_model.dart';
 import '../models/conversation_model.dart';
 import '../services/pusher_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/chat_local_db.dart';
+import '../services/token_cache.dart';
 import '../utils/constants.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
-//  MESSAGE PROVIDER — état réactif, 100% WebSocket
+//  MESSAGE PROVIDER — cache-first + WebSocket temps réel
+//
+//  Stratégie de performance :
+//   1. Cache SQLite local  → affichage instantané (0 ms réseau)
+//   2. Rafraîchissement silencieux en arrière-plan depuis l'API
+//   3. WebSocket Pusher pour les nouveaux messages en temps réel
+//   4. Token JWT en cache mémoire (plus de lecture keystore à chaque appel)
+//   5. loadConversations() dédupliqué (cooldown 3 s entre deux appels)
+//   6. Edit/delete patchent la liste locale sans recharger depuis l'API
+//   7. Pagination : 60 messages initiaux + "charger plus" par tranches de 30
 // ──────────────────────────────────────────────────────────────────────────────
 
 class MessageProvider extends ChangeNotifier {
-  static const _ao = AndroidOptions(encryptedSharedPreferences: true);
-  static const _io = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-  final _store = const FlutterSecureStorage(aOptions: _ao, iOptions: _io);
-
-  final PusherService      _ws   = PusherService();
+  final PusherService       _ws  = PusherService();
   final ConnectivityService _net = ConnectivityService();
+  final ChatLocalDb         _db  = ChatLocalDb();
+  final TokenCache          _tok = TokenCache();
 
   // ── État ──────────────────────────────────────────────────────────────────
   final Map<String, List<MessageModel>> _messages      = {};
@@ -35,31 +43,39 @@ class MessageProvider extends ChangeNotifier {
 
   bool    _loading = false;
   String? _error;
-  String? _uid;                  // userId courant
-  String? _activeConvId;         // conversation ouverte à l'écran
+  String? _uid;
+  String? _activeConvId;
+
+  // ── Pagination ────────────────────────────────────────────────────────────
+  // Conversations pour lesquelles il reste des messages plus anciens à charger
+  final Set<String> _hasMoreMessages = {};
+
+  // ── Cooldown loadConversations (évite les appels en rafale) ──────────────
+  DateTime? _lastConvLoad;
+  static const _convCooldown = Duration(seconds: 3);
 
   // ── Souscriptions WebSocket ────────────────────────────────────────────────
   final List<StreamSubscription> _subs = [];
 
   // ── Ping "en ligne" ────────────────────────────────────────────────────────
   Timer? _pingTimer;
-  // Délai de debounce pour notifyListeners groupés (évite de rebuild trop souvent)
   Timer? _debounce;
 
   // ── Getters ───────────────────────────────────────────────────────────────
-  bool                 get isLoading         => _loading;
-  String?              get error             => _error;
-  String?              get currentUserId     => _uid;
-  bool                 get isRealtimeConnected => _ws.isConnected;
-  String?              get activeConversationId => _activeConvId;
-  List<ConversationModel> get conversations  => _conversations;
+  bool                    get isLoading            => _loading;
+  String?                 get error                => _error;
+  String?                 get currentUserId        => _uid;
+  bool                    get isRealtimeConnected  => _ws.isConnected;
+  String?                 get activeConversationId => _activeConvId;
+  List<ConversationModel> get conversations        => _conversations;
 
   int get totalUnreadCount =>
       _conversations.fold(0, (s, c) => s + c.unreadCount);
 
-  List<MessageModel> getMessages(String convId)  => _messages[convId] ?? [];
-  bool isUserTyping(String convId, String uid)   => _typing[convId]?[uid] ?? false;
-  bool isUserRecording(String convId, String uid) => _recording[convId]?[uid] ?? false;
+  List<MessageModel> getMessages(String convId)       => _messages[convId] ?? [];
+  bool isUserTyping(String convId, String uid)        => _typing[convId]?[uid] ?? false;
+  bool isUserRecording(String convId, String uid)     => _recording[convId]?[uid] ?? false;
+  bool hasMoreMessages(String convId)                 => _hasMoreMessages.contains(convId);
 
   bool getUserOnlineStatus(String uid) {
     if (_online.containsKey(uid)) return _online[uid]!;
@@ -75,7 +91,9 @@ class MessageProvider extends ChangeNotifier {
   MessageProvider() { _boot(); }
 
   Future<void> _boot() async {
-    await _loadUid();
+    // Précharger token + userId en mémoire dès le démarrage
+    await _tok.preload();
+    _uid = await _tok.getUserId();
     if (_uid == null) return;
     await _ws.initialize();
     _listenWs();
@@ -84,14 +102,7 @@ class MessageProvider extends ChangeNotifier {
   }
 
   Future<void> _loadUid() async {
-    try {
-      final raw = await _store.read(key: 'user_data');
-      if (raw != null && raw.isNotEmpty) {
-        _uid = (jsonDecode(raw) as Map<String, dynamic>)['id']?.toString();
-      }
-    } catch (e) {
-      debugPrint('[MP] loadUid: $e');
-    }
+    _uid ??= await _tok.getUserId();
   }
 
   // ── Abonnements aux streams WebSocket ─────────────────────────────────────
@@ -134,7 +145,7 @@ class MessageProvider extends ChangeNotifier {
 
   Future<void> _updateOnlineSilent() async {
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/user/update-online-status'),
@@ -148,6 +159,8 @@ class MessageProvider extends ChangeNotifier {
   Future<void> reinitializeAfterLogin() async {
     for (final s in _subs) { await s.cancel(); }
     _subs.clear();
+    _tok.invalidate();
+    await _tok.preload();
     await _loadUid();
     if (_uid == null) return;
     await _ws.reinitialize();
@@ -185,17 +198,18 @@ class MessageProvider extends ChangeNotifier {
     _messages[ev.convId]!.add(msg);
     _sortMessages(ev.convId);
 
+    // Persister en base locale
+    _db.saveMessage(msg);
+
     // Conversations
     final idx = _conversations.indexWhere((c) => c.id == ev.convId);
     if (idx != -1) {
-      final old = _conversations[idx];
-      _conversations[idx] = old.copyWithLastMessage(
-        msg,
-        unreadCount: old.unreadCount + (_activeConvId == ev.convId ? 0 : 1),
-      );
+      final old       = _conversations[idx];
+      final newUnread = old.unreadCount + (_activeConvId == ev.convId ? 0 : 1);
+      _conversations[idx] = old.copyWithLastMessage(msg, unreadCount: newUnread);
       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _db.updateConversationLastMessage(ev.convId, msg, newUnread);
     } else {
-      // Conversation pas encore chargée
       Future.microtask(loadConversations);
     }
 
@@ -227,8 +241,17 @@ class MessageProvider extends ChangeNotifier {
     d['is_me']     = true;
     d['sender_id'] ??= _uid;
 
-    msgs[idx] = MessageModel.fromJson(d, _uid!);
+    final confirmed = MessageModel.fromJson(d, _uid!);
+    msgs[idx] = confirmed;
     _sortMessages(ev.convId);
+
+    // Remplacer en base locale (supprime le temp, insère le confirmé)
+    if (tempId.isNotEmpty) {
+      _db.confirmMessage(tempId, confirmed);
+    } else {
+      _db.saveMessage(confirmed);
+    }
+
     _notify();
   }
 
@@ -258,7 +281,6 @@ class MessageProvider extends ChangeNotifier {
   }
 
   void _onWsMessagesRead(WsMessagesRead ev) {
-    // L'autre utilisateur a lu nos messages → marquer readAt localement
     final msgs = _messages[ev.convId];
     if (msgs == null) return;
     bool changed = false;
@@ -268,12 +290,16 @@ class MessageProvider extends ChangeNotifier {
         changed = true;
       }
     }
-    if (changed) _notify();
+    if (changed) {
+      _db.markSentMessagesRead(ev.convId);
+      _notify();
+    }
   }
 
   void _onWsConvDeleted(WsConversationDeleted ev) {
     _conversations.removeWhere((c) => c.id == ev.convId);
     _messages.remove(ev.convId);
+    _db.deleteConversation(ev.convId);
     _notify();
   }
 
@@ -283,7 +309,10 @@ class MessageProvider extends ChangeNotifier {
 
   void setActiveConversation(String? convId) {
     _activeConvId = convId;
-    if (convId != null) _markReadLocally(convId);
+    if (convId != null) {
+      _markReadLocally(convId);
+      _db.resetUnreadCount(convId);
+    }
   }
 
   void clearAllIndicators() {
@@ -293,16 +322,48 @@ class MessageProvider extends ChangeNotifier {
   }
 
   // ────────────────────────────────────────────────────────────────────────────
-  //  CHARGEMENT HTTP (initial uniquement)
+  //  CHARGEMENT — stratégie cache-first
   // ────────────────────────────────────────────────────────────────────────────
 
-  Future<void> loadConversations() async {
-    _loading = true;
-    notifyListeners();
+  /// Charge les conversations.
+  /// - Retour immédiat depuis SQLite si disponible (0 ms)
+  /// - Rafraîchissement HTTP silencieux en arrière-plan
+  /// - Cooldown de 3 s pour éviter les appels en rafale
+  Future<void> loadConversations({bool forceRefresh = false}) async {
+    // Cooldown : évite 4-5 appels identiques à la suite
+    final now = DateTime.now();
+    if (!forceRefresh &&
+        _lastConvLoad != null &&
+        now.difference(_lastConvLoad!) < _convCooldown &&
+        _conversations.isNotEmpty) {
+      return;
+    }
+    _lastConvLoad = now;
+
+    await _loadUid();
+
+    // ── 1. Cache local → affichage instantané ──────────────────────────────
+    if (_conversations.isEmpty) {
+      final cached = await _db.loadConversations(_uid ?? '');
+      if (cached.isNotEmpty) {
+        _conversations = cached;
+        for (final c in _conversations) {
+          _online[c.otherUser.id] = c.otherUser.isOnline;
+          if (c.otherUser.lastSeen != null) {
+            _lastSeen[c.otherUser.id] = c.otherUser.lastSeen;
+          }
+        }
+        notifyListeners(); // affichage immédiat
+      }
+    }
+
+    // ── 2. Rafraîchissement HTTP en arrière-plan ──────────────────────────
+    _loading = _conversations.isEmpty; // spinner seulement si rien en cache
+    if (_loading) notifyListeners();
+
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) throw Exception('Non authentifié');
-      if (_uid == null) await _loadUid();
 
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/conversations'),
@@ -320,17 +381,22 @@ class MessageProvider extends ChangeNotifier {
           ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
         for (final c in _conversations) {
-          _online[c.otherUser.id]   = c.otherUser.isOnline;
-          if (c.otherUser.lastSeen != null) _lastSeen[c.otherUser.id] = c.otherUser.lastSeen;
+          _online[c.otherUser.id] = c.otherUser.isOnline;
+          if (c.otherUser.lastSeen != null) {
+            _lastSeen[c.otherUser.id] = c.otherUser.lastSeen;
+          }
         }
         _error = null;
+
+        // Persister pour la prochaine ouverture
+        _db.saveConversations(_conversations);
       } else if (resp.statusCode == 401) {
         _error = 'Session expirée';
       } else {
         throw Exception('HTTP ${resp.statusCode}');
       }
     } catch (e) {
-      _error = e.toString();
+      if (_conversations.isEmpty) _error = e.toString();
       debugPrint('[MP] loadConversations: $e');
     } finally {
       _loading = false;
@@ -338,12 +404,29 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
+  /// Charge les messages d'une conversation.
+  /// - Retour immédiat depuis SQLite (60 derniers messages)
+  /// - Puis rafraîchissement silencieux depuis l'API
   Future<void> loadMessages(String convId) async {
-    _messages[convId] ??= [];
-    if (_uid == null) await _loadUid();
+    await _loadUid();
 
+    // ── 1. Cache local → affichage en < 10 ms ─────────────────────────────
+    final cached = await _db.loadMessages(
+      convId,
+      limit: 60,
+      currentUserId: _uid ?? '',
+    );
+    if (cached.isNotEmpty) {
+      _messages[convId] = cached;
+      _hasMoreMessages.add(convId); // on présume qu'il y en a plus
+      notifyListeners(); // affichage immédiat du cache
+    } else {
+      _messages[convId] ??= [];
+    }
+
+    // ── 2. Rafraîchissement réseau ─────────────────────────────────────────
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) throw Exception('Non authentifié');
 
       final resp = await http.get(
@@ -355,10 +438,19 @@ class MessageProvider extends ChangeNotifier {
         final data    = jsonDecode(resp.body) as Map<String, dynamic>;
         final rawMsgs = data['messages'] ?? data['data'] ?? [];
 
-        _messages[convId] = (rawMsgs as List)
-            .map((i) => MessageModel.fromJson(i as Map<String, dynamic>, _uid ?? ''))
+        final fresh = (rawMsgs as List)
+            .map((i) => MessageModel.fromJson(
+                i as Map<String, dynamic>, _uid ?? ''))
             .toList()
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+        _messages[convId] = fresh;
+
+        // Marquer qu'il n'y a probablement pas plus si < 60 messages reçus
+        if (fresh.length < 60) _hasMoreMessages.remove(convId);
+
+        // Persister en base (upsert complet)
+        _db.saveMessages(convId, fresh);
 
         // Statut en ligne de l'interlocuteur
         final otherData = data['other_user'];
@@ -367,18 +459,73 @@ class MessageProvider extends ChangeNotifier {
           if (otherId != null && otherId != _uid) _fetchOnlineBg(otherId);
         }
 
-        // Souscrire au canal WebSocket de la conversation
+        // Souscrire au canal WebSocket
         await _ws.subscribeToConversation(convId);
         notifyListeners();
       }
     } catch (e) {
       debugPrint('[MP] loadMessages: $e');
+      // En cas d'erreur réseau, on reste sur le cache — pas de message d'erreur
+      if (cached.isNotEmpty) {
+        await _ws.subscribeToConversation(convId);
+      }
     }
+  }
+
+  /// Charge les messages plus anciens (pagination infinie vers le haut).
+  Future<void> loadOlderMessages(String convId) async {
+    final msgs = _messages[convId];
+    if (msgs == null || msgs.isEmpty) return;
+
+    // D'abord essayer le cache local
+    final firstId = msgs.first.id;
+    final older = await _db.loadOlderMessages(
+      convId,
+      beforeId: firstId,
+      limit: 30,
+      currentUserId: _uid ?? '',
+    );
+
+    if (older.isNotEmpty) {
+      _messages[convId] = [...older, ...msgs];
+      _notify();
+    } else {
+      _hasMoreMessages.remove(convId);
+    }
+  }
+
+  // ── Patch local edit (sans rechargement réseau) ───────────────────────────
+
+  /// Met à jour le contenu d'un message localement après une édition.
+  void patchMessageContent(String convId, String msgId, String newContent) {
+    final msgs = _messages[convId];
+    if (msgs == null) return;
+    final i = msgs.indexWhere((m) => m.id == msgId);
+    if (i == -1) return;
+    msgs[i] = msgs[i].copyWith(content: newContent);
+    _db.updateMessageContent(msgId, newContent);
+    _notify();
+  }
+
+  /// Supprime un message localement après confirmation serveur.
+  void removeMessage(String convId, String msgId) {
+    final msgs = _messages[convId];
+    if (msgs == null) return;
+    msgs.removeWhere((m) => m.id == msgId);
+    _db.deleteMessage(msgId);
+
+    // Mettre à jour l'aperçu de la conversation si c'était le dernier message
+    final idx = _conversations.indexWhere((c) => c.id == convId);
+    if (idx != -1) {
+      final lastMsg = msgs.isNotEmpty ? msgs.last : null;
+      _conversations[idx] = _conversations[idx].copyWithLastMessage(lastMsg);
+    }
+    _notify();
   }
 
   Future<void> fetchOnlineStatus(String uid) async {
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       final resp = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/user/$uid/online-status'),
@@ -391,8 +538,11 @@ class MessageProvider extends ChangeNotifier {
         DateTime? ls;
         final raw = d['last_seen_at'] ?? d['last_seen'];
         if (raw != null) ls = DateTime.tryParse(raw.toString())?.toLocal();
-
-        updateUserOnlineStatus(uid, isOnline || (ls != null && DateTime.now().difference(ls).inMinutes < 5), ls);
+        updateUserOnlineStatus(
+          uid,
+          isOnline || (ls != null && DateTime.now().difference(ls).inMinutes < 5),
+          ls,
+        );
       }
     } catch (_) {}
   }
@@ -436,9 +586,11 @@ class MessageProvider extends ChangeNotifier {
 
     _messages[convId] ??= [];
     _messages[convId]!.add(tempMsg);
+    // Persister le message optimiste pour le retrouver en cas de kill de l'app
+    _db.saveMessage(tempMsg);
     notifyListeners();
 
-    final token = await _getToken();
+    final token = await _tok.getToken();
     if (token == null) { _markError(convId, tempId); throw Exception('Non authentifié'); }
 
     Map<String, dynamic>? data;
@@ -463,8 +615,8 @@ class MessageProvider extends ChangeNotifier {
       throw lastErr ?? Exception("Envoi impossible");
     }
 
-    _applyResponse(data, convId, tempId, originalType: type,
-        latitude: latitude, longitude: longitude);
+    _applyResponse(data, convId, tempId,
+        originalType: type, latitude: latitude, longitude: longitude);
   }
 
   Future<Map<String, dynamic>?> _sendJson(
@@ -476,8 +628,8 @@ class MessageProvider extends ChangeNotifier {
       'content'     : content ?? '',
       'temporary_id': tmpId ?? '',
     };
-    if (lat    != null) body['latitude']    = lat;
-    if (lng    != null) body['longitude']   = lng;
+    if (lat     != null) body['latitude']    = lat;
+    if (lng     != null) body['longitude']   = lng;
     if (replyId != null) body['reply_to_id'] = replyId;
 
     final resp = await http.post(
@@ -551,7 +703,8 @@ class MessageProvider extends ChangeNotifier {
   }) {
     if (latitude  != null) data['latitude']  ??= latitude;
     if (longitude != null) data['longitude'] ??= longitude;
-    if (originalType == 'audio' && (data['type'] == 'vocal' || data['type'] == 'text')) {
+    if (originalType == 'audio' &&
+        (data['type'] == 'vocal' || data['type'] == 'text')) {
       data['type'] = 'audio';
     }
     data['is_me']     = true;
@@ -565,11 +718,15 @@ class MessageProvider extends ChangeNotifier {
     msgs.add(confirmed);
     _sortMessages(convId);
 
+    // Persister en base (supprime le temp, insère le confirmé)
+    _db.confirmMessage(tempId, confirmed);
+
     // Mettre à jour aperçu conversation
     final idx = _conversations.indexWhere((c) => c.id == convId);
     if (idx != -1) {
       _conversations[idx] = _conversations[idx].copyWithLastMessage(confirmed);
       _conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _db.updateConversationLastMessage(convId, confirmed, 0);
     }
     _notify();
   }
@@ -578,7 +735,11 @@ class MessageProvider extends ChangeNotifier {
     final msgs = _messages[convId];
     if (msgs == null) return;
     final i = msgs.indexWhere((m) => m.id == tempId);
-    if (i != -1) { msgs[i] = msgs[i].copyWith(status: 'error'); _notify(); }
+    if (i != -1) {
+      msgs[i] = msgs[i].copyWith(status: 'error');
+      _db.updateMessageStatus(tempId, 'error');
+      _notify();
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -588,8 +749,10 @@ class MessageProvider extends ChangeNotifier {
   Future<void> markConversationAsRead(String convId) async {
     _markReadLocally(convId);
     _clearUnreadBadge(convId);
+    _db.markAllRead(convId);
+    _db.resetUnreadCount(convId);
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/mark-read'),
@@ -622,11 +785,14 @@ class MessageProvider extends ChangeNotifier {
 
   Future<void> sendTypingIndicator(String convId, bool v) async {
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/typing'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type' : 'application/json',
+        },
         body: jsonEncode({'is_typing': v}),
       ).timeout(const Duration(seconds: 5));
     } catch (_) {}
@@ -634,11 +800,14 @@ class MessageProvider extends ChangeNotifier {
 
   Future<void> sendRecordingIndicator(String convId, bool v) async {
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/conversation/$convId/recording'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type' : 'application/json',
+        },
         body: jsonEncode({'is_recording': v}),
       ).timeout(const Duration(seconds: 5));
     } catch (_) {}
@@ -658,7 +827,7 @@ class MessageProvider extends ChangeNotifier {
 
   Future<void> saveFcmToken(String fcmToken) async {
     try {
-      final token = await _getToken();
+      final token = await _tok.getToken();
       if (token == null) return;
       await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/user/fcm-token'),
@@ -672,9 +841,17 @@ class MessageProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Vider le cache local à la déconnexion ─────────────────────────────────
+  Future<void> clearLocalCache() async {
+    _messages.clear();
+    _conversations.clear();
+    _lastConvLoad = null;
+    _tok.invalidate();
+    await _db.clearAll();
+    notifyListeners();
+  }
 
-  Future<String?> _getToken() => _store.read(key: 'auth_token');
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   void _sortMessages(String convId) =>
       _messages[convId]?.sort((a, b) => a.createdAt.compareTo(b.createdAt));

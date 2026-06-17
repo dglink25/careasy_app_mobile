@@ -48,8 +48,7 @@ class _MessagesScreenState extends State<MessagesScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Rechargement au retour au premier plan (pour rattraper les messages
-      // reçus pendant que l'app était en arrière-plan)
+      // Rafraîchissement silencieux au retour (cooldown 3s géré dans le provider)
       context.read<MessageProvider>().loadConversations();
     }
   }
@@ -91,7 +90,7 @@ class _MessagesScreenState extends State<MessagesScreen>
 
     // Conversation supprimée depuis le ChatScreen
     if (result == 'deleted') {
-      provider.loadConversations();
+      provider.loadConversations(forceRefresh: true);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(children: [
@@ -109,7 +108,8 @@ class _MessagesScreenState extends State<MessagesScreen>
       return;
     }
 
-    // Retour normal : rafraîchir la liste
+    // Retour normal : le provider se met à jour via WebSocket,
+    // un refresh silencieux avec cooldown suffit
     provider.loadConversations();
   }
 

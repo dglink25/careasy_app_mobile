@@ -456,24 +456,33 @@ class _ChatScreenState extends State<ChatScreen>
   Future<void> _saveEdit(String newContent) async {
     if (_editingMessage == null || newContent.trim().isEmpty) return;
     setState(() => _sending = true);
+
+    final msgId  = _editingMessage!.id;
+    final convId = widget.conversationId;
+    final trimmed = newContent.trim();
+
+    // Patch optimiste local immédiat — l'UI répond instantanément
+    _msgProvider?.patchMessageContent(convId, msgId, trimmed);
+
     try {
       final token = await _storage.read(key: 'auth_token');
       final resp  = await http.put(
-        Uri.parse('${AppConstants.apiBaseUrl}/messages/${_editingMessage!.id}'),
+        Uri.parse('${AppConstants.apiBaseUrl}/messages/$msgId'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type' : 'application/json',
           'Accept'       : 'application/json',
         },
-        body: jsonEncode({'content': newContent.trim()}),
+        body: jsonEncode({'content': trimmed}),
       ).timeout(const Duration(seconds: 10));
 
-      if (resp.statusCode == 200) {
-        await _msgProvider?.loadMessages(widget.conversationId);
-      } else {
+      if (resp.statusCode != 200) {
+        // Annuler le patch local si le serveur refuse
+        _msgProvider?.patchMessageContent(convId, msgId, _editingMessage!.content);
         _showErr('Erreur modification');
       }
     } catch (_) {
+      _msgProvider?.patchMessageContent(convId, msgId, _editingMessage!.content);
       _showErr('Erreur de connexion');
     } finally {
       if (mounted) {
@@ -508,18 +517,31 @@ class _ChatScreenState extends State<ChatScreen>
       ),
     );
     if (confirm != true) return;
+
+    final convId = widget.conversationId;
+    final msgId  = msg.id;
+
+    // Suppression optimiste locale — l'UI répond instantanément
+    _msgProvider?.removeMessage(convId, msgId);
+
     try {
       final token = await _storage.read(key: 'auth_token');
-      await http.delete(
-        Uri.parse('${AppConstants.apiBaseUrl}/messages/${msg.id}'),
+      final resp = await http.delete(
+        Uri.parse('${AppConstants.apiBaseUrl}/messages/$msgId'),
         headers: {
           'Authorization': 'Bearer $token',
           'Accept'       : 'application/json',
         },
       ).timeout(const Duration(seconds: 10));
-      await _msgProvider?.loadMessages(widget.conversationId);
+
+      if (resp.statusCode != 200 && resp.statusCode != 204) {
+        // Réinsérer le message si le serveur refuse
+        _msgProvider?.loadMessages(convId);
+        _showErr('Erreur suppression');
+      }
     } catch (_) {
-      _showErr('Erreur suppression');
+      _msgProvider?.loadMessages(convId);
+      _showErr('Erreur de connexion');
     }
   }
 
