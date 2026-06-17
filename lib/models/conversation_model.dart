@@ -97,4 +97,46 @@ class ConversationModel {
     }
     return null;
   }
+
+  /// Crée une copie avec un nouveau dernier message
+  ConversationModel copyWithLastMessage(
+    MessageModel? msg, {
+    int? unreadCount,
+  }) {
+    return ConversationModel(
+      id            : id,
+      otherUser     : otherUser,
+      lastMessage   : msg ?? lastMessage,
+      unreadCount   : unreadCount ?? this.unreadCount,
+      updatedAt     : msg?.createdAt ?? DateTime.now(),
+      serviceName   : serviceName,
+      entrepriseName: entrepriseName,
+      serviceId     : serviceId,
+      entrepriseId  : entrepriseId,
+    );
+  }
+
+  /// Crée une copie avec un nouveau statut en ligne de l'autre utilisateur
+  ConversationModel copyWithOnlineStatus(bool isOnline, DateTime? lastSeen) {
+    return ConversationModel(
+      id            : id,
+      otherUser     : UserModel(
+        id      : otherUser.id,
+        name    : otherUser.name,
+        email   : otherUser.email,
+        photoUrl: otherUser.photoUrl,
+        isOnline: isOnline,
+        lastSeen: lastSeen ?? otherUser.lastSeen,
+        role    : otherUser.role,
+        phone   : otherUser.phone,
+      ),
+      lastMessage   : lastMessage,
+      unreadCount   : unreadCount,
+      updatedAt     : updatedAt,
+      serviceName   : serviceName,
+      entrepriseName: entrepriseName,
+      serviceId     : serviceId,
+      entrepriseId  : entrepriseId,
+    );
+  }
 }

@@ -1,167 +1,224 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:pusher_channels_flutter/pusher_channels_flutter.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../providers/message_provider.dart';
-import '../providers/rendez_vous_provider.dart';
-import '../models/message_model.dart';
 import '../utils/constants.dart';
-import 'notification_prefs_service.dart';
 import 'notification_service.dart';
+import 'notification_prefs_service.dart';
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  MODÈLES D'ÉVÉNEMENTS — typés, immuables, rapides
+// ──────────────────────────────────────────────────────────────────────────────
+
+class WsMessage {
+  final String convId;
+  final Map<String, dynamic> data;
+  final String? senderName;
+  final String? senderPhoto;
+  const WsMessage(this.convId, this.data,
+      {this.senderName, this.senderPhoto});
+}
+
+class WsTyping {
+  final String convId;
+  final String userId;
+  final bool isTyping;
+  const WsTyping(this.convId, this.userId, this.isTyping);
+}
+
+class WsRecording {
+  final String convId;
+  final String userId;
+  final bool isRecording;
+  const WsRecording(this.convId, this.userId, this.isRecording);
+}
+
+class WsUserStatus {
+  final String userId;
+  final bool isOnline;
+  final DateTime? lastSeen;
+  const WsUserStatus(this.userId, this.isOnline, this.lastSeen);
+}
+
+class WsMessagesRead {
+  final String convId;
+  final String readByUserId;
+  const WsMessagesRead(this.convId, this.readByUserId);
+}
+
+class WsMessageConfirm {
+  final String convId;
+  final Map<String, dynamic> data;
+  const WsMessageConfirm(this.convId, this.data);
+}
+
+class WsConversationDeleted {
+  final String convId;
+  const WsConversationDeleted(this.convId);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  PUSHER SERVICE — WebSocket pur, zéro polling
+// ──────────────────────────────────────────────────────────────────────────────
 
 class PusherService {
   // ── Singleton ──────────────────────────────────────────────────────────────
-  static final PusherService _instance = PusherService._internal();
-  factory PusherService() => _instance;
-  PusherService._internal();
+  static final PusherService _i = PusherService._();
+  factory PusherService() => _i;
+  PusherService._();
 
-  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-  final _storage = const FlutterSecureStorage(aOptions: _androidOptions, iOptions: _iOSOptions);
+  static const _ao = AndroidOptions(encryptedSharedPreferences: true);
+  static const _io = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+  final _store = const FlutterSecureStorage(aOptions: _ao, iOptions: _io);
 
-  // ── État interne ───────────────────────────────────────────────────────────
+  // ── Instance Pusher ────────────────────────────────────────────────────────
   PusherChannelsFlutter? _pusher;
-  bool    _isInitialized  = false;
-  bool    _isConnecting   = false;
-  String? _currentUserId;
 
-  // Canaux gérés
-  final Set<String> _pendingChannels    = {};
-  final Set<String> _subscribedChannels = {};
+  // ── État connexion ─────────────────────────────────────────────────────────
+  bool    _connected    = false;
+  bool    _connecting   = false;
+  String? _userId;
 
-  // Reconnexion exponentielle : 2s, 4s, 8s, 16s, 30s (max)
-  int    _reconnectAttempts = 0;
-  Timer? _reconnectTimer;
-  static const int _maxReconnectAttempts = 10;
+  bool get isConnected => _connected;
 
-  // Providers injectés
-  MessageProvider?    _messageProvider;
-  RendezVousProvider? _rdvProvider;
+  // ── Canaux ─────────────────────────────────────────────────────────────────
+  final Set<String> _subscribed = {};
+  final Set<String> _pending    = {};
 
-  // Typing / Recording auto-timeout (comme WhatsApp)
-  // { "convId:userId" → Timer }
-  final Map<String, Timer> _typingTimers    = {};
-  final Map<String, Timer> _recordingTimers = {};
+  // ── Reconnexion exponentielle ─────────────────────────────────────────────
+  int    _attempt    = 0;
+  Timer? _retryTimer;
+  static const _maxAttempts = 15;
 
-  // ── Providers ──────────────────────────────────────────────────────────────
-  void setMessageProvider(MessageProvider p) => _messageProvider = p;
-  void setRendezVousProvider(RendezVousProvider p) => _rdvProvider = p;
+  // ── Streams publics (broadcast — plusieurs listeners possibles) ────────────
+  final _msgCtrl     = StreamController<WsMessage>.broadcast();
+  final _confirmCtrl = StreamController<WsMessageConfirm>.broadcast();
+  final _typingCtrl  = StreamController<WsTyping>.broadcast();
+  final _recCtrl     = StreamController<WsRecording>.broadcast();
+  final _statusCtrl  = StreamController<WsUserStatus>.broadcast();
+  final _readCtrl    = StreamController<WsMessagesRead>.broadcast();
+  final _delConvCtrl = StreamController<WsConversationDeleted>.broadcast();
 
-  bool get isConnected   => _isInitialized;
-  bool get isReconnecting => _isConnecting;
-  String? get currentUserId => _currentUserId;
+  Stream<WsMessage>             get onMessage          => _msgCtrl.stream;
+  Stream<WsMessageConfirm>      get onMessageConfirm   => _confirmCtrl.stream;
+  Stream<WsTyping>              get onTyping           => _typingCtrl.stream;
+  Stream<WsRecording>           get onRecording        => _recCtrl.stream;
+  Stream<WsUserStatus>          get onUserStatus       => _statusCtrl.stream;
+  Stream<WsMessagesRead>        get onMessagesRead     => _readCtrl.stream;
+  Stream<WsConversationDeleted> get onConversationDeleted => _delConvCtrl.stream;
+
+  // ── Indicateurs typing/recording auto-expiry ──────────────────────────────
+  final Map<String, Timer> _typingExpiry   = {};
+  final Map<String, Timer> _recordExpiry   = {};
+
+  // ────────────────────────────────────────────────────────────────────────────
+  //  INIT & CONNEXION
+  // ────────────────────────────────────────────────────────────────────────────
 
   Future<void> initialize() async {
-    if (_isConnecting) return;
-    if (_isInitialized) {
-      await _subscribeAllPending();
+    if (_connecting || _connected) {
+      if (_connected) _flushPending();
       return;
     }
-
-    _isConnecting = true;
-    debugPrint('[Pusher] ▶ Initialisation...');
+    _connecting = true;
 
     try {
-      final raw = await _storage.read(key: 'user_data');
+      final raw = await _store.read(key: 'user_data');
       if (raw == null || raw.isEmpty) {
-        debugPrint('[Pusher] Pas de user_data → abandon');
-        _isConnecting = false;
+        _connecting = false;
         return;
       }
+      _userId = (jsonDecode(raw) as Map<String, dynamic>)['id']?.toString();
+      if (_userId == null) { _connecting = false; return; }
 
-      _currentUserId = (jsonDecode(raw) as Map<String, dynamic>)['id']?.toString();
-      if (_currentUserId == null) {
-        _isConnecting = false;
-        return;
-      }
-
-      // Canal utilisateur toujours préinscrit
-      _pendingChannels.add('private-user.$_currentUserId');
+      // Canal utilisateur toujours pré-requis
+      _pending.add('private-user.$_userId');
 
       _pusher = PusherChannelsFlutter.getInstance();
-
       await _pusher!.init(
-        apiKey : AppConstants.pusherKey,
-        cluster: AppConstants.pusherCluster,
-
-        onConnectionStateChange: _onConnectionStateChange,
-        onError              : _onError,
-        onEvent              : (dynamic e) { if (e is PusherEvent) _onEvent(e); },
-        onAuthorizer         : (channel, socketId, opts) => _authorize(channel, socketId),
+        apiKey              : AppConstants.pusherKey,
+        cluster             : AppConstants.pusherCluster,
+        onConnectionStateChange: _onState,
+        onError             : _onError,
+        onEvent             : (e) { _dispatch(e); },
+        onAuthorizer        : (ch, sid, _) => _auth(ch, sid),
       );
-
       await _pusher!.connect();
-
     } catch (e) {
-      debugPrint('[Pusher] Erreur init: $e');
-      _isInitialized = false;
-      _isConnecting  = false;
-      _scheduleReconnect();
+      debugPrint('[WS] init error: $e');
+      _connecting = false;
+      _scheduleRetry();
     }
   }
 
-  // ── Callbacks état de connexion ────────────────────────────────────────────
-  void _onConnectionStateChange(String current, String previous) {
-    debugPrint('[Pusher] État: $previous → $current');
+  // ── Changement d'état Pusher ───────────────────────────────────────────────
 
-    if (current == 'CONNECTED') {
-      _isInitialized     = true;
-      _isConnecting      = false;
-      _reconnectAttempts = 0;
-      _reconnectTimer?.cancel();
-      _subscribeAllPending();
-
-    } else if (current == 'DISCONNECTED') {
-      _isInitialized = false;
-      _subscribedChannels.clear();
-      _clearAllIndicators();
-
-    } else if (current == 'FAILED') {
-      _isInitialized = false;
-      _isConnecting  = false;
-      _subscribedChannels.clear();
-      _clearAllIndicators();
-      _scheduleReconnect();
+  void _onState(String cur, String prev) {
+    debugPrint('[WS] $prev → $cur');
+    switch (cur) {
+      case 'CONNECTED':
+        _connected  = true;
+        _connecting = false;
+        _attempt    = 0;
+        _retryTimer?.cancel();
+        _flushPending();
+        break;
+      case 'DISCONNECTED':
+        _connected = false;
+        _subscribed.clear();
+        _clearIndicators();
+        break;
+      case 'FAILED':
+        _connected  = false;
+        _connecting = false;
+        _subscribed.clear();
+        _clearIndicators();
+        _scheduleRetry();
+        break;
     }
   }
 
-  void _onError(String message, int? code, dynamic error) {
-    debugPrint('[Pusher] Erreur: $message (code: $code)');
-    _isInitialized = false;
-    _isConnecting  = false;
-    _scheduleReconnect();
+  void _onError(String msg, int? code, dynamic err) {
+    debugPrint('[WS] error $code: $msg');
+    _connected  = false;
+    _connecting = false;
+    _scheduleRetry();
   }
 
   // ── Reconnexion exponentielle ─────────────────────────────────────────────
-  void _scheduleReconnect() {
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      debugPrint('[Pusher] Max tentatives atteint (${ _maxReconnectAttempts})');
-      return;
-    }
-    _reconnectTimer?.cancel();
 
-    // Délai : 2^n secondes, plafonné à 30s
-    final seconds = (_reconnectAttempts < 5)
-        ? (1 << (_reconnectAttempts + 1))   // 2, 4, 8, 16, 32 → min(32,30)=30
-        : 30;
-    final delay = Duration(seconds: seconds.clamp(2, 30));
-
-    _reconnectAttempts++;
-    debugPrint('[Pusher] Reconnexion dans ${delay.inSeconds}s (tentative $_reconnectAttempts)');
-
-    _reconnectTimer = Timer(delay, () async {
-      if (!_isInitialized && !_isConnecting) await initialize();
+  void _scheduleRetry() {
+    if (_attempt >= _maxAttempts) return;
+    _retryTimer?.cancel();
+    // backoff : 1s, 2s, 4s, 8s, 16s, 30s (max)
+    final secs = (_attempt < 5) ? (1 << _attempt) : 30;
+    _attempt++;
+    debugPrint('[WS] retry #$_attempt in ${secs}s');
+    _retryTimer = Timer(Duration(seconds: secs.clamp(1, 30)), () {
+      if (!_connected && !_connecting) initialize();
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  //  AUTHORISATION PUSHER (canal privé)
-  // ═══════════════════════════════════════════════════════════════════════════
-  Future<dynamic> _authorize(String channelName, String socketId) async {
+  // ── Reconnexion forcée (depuis ConnectivityService) ───────────────────────
+
+  Future<void> reconnect() async {
+    _retryTimer?.cancel();
+    _attempt    = 0;
+    _connected  = false;
+    _connecting = false;
+    _subscribed.clear();
+    try { await _pusher?.disconnect(); } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 200));
+    await initialize();
+  }
+
+  // ── Auth canal privé ───────────────────────────────────────────────────────
+
+  Future<dynamic> _auth(String channel, String socketId) async {
     try {
-      final token = await _storage.read(key: 'auth_token');
+      final token = await _store.read(key: 'auth_token');
       if (token == null || token.isEmpty) return null;
 
       final resp = await http.post(
@@ -171,371 +228,291 @@ class PusherService {
           'Content-Type' : 'application/x-www-form-urlencoded',
           'Accept'       : 'application/json',
         },
-        body: 'socket_id=$socketId&channel_name=$channelName',
+        body: 'socket_id=$socketId&channel_name=$channel',
       ).timeout(const Duration(seconds: 10));
 
       if (resp.statusCode == 200 && resp.body.isNotEmpty) {
-        final decoded = jsonDecode(resp.body);
-        if (decoded is Map && decoded.containsKey('auth')) return decoded;
+        final d = jsonDecode(resp.body);
+        if (d is Map && d.containsKey('auth')) return d;
       }
-      debugPrint('[Pusher] Auth échouée ${resp.statusCode}: ${resp.body}');
     } catch (e) {
-      debugPrint('[Pusher] Auth erreur: $e');
+      debugPrint('[WS] auth error: $e');
     }
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  //  SOUSCRIPTION AUX CANAUX
-  // ═══════════════════════════════════════════════════════════════════════════
-  Future<void> _subscribeAllPending() async {
-    final todo = Set<String>.from(_pendingChannels);
-    for (final ch in todo) {
-      if (!_subscribedChannels.contains(ch)) await _subscribe(ch);
+  // ────────────────────────────────────────────────────────────────────────────
+  //  CANAUX
+  // ────────────────────────────────────────────────────────────────────────────
+
+  void _flushPending() {
+    for (final ch in Set.of(_pending)) {
+      if (!_subscribed.contains(ch)) _subscribe(ch);
     }
   }
 
-  Future<void> _subscribe(String channelName) async {
-    if (!_isInitialized) {
-      _pendingChannels.add(channelName);
-      return;
-    }
-    if (_subscribedChannels.contains(channelName)) return;
-
+  Future<void> _subscribe(String ch) async {
+    if (!_connected) { _pending.add(ch); return; }
+    if (_subscribed.contains(ch)) return;
     try {
       await _pusher?.subscribe(
-        channelName: channelName,
-        onEvent: (dynamic e) { if (e is PusherEvent) _onEvent(e); },
+        channelName: ch,
+        onEvent: (e) { _dispatch(e); },
       );
-      _subscribedChannels.add(channelName);
-      debugPrint('[Pusher] ✓ $channelName');
+      _subscribed.add(ch);
+      debugPrint('[WS] ✓ $ch');
     } catch (e) {
-      debugPrint('[Pusher] Erreur souscription $channelName: $e');
+      debugPrint('[WS] subscribe error $ch: $e');
     }
   }
 
-  /// Souscrire au canal d'une conversation (appelé à l'ouverture du ChatScreen)
-  Future<void> subscribeToConversation(String conversationId) async {
-    final ch = 'private-conversation.$conversationId';
-    _pendingChannels.add(ch);
-    if (_isInitialized && !_subscribedChannels.contains(ch)) await _subscribe(ch);
+  /// Appeler à l'ouverture d'un ChatScreen
+  Future<void> subscribeToConversation(String convId) async {
+    final ch = 'private-conversation.$convId';
+    _pending.add(ch);
+    await _subscribe(ch);
   }
 
-  /// Désabonner d'une conversation (appelé à la fermeture du ChatScreen)
-  Future<void> unsubscribeFromConversation(String conversationId) async {
-    final ch = 'private-conversation.$conversationId';
-    _pendingChannels.remove(ch);
-    if (_subscribedChannels.contains(ch)) {
-      try {
-        await _pusher?.unsubscribe(channelName: ch);
-        _subscribedChannels.remove(ch);
-        debugPrint('[Pusher] ✗ Désabonné: $ch');
-      } catch (e) {
-        debugPrint('[Pusher] Erreur désabonnement: $e');
-      }
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  //  DISPATCHER D'ÉVÉNEMENTS
-  // ═══════════════════════════════════════════════════════════════════════════
-  void _onEvent(PusherEvent event) {
-    if (event.eventName.startsWith('pusher')) return;
-    if (event.data == null || event.data!.isEmpty) return;
-
+  /// Appeler à la fermeture d'un ChatScreen
+  Future<void> unsubscribeFromConversation(String convId) async {
+    final ch = 'private-conversation.$convId';
+    _pending.remove(ch);
+    if (!_subscribed.contains(ch)) return;
     try {
-      final data = jsonDecode(event.data!) as Map<String, dynamic>;
-      debugPrint('[Pusher] ← ${event.eventName} | ${event.channelName}');
+      await _pusher?.unsubscribe(channelName: ch);
+      _subscribed.remove(ch);
+    } catch (_) {}
+  }
 
-      switch (event.eventName) {
-        // ── Messages ────────────────────────────────────────────────────
-        case 'new-message':
-          _onNewMessage(data);
-          break;
-        case 'message-sent':
-          _onMessageSent(data);
-          break;
+  // ────────────────────────────────────────────────────────────────────────────
+  //  DISPATCH D'ÉVÉNEMENTS
+  // ────────────────────────────────────────────────────────────────────────────
 
-        // ── Indicateurs temps réel (WhatsApp-like) ──────────────────────
-        case 'typing-indicator':
-          _onTypingIndicator(data);
-          break;
-        case 'recording-indicator':
-          _onRecordingIndicator(data);
-          break;
+  void _dispatch(dynamic event) {
+    if (event is! PusherEvent) return;
+    final e = event;
+    if (e.eventName.startsWith('pusher')) return;
+    if (e.data == null || e.data!.isEmpty)  return;
 
-        // ── Présence ────────────────────────────────────────────────────
-        case 'user-status':
-          _onUserStatus(data);
-          break;
-        case 'messages-read':
-          _onMessagesRead(data);
-          break;
+    Map<String, dynamic> d;
+    try {
+      d = jsonDecode(e.data!) as Map<String, dynamic>;
+    } catch (_) { return; }
 
-        // ── Rendez-vous ──────────────────────────────────────────────────
-        case 'rdv-pending':
-        case 'rdv-confirmed':
-        case 'rdv-cancelled':
-        case 'rdv-completed':
-          _onRdvNotification(data, event.eventName);
-          break;
+    debugPrint('[WS] ← ${e.eventName}  ch=${e.channelName}');
 
-        // ── Entreprises ──────────────────────────────────────────────────
-        case 'entreprise-approved':
-        case 'entreprise-rejected':
-        case 'new-entreprise-pending':
-          debugPrint('[Pusher] Événement entreprise: ${event.eventName}');
-          break;
-
-        default:
-          // Fallback : si le payload contient conversation_id → traiter comme message
-          if (_messageProvider != null &&
-              _currentUserId != null &&
-              data.containsKey('conversation_id')) {
-            _onNewMessage(data);
-          }
-      }
-    } catch (e) {
-      debugPrint('[Pusher] Erreur dispatch ${event.eventName}: $e');
+    switch (e.eventName) {
+      case 'new-message':     _handleNewMessage(d); break;
+      case 'message-sent':    _handleMessageSent(d); break;
+      case 'typing-indicator':_handleTyping(d); break;
+      case 'recording-indicator': _handleRecording(d); break;
+      case 'user-status':     _handleUserStatus(d); break;
+      case 'messages-read':   _handleMessagesRead(d); break;
+      case 'conversation-deleted': _handleConvDeleted(d); break;
+      default: break; // Ignorer les événements inconnus (plus de fallback permissif)
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  //  HANDLERS MÉTIER
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ── Nouveau message reçu ───────────────────────────────────────────────────
 
-  // ── Nouveau message reçu (canal utilisateur) ───────────────────────────────
-  void _onNewMessage(Map<String, dynamic> data) {
-    if (_messageProvider == null || _currentUserId == null) return;
+  void _handleNewMessage(Map<String, dynamic> d) {
+    final msgData = d['message'] is Map
+        ? Map<String, dynamic>.from(d['message'] as Map)
+        : d;
 
-    final Map<String, dynamic> msgData = data['message'] is Map
-        ? Map<String, dynamic>.from(data['message'] as Map)
-        : Map<String, dynamic>.from(data);
-
-    final convId   = (data['conversation_id'] ?? msgData['conversation_id'])?.toString() ?? '';
+    final convId   = (d['conversation_id'] ?? msgData['conversation_id'])?.toString() ?? '';
     final senderId = msgData['sender_id']?.toString() ?? '';
 
     if (convId.isEmpty) return;
-    if (senderId == _currentUserId) return; // Ignorer nos propres messages
+    if (senderId == _userId) return; // Nos propres messages arrivent via message-sent
 
-    final msg = MessageModel.fromJson(msgData, _currentUserId!);
-    _messageProvider!.receiveMessage(msg, convId);
+    _msgCtrl.add(WsMessage(
+      convId,
+      msgData,
+      senderName : d['sender_name']?.toString(),
+      senderPhoto: d['sender_photo']?.toString(),
+    ));
 
-    // Notification locale (si préférences l'autorisent)
-    NotificationPrefsService.canShow(type: 'message').then((canShow) {
-      if (!canShow) return;
-      final senderName = data['sender_name']?.toString() ?? 'Nouveau message';
-      final body = _buildNotifBody(msg);
-      NotificationService().showMessageNotification(
-        senderName     : senderName,
-        messageBody    : body,
-        conversationId : convId,
-        senderPhoto    : data['sender_photo']?.toString(),
-        senderId       : senderId,
-      );
-    });
+    // Notification locale
+    _showMsgNotif(d, msgData, convId, senderId);
   }
 
-  // ── Confirmation d'envoi (canal conversation) ──────────────────────────────
-  void _onMessageSent(Map<String, dynamic> data) {
-    if (_messageProvider == null || _currentUserId == null) return;
+  // ── Confirmation message envoyé (canal conversation) ──────────────────────
 
-    final Map<String, dynamic> msgData = data['message'] is Map
-        ? Map<String, dynamic>.from(data['message'] as Map)
-        : Map<String, dynamic>.from(data);
+  void _handleMessageSent(Map<String, dynamic> d) {
+    final msgData = d['message'] is Map
+        ? Map<String, dynamic>.from(d['message'] as Map)
+        : d;
 
     final convId   = msgData['conversation_id']?.toString() ?? '';
     final senderId = msgData['sender_id']?.toString() ?? '';
 
-    if (convId.isEmpty || senderId != _currentUserId) return;
-    _messageProvider!.confirmMessage(msgData, convId, _currentUserId!);
+    if (convId.isEmpty) return;
+    // Seulement nos propres confirmations
+    if (senderId != _userId) return;
+
+    _confirmCtrl.add(WsMessageConfirm(convId, msgData));
   }
 
-  // ── Indicateur "en train d'écrire" (WhatsApp-like avec auto-timeout) ───────
-  void _onTypingIndicator(Map<String, dynamic> data) {
-    if (_messageProvider == null) return;
+  // ── Typing (avec auto-expiry 4s comme WhatsApp) ───────────────────────────
 
-    final userId   = data['user_id']?.toString();
-    final convId   = data['conversation_id']?.toString() ?? '';
-    final isTyping = data['is_typing'] == true;
+  void _handleTyping(Map<String, dynamic> d) {
+    final userId   = d['user_id']?.toString();
+    final convId   = d['conversation_id']?.toString() ?? '';
+    final isTyping = d['is_typing'] == true;
 
-    if (userId == null || userId == _currentUserId || convId.isEmpty) return;
+    if (userId == null || userId == _userId || convId.isEmpty) return;
 
-    _messageProvider!.setTypingIndicator(convId, userId, isTyping);
+    _typingCtrl.add(WsTyping(convId, userId, isTyping));
 
-    final key = '$convId:$userId:typing';
+    final key = '$convId:$userId';
+    _typingExpiry[key]?.cancel();
 
     if (isTyping) {
-      // Auto-arrêt si pas de mise à jour pendant 4s (comme WhatsApp)
-      _typingTimers[key]?.cancel();
-      _typingTimers[key] = Timer(const Duration(seconds: 4), () {
-        _messageProvider?.setTypingIndicator(convId, userId, false);
-        _typingTimers.remove(key);
+      // Auto-stop si pas de refresh pendant 4s
+      _typingExpiry[key] = Timer(const Duration(seconds: 4), () {
+        _typingCtrl.add(WsTyping(convId, userId, false));
+        _typingExpiry.remove(key);
       });
     } else {
-      _typingTimers[key]?.cancel();
-      _typingTimers.remove(key);
+      _typingExpiry.remove(key);
     }
   }
 
-  // ── Indicateur "enregistre un vocal" (WhatsApp-like avec auto-timeout) ─────
-  void _onRecordingIndicator(Map<String, dynamic> data) {
-    if (_messageProvider == null) return;
+  // ── Recording (avec auto-expiry 60s) ──────────────────────────────────────
 
-    final userId      = data['user_id']?.toString();
-    final convId      = data['conversation_id']?.toString() ?? '';
-    final isRecording = data['is_recording'] == true;
+  void _handleRecording(Map<String, dynamic> d) {
+    final userId      = d['user_id']?.toString();
+    final convId      = d['conversation_id']?.toString() ?? '';
+    final isRecording = d['is_recording'] == true;
 
-    if (userId == null || userId == _currentUserId || convId.isEmpty) return;
+    if (userId == null || userId == _userId || convId.isEmpty) return;
 
-    _messageProvider!.setRecordingIndicator(convId, userId, isRecording);
+    _recCtrl.add(WsRecording(convId, userId, isRecording));
 
-    final key = '$convId:$userId:recording';
+    final key = '$convId:$userId';
+    _recordExpiry[key]?.cancel();
 
     if (isRecording) {
-      // Auto-arrêt après 60s (protection contre les clients qui ne stopent pas)
-      _recordingTimers[key]?.cancel();
-      _recordingTimers[key] = Timer(const Duration(seconds: 60), () {
-        _messageProvider?.setRecordingIndicator(convId, userId, false);
-        _recordingTimers.remove(key);
+      _recordExpiry[key] = Timer(const Duration(seconds: 60), () {
+        _recCtrl.add(WsRecording(convId, userId, false));
+        _recordExpiry.remove(key);
       });
     } else {
-      _recordingTimers[key]?.cancel();
-      _recordingTimers.remove(key);
+      _recordExpiry.remove(key);
     }
   }
 
   // ── Statut en ligne ────────────────────────────────────────────────────────
-  void _onUserStatus(Map<String, dynamic> data) {
-    if (_messageProvider == null) return;
 
-    final userId   = data['user_id']?.toString();
-    final isOnline = data['is_online'] == true;
+  void _handleUserStatus(Map<String, dynamic> d) {
+    final userId   = d['user_id']?.toString();
     if (userId == null) return;
 
+    final isOnline = d['is_online'] == true;
     DateTime? lastSeen;
-    final raw = data['last_seen'] ?? data['last_seen_at'];
+    final raw = d['last_seen'] ?? d['last_seen_at'];
     if (raw != null) lastSeen = DateTime.tryParse(raw.toString())?.toLocal();
 
-    _messageProvider!.updateUserOnlineStatus(userId, isOnline, lastSeen);
+    _statusCtrl.add(WsUserStatus(userId, isOnline, lastSeen));
   }
 
   // ── Messages lus ──────────────────────────────────────────────────────────
-  void _onMessagesRead(Map<String, dynamic> data) {
-    if (_messageProvider == null) return;
 
-    final convId = data['conversation_id']?.toString();
-    if (convId != null && convId.isNotEmpty) {
-      _messageProvider!.markMessagesAsReadLocally(convId);
-    }
+  void _handleMessagesRead(Map<String, dynamic> d) {
+    final convId     = d['conversation_id']?.toString() ?? '';
+    final readByUser = d['user_id']?.toString() ?? '';
+    if (convId.isEmpty) return;
+    _readCtrl.add(WsMessagesRead(convId, readByUser));
   }
 
-  // ── Rendez-vous ────────────────────────────────────────────────────────────
-  void _onRdvNotification(Map<String, dynamic> data, String eventName) {
-    debugPrint('[Pusher] RDV: $eventName — rdv_id=${data['rdv_id']}');
-    _rdvProvider?.updateFromNotification(data);
-    _showRdvLocalNotification(data, eventName);
+  // ── Conversation supprimée ─────────────────────────────────────────────────
+
+  void _handleConvDeleted(Map<String, dynamic> d) {
+    final convId = d['conversation_id']?.toString() ?? '';
+    if (convId.isEmpty) return;
+    _delConvCtrl.add(WsConversationDeleted(convId));
+    unsubscribeFromConversation(convId);
   }
 
-  void _showRdvLocalNotification(Map<String, dynamic> data, String eventName) {
-    try {
-      final title = data['title']?.toString() ?? _rdvEventTitle(eventName);
-      final body  = data['body']?.toString()  ?? '';
-      final rdvId = data['rdv_id']?.toString() ?? '';
-      final type  = data['type']?.toString()  ?? _rdvEventType(eventName);
+  // ── Notification locale ────────────────────────────────────────────────────
 
-      if (title.isEmpty && body.isEmpty) return;
-
-      NotificationPrefsService.canShow(type: 'rdv').then((canShow) {
-        if (!canShow) return;
-        NotificationService().showNotification(
-          id     : rdvId.isNotEmpty ? (rdvId.hashCode + 20000).abs() : DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          title  : title,
-          body   : body,
-          payload: jsonEncode({'type': type, 'rdv_id': rdvId}),
-        );
-      });
-    } catch (e) {
-      debugPrint('[Pusher] _showRdvLocalNotification: $e');
-    }
+  void _showMsgNotif(
+    Map<String, dynamic> d,
+    Map<String, dynamic> msgData,
+    String convId,
+    String senderId,
+  ) {
+    NotificationPrefsService.canShow(type: 'message').then((ok) {
+      if (!ok) return;
+      final type    = msgData['type']?.toString() ?? 'text';
+      final content = msgData['content']?.toString() ?? '';
+      final body    = content.isNotEmpty ? content : _notifBody(type);
+      NotificationService().showMessageNotification(
+        senderName    : d['sender_name']?.toString() ?? 'Message',
+        messageBody   : body,
+        conversationId: convId,
+        senderPhoto   : d['sender_photo']?.toString(),
+        senderId      : senderId,
+      );
+    });
   }
 
-
-  void _clearAllIndicators() {
-    for (final t in _typingTimers.values)    t.cancel();
-    for (final t in _recordingTimers.values) t.cancel();
-    _typingTimers.clear();
-    _recordingTimers.clear();
-    // Remettre à zéro tous les indicateurs dans le provider
-    _messageProvider?.clearAllIndicators();
-  }
-
-  String _buildNotifBody(MessageModel msg) {
-    if (msg.content.isNotEmpty) {
-      return msg.content.length > 80
-          ? '${msg.content.substring(0, 80)}…'
-          : msg.content;
-    }
-    switch (msg.type) {
-      case 'image'   : return '📷 Photo';
-      case 'video'   : return '🎥 Vidéo';
-      case 'vocal'   : return '🎤 Message vocal';
-      case 'document': return '📄 Document';
+  String _notifBody(String type) {
+    switch (type) {
+      case 'image':    return '📷 Photo';
+      case 'video':    return '🎥 Vidéo';
+      case 'vocal':    return '🎤 Message vocal';
+      case 'document': return '📎 Document';
       case 'location': return '📍 Localisation';
-      default        : return 'Nouveau message';
+      default:         return 'Nouveau message';
     }
   }
 
-  String _rdvEventTitle(String event) {
-    switch (event) {
-      case 'rdv-pending'  : return 'Nouvelle demande de RDV';
-      case 'rdv-confirmed': return 'Rendez-vous confirmé ✅';
-      case 'rdv-cancelled': return 'Rendez-vous annulé ❌';
-      case 'rdv-completed': return 'Rendez-vous terminé 🎉';
-      default             : return 'Rendez-vous';
-    }
+  // ────────────────────────────────────────────────────────────────────────────
+  //  NETTOYAGE
+  // ────────────────────────────────────────────────────────────────────────────
+
+  void _clearIndicators() {
+    for (final t in _typingExpiry.values)  t.cancel();
+    for (final t in _recordExpiry.values)  t.cancel();
+    _typingExpiry.clear();
+    _recordExpiry.clear();
   }
 
-  String _rdvEventType(String event) {
-    switch (event) {
-      case 'rdv-pending'  : return 'rdv_pending';
-      case 'rdv-confirmed': return 'rdv_confirmed';
-      case 'rdv-cancelled': return 'rdv_cancelled';
-      case 'rdv-completed': return 'rdv_completed';
-      default             : return 'rdv_pending';
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  //  CYCLE DE VIE
-  // ═══════════════════════════════════════════════════════════════════════════
   Future<void> reinitialize() async {
-    _reconnectTimer?.cancel();
-    _clearAllIndicators();
-    _isInitialized     = false;
-    _isConnecting      = false;
-    _reconnectAttempts = 0;
-    _currentUserId     = null;
-    _subscribedChannels.clear();
+    _retryTimer?.cancel();
+    _clearIndicators();
+    _connected  = false;
+    _connecting = false;
+    _attempt    = 0;
+    _userId     = null;
+    _subscribed.clear();
     try { await _pusher?.disconnect(); } catch (_) {}
-    await Future.delayed(const Duration(milliseconds: 300));
+    await Future.delayed(const Duration(milliseconds: 200));
     await initialize();
   }
 
   Future<void> disconnect() async {
-    _reconnectTimer?.cancel();
-    _clearAllIndicators();
-    try {
-      if (_isInitialized) {
-        for (final ch in Set<String>.from(_subscribedChannels)) {
-          try { await _pusher?.unsubscribe(channelName: ch); } catch (_) {}
-        }
-        await _pusher?.disconnect();
-        _isInitialized = false;
-        _subscribedChannels.clear();
-      }
-    } catch (e) {
-      debugPrint('[Pusher] disconnect: $e');
+    _retryTimer?.cancel();
+    _clearIndicators();
+    for (final ch in Set.of(_subscribed)) {
+      try { await _pusher?.unsubscribe(channelName: ch); } catch (_) {}
     }
+    _subscribed.clear();
+    try { await _pusher?.disconnect(); } catch (_) {}
+    _connected  = false;
+    _connecting = false;
+  }
+
+  void dispose() {
+    _msgCtrl.close();
+    _confirmCtrl.close();
+    _typingCtrl.close();
+    _recCtrl.close();
+    _statusCtrl.close();
+    _readCtrl.close();
+    _delConvCtrl.close();
+    disconnect();
   }
 }
