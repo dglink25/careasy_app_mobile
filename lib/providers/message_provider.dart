@@ -156,6 +156,9 @@ class MessageProvider extends ChangeNotifier {
     _startPing();
   }
 
+  /// Conservé pour compatibilité — le ping est géré en interne
+  void stopOnlineTimer() => stopOnlinePing();
+
   void stopOnlinePing() {
     _pingTimer?.cancel();
     _pingTimer = null;

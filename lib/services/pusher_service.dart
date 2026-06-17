@@ -83,6 +83,13 @@ class PusherService {
 
   bool get isConnected => _connected;
 
+  /// Compatibilité — les événements RDV arrivent désormais via [onRdvEvent].
+  /// Brancher le RendezVousProvider sur ce stream dans splash_screen.
+  /// Cette méthode est conservée pour éviter les erreurs de compilation.
+  void setRendezVousProvider(dynamic _) {
+    // no-op : voir onRdvEvent
+  }
+
   // ── Canaux ─────────────────────────────────────────────────────────────────
   final Set<String> _subscribed = {};
   final Set<String> _pending    = {};
@@ -100,6 +107,8 @@ class PusherService {
   final _statusCtrl  = StreamController<WsUserStatus>.broadcast();
   final _readCtrl    = StreamController<WsMessagesRead>.broadcast();
   final _delConvCtrl = StreamController<WsConversationDeleted>.broadcast();
+  // Stream RDV — map brute car structure variable selon le backend
+  final _rdvCtrl     = StreamController<Map<String, dynamic>>.broadcast();
 
   Stream<WsMessage>             get onMessage          => _msgCtrl.stream;
   Stream<WsMessageConfirm>      get onMessageConfirm   => _confirmCtrl.stream;
@@ -108,6 +117,8 @@ class PusherService {
   Stream<WsUserStatus>          get onUserStatus       => _statusCtrl.stream;
   Stream<WsMessagesRead>        get onMessagesRead     => _readCtrl.stream;
   Stream<WsConversationDeleted> get onConversationDeleted => _delConvCtrl.stream;
+  /// Stream brut pour les événements RDV — écouter depuis RendezVousProvider
+  Stream<Map<String, dynamic>>  get onRdvEvent         => _rdvCtrl.stream;
 
   // ── Indicateurs typing/recording auto-expiry ──────────────────────────────
   final Map<String, Timer> _typingExpiry   = {};
@@ -309,6 +320,12 @@ class PusherService {
       case 'user-status':     _handleUserStatus(d); break;
       case 'messages-read':   _handleMessagesRead(d); break;
       case 'conversation-deleted': _handleConvDeleted(d); break;
+      case 'rdv-pending':
+      case 'rdv-confirmed':
+      case 'rdv-cancelled':
+      case 'rdv-completed':
+        _rdvCtrl.add({...d, '_event': e.eventName});
+        break;
       default: break; // Ignorer les événements inconnus (plus de fallback permissif)
     }
   }
@@ -513,6 +530,7 @@ class PusherService {
     _statusCtrl.close();
     _readCtrl.close();
     _delConvCtrl.close();
+    _rdvCtrl.close();
     disconnect();
   }
 }

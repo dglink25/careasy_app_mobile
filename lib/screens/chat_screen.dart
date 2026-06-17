@@ -1975,69 +1975,91 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  // ── Indicateur typing / recording de l'autre ──────────────────────────────
+  // ── Indicateur typing / recording (WhatsApp-like) ────────────────────────
 
   Widget _buildOtherIndicator() {
     return Consumer<MessageProvider>(builder: (_, pv, __) {
-      final typing    =
-          pv.isUserTyping(widget.conversationId, widget.otherUser.id);
-      final recording =
-          pv.isUserRecording(widget.conversationId, widget.otherUser.id);
-      if (!typing && !recording) return const SizedBox.shrink();
-      return Container(
-        color  : Colors.white,
-        padding: const EdgeInsets.symmetric(
-            horizontal: 16, vertical: 7),
-        child: Row(children: [
-          if (recording) ...[
-            AnimatedBuilder(
-                animation: _pulseAnim,
-                builder: (_, __) => Container(
-                    width : 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                        color: Colors.red
-                            .withOpacity(_pulseAnim.value),
-                        shape: BoxShape.circle))),
-            const SizedBox(width: 8),
-            Text(
-                '${widget.otherUser.name} enregistre un vocal…',
-                style: const TextStyle(
-                    fontSize  : 12,
-                    color     : Colors.red,
-                    fontStyle : FontStyle.italic)),
-          ] else ...[
-            _typingDots(),
-            const SizedBox(width: 8),
-            Text('${widget.otherUser.name} écrit…',
-                style: TextStyle(
-                    fontSize : 12,
-                    color    : Colors.grey[600],
-                    fontStyle: FontStyle.italic)),
-          ],
-        ]),
+      final typing    = pv.isUserTyping(widget.conversationId, widget.otherUser.id);
+      final recording = pv.isUserRecording(widget.conversationId, widget.otherUser.id);
+      final show      = typing || recording;
+
+      // AnimatedSize = apparition / disparition fluide sans saut
+      return AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        curve   : Curves.easeOut,
+        child   : show
+            ? Container(
+                width  : double.infinity,
+                color  : Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child  : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children    : [
+                    if (recording) ...[
+                      // Cercle rouge pulsant
+                      AnimatedBuilder(
+                        animation: _pulseAnim,
+                        builder  : (_, __) => Container(
+                          width : 8, height: 8,
+                          decoration: BoxDecoration(
+                            color: Color.lerp(
+                              Colors.red.withAlpha(100),
+                              Colors.red,
+                              _pulseAnim.value,
+                            )!,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Icône micro animée
+                      AnimatedBuilder(
+                        animation: _pulseAnim,
+                        builder  : (_, __) => Icon(
+                          Icons.mic,
+                          size : 14,
+                          color: Color.lerp(
+                            Colors.red.withAlpha(120),
+                            Colors.red,
+                            _pulseAnim.value,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${widget.otherUser.name} enregistre un vocal…',
+                        style: const TextStyle(
+                          fontSize : 12.5,
+                          color    : Colors.red,
+                          fontStyle: FontStyle.italic,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ] else ...[
+                      // Trois points animés style WhatsApp
+                      _TypingDotsWidget(animation: _pulseAnim),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${widget.otherUser.name} est en train d\'écrire…',
+                        style: TextStyle(
+                          fontSize : 12.5,
+                          color    : Colors.grey[600],
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              )
+            : const SizedBox.shrink(),
       );
     });
   }
 
-  Widget _typingDots() {
-    return AnimatedBuilder(
-        animation: _pulseAnim,
-        builder: (_, __) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children    : List.generate(3, (i) {
-              final t = (_pulseAnim.value + i * 0.33) % 1.0;
-              return Container(
-                  margin     : const EdgeInsets.symmetric(
-                      horizontal: 1.5),
-                  width      : 6,
-                  height     : 6,
-                  decoration : BoxDecoration(
-                      color: Colors.grey
-                          .withOpacity(0.3 + 0.7 * t),
-                      shape: BoxShape.circle));
-            })));
-  }
+  /// Trois points animés en cascade — délégué à un widget dédié
+  /// pour éviter de reconstruire toute la bulle à chaque frame.
+  // ignore: unused_element
+  Widget _typingDots() => _TypingDotsWidget(animation: _pulseAnim);
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  BARRE D'INPUT
@@ -2966,6 +2988,40 @@ class _ChatScreenState extends State<ChatScreen>
           borderRadius: BorderRadius.circular(10)),
       duration: const Duration(seconds: 2),
     ));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Widget TYPING DOTS — trois points WhatsApp animés en cascade
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _TypingDotsWidget extends StatelessWidget {
+  final Animation<double> animation;
+  const _TypingDotsWidget({required this.animation});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: animation,
+      builder  : (_, __) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children    : List.generate(3, (i) {
+          // Chaque point est en avance de 0.33 dans le cycle
+          final phase = (animation.value + i * 0.33) % 1.0;
+          // Courbe en cloche : monte puis redescend
+          final scale = 0.6 + 0.4 * (1.0 - (phase * 2 - 1).abs().clamp(0.0, 1.0));
+          return Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            width : 7 * scale,
+            height: 7 * scale,
+            decoration: BoxDecoration(
+              color: Colors.grey[500],
+              shape: BoxShape.circle,
+            ),
+          );
+        }),
+      ),
+    );
   }
 }
 

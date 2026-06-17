@@ -2,16 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/message_provider.dart';
-import '../providers/auth_provider.dart';
 import '../models/conversation_model.dart';
 import '../utils/constants.dart';
 import 'chat_screen.dart';
 import 'home_screen.dart';
 import '../main.dart';
 import '../services/message_service.dart';
-import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
-import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
-import '../providers/rendez_vous_provider.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'carai_screen.dart';
 import '../widgets/accessibility_button.dart';
@@ -280,6 +276,8 @@ class _MessagesScreenState extends State<MessagesScreen>
   Widget _buildConvItem(ConversationModel conv, MessageProvider provider) {
     final hasUnread    = conv.unreadCount > 0;
     final isOnline     = provider.getUserOnlineStatus(conv.otherUser.id) || conv.otherUser.isOnline;
+    final isTyping     = provider.isUserTyping(conv.id, conv.otherUser.id);
+    final isRecording  = provider.isUserRecording(conv.id, conv.otherUser.id);
     final contextLabel = conv.contextLabel;
 
     return Dismissible(
@@ -332,7 +330,7 @@ class _MessagesScreenState extends State<MessagesScreen>
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: hasUnread
-              ? BorderSide(color: AppConstants.primaryRed.withOpacity(0.3), width: 1)
+              ? BorderSide(color: AppConstants.primaryRed.withAlpha(77), width: 1)
               : BorderSide.none,
         ),
         child: InkWell(
@@ -341,7 +339,7 @@ class _MessagesScreenState extends State<MessagesScreen>
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(children: [
-              // Avatar + indicateur en ligne
+              // ── Avatar + point en ligne ───────────────────────────────
               Stack(children: [
                 CircleAvatar(
                   radius          : 28,
@@ -362,60 +360,75 @@ class _MessagesScreenState extends State<MessagesScreen>
                   child: Container(
                     width: 14, height: 14,
                     decoration: BoxDecoration(
-                        color : Colors.green,
+                        color : const Color(0xFF25D366),
                         shape : BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2)),
                   ),
                 ),
               ]),
               const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Expanded(child: Text(
-                    conv.otherUser.name,
-                    style: TextStyle(
-                        fontSize    : 16,
-                        fontWeight  : hasUnread ? FontWeight.bold : FontWeight.w600,
-                        color       : hasUnread ? AppConstants.primaryRed : Colors.black87),
-                    overflow: TextOverflow.ellipsis,
-                  )),
-                  if (contextLabel != null)
-                    Container(
-                      margin     : const EdgeInsets.only(right: 6),
-                      padding    : const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      constraints: const BoxConstraints(maxWidth: 100),
-                      decoration : BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(4)),
-                      child: Text(contextLabel,
-                          style   : TextStyle(fontSize: 10, color: Colors.blue[800], fontWeight: FontWeight.w600),
-                          overflow: TextOverflow.ellipsis, maxLines: 1),
-                    ),
-                  Text(
-                    conv.lastMessage != null
-                        ? _formatTime(conv.lastMessage!.createdAt)
-                        : _formatTime(conv.updatedAt),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
-                ]),
-                const SizedBox(height: 4),
-                // Aperçu dernier message
-                if (conv.lastMessage != null)
+
+              // ── Contenu texte ─────────────────────────────────────────
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Ligne nom + label service + heure
                   Row(children: [
-                    if (conv.lastMessage!.isMe)
-                      Text('Vous: ', style: TextStyle(
-                          fontSize: 13, color: Colors.grey[700],
-                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
                     Expanded(child: Text(
-                      _lastMsgPreview(conv.lastMessage!),
+                      conv.otherUser.name,
                       style: TextStyle(
-                          fontSize  : 13,
-                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
-                          color     : Colors.grey[600]),
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                          fontSize    : 16,
+                          fontWeight  : hasUnread ? FontWeight.bold : FontWeight.w600,
+                          color       : hasUnread ? AppConstants.primaryRed : Colors.black87),
+                      overflow: TextOverflow.ellipsis,
                     )),
+                    if (contextLabel != null)
+                      Container(
+                        margin     : const EdgeInsets.only(right: 6),
+                        padding    : const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        constraints: const BoxConstraints(maxWidth: 100),
+                        decoration : BoxDecoration(
+                            color: Colors.blue[50],
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Text(contextLabel,
+                            style   : TextStyle(fontSize: 10, color: Colors.blue[800],
+                                fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis, maxLines: 1),
+                      ),
+                    Text(
+                      conv.lastMessage != null
+                          ? _formatTime(conv.lastMessage!.createdAt)
+                          : _formatTime(conv.updatedAt),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                    ),
                   ]),
-              ])),
-              // Badge non lus
-              if (hasUnread)
+                  const SizedBox(height: 4),
+
+                  // ── Aperçu : typing / recording / dernier message ─────
+                  if (isRecording)
+                    _RecordingPreview(name: conv.otherUser.name)
+                  else if (isTyping)
+                    _TypingPreview(name: conv.otherUser.name)
+                  else if (conv.lastMessage != null)
+                    Row(children: [
+                      if (conv.lastMessage!.isMe)
+                        Text('Vous: ', style: TextStyle(
+                            fontSize: 13, color: Colors.grey[700],
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
+                      Expanded(child: Text(
+                        _lastMsgPreview(conv.lastMessage!),
+                        style: TextStyle(
+                            fontSize  : 13,
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                            color     : Colors.grey[600]),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                      )),
+                    ]),
+                ],
+              )),
+
+              // ── Badge non lus ─────────────────────────────────────────
+              if (hasUnread && !isTyping && !isRecording)
                 Container(
                   margin : const EdgeInsets.only(left: 8),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -435,13 +448,150 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   String _lastMsgPreview(MessageModel msg) {
     switch (msg.type) {
-      case 'image'   : return 'Image';
-      case 'video'   : return 'Vidéo';
+      case 'image'   : return '📷 Image';
+      case 'video'   : return '🎥 Vidéo';
       case 'audio'   :
-      case 'vocal'   : return 'Message vocal';
-      case 'document': return 'Document';
-      case 'location': return 'Localisation';
+      case 'vocal'   : return '🎤 Message vocal';
+      case 'document': return '📎 Document';
+      case 'location': return '📍 Localisation';
       default        : return msg.content;
     }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Widgets temps réel pour la liste des conversations
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// "en train d'écrire…" avec trois points animés — style WhatsApp
+class _TypingPreview extends StatefulWidget {
+  final String name;
+  const _TypingPreview({required this.name});
+  @override
+  State<_TypingPreview> createState() => _TypingPreviewState();
+}
+
+class _TypingPreviewState extends State<_TypingPreview>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double>   _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync   : this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _anim = Tween<double>(begin: 0.0, end: 1.0).animate(_ctrl);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children    : [
+        // Trois points en cascade
+        AnimatedBuilder(
+          animation: _anim,
+          builder  : (_, __) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children    : List.generate(3, (i) {
+              final phase = (_anim.value + i * 0.33) % 1.0;
+              final scale = 0.5 + 0.5 *
+                  (1.0 - (phase * 2 - 1).abs().clamp(0.0, 1.0));
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                width : 6 * scale,
+                height: 6 * scale,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF25D366),
+                  shape: BoxShape.circle,
+                ),
+              );
+            }),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          'en train d\'écrire…',
+          style: const TextStyle(
+            fontSize  : 13,
+            color     : Color(0xFF25D366),
+            fontStyle : FontStyle.italic,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// "enregistre un vocal…" avec micro pulsant — style WhatsApp
+class _RecordingPreview extends StatefulWidget {
+  final String name;
+  const _RecordingPreview({required this.name});
+  @override
+  State<_RecordingPreview> createState() => _RecordingPreviewState();
+}
+
+class _RecordingPreviewState extends State<_RecordingPreview>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double>   _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync   : this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+    _anim = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children    : [
+        AnimatedBuilder(
+          animation: _anim,
+          builder  : (_, __) => Icon(
+            Icons.mic,
+            size : 15,
+            color: Color.lerp(
+              Colors.red.withAlpha(80),
+              Colors.red,
+              _anim.value,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        const Text(
+          'enregistre un vocal…',
+          style: TextStyle(
+            fontSize  : 13,
+            color     : Colors.red,
+            fontStyle : FontStyle.italic,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
   }
 }

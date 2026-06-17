@@ -150,8 +150,14 @@ class _SplashScreenState extends State<SplashScreen>
 
         // Injecter RendezVousProvider dans PusherService
         if (mounted) {
+          // setRendezVousProvider est conservé pour compatibilité
           PusherService().setRendezVousProvider(
               context.read<RendezVousProvider>());
+          // Brancher le stream RDV temps réel sur le provider
+          final rdvProvider = context.read<RendezVousProvider>();
+          PusherService().onRdvEvent.listen((data) {
+            rdvProvider.updateFromNotification(data);
+          });
         }
 
         if (!mounted) return;
