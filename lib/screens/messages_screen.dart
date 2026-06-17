@@ -471,12 +471,12 @@ class _MessagesScreenState extends State<MessagesScreen>
 
   String _lastMsgPreview(MessageModel msg) {
     switch (msg.type) {
-      case 'image'   : return '📷 Image';
-      case 'video'   : return '🎥 Vidéo';
+      case 'image'   : return 'Image';
+      case 'video'   : return 'Vidéo';
       case 'audio'   :
-      case 'vocal'   : return '🎤 Message vocal';
-      case 'document': return '📎 Document';
-      case 'location': return '📍 Localisation';
+      case 'vocal'   : return 'Message vocal';
+      case 'document': return 'Document';
+      case 'location': return 'Localisation';
       default        : return msg.content;
     }
   }

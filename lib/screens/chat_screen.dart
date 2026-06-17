@@ -421,8 +421,9 @@ class _ChatScreenState extends State<ChatScreen>
         setState(() { _hasText = false; _replyTo = null; });
       }
       _scrollBottom();
-    } catch (_) {
-      _showErr("Impossible d'envoyer");
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      _showErr(msg.isNotEmpty ? msg : "Impossible d'envoyer");
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -542,18 +543,33 @@ class _ChatScreenState extends State<ChatScreen>
 
   Future<void> _pickVid(ImageSource s) async {
     try {
-      final f = await _picker.pickVideo(
-          source: s, maxDuration: const Duration(minutes: 5));
-      if (f != null) await _send(filePath: f.path, type: 'video');
+      final f = await _picker.pickVideo(source: s);
+      if (f == null) return;
+      // Vérifier la taille : max 100 Mo
+      final size = await File(f.path).length();
+      if (size > 100 * 1024 * 1024) {
+        _showErr('Vidéo trop lourde (max 100 Mo)');
+        return;
+      }
+      await _send(filePath: f.path, type: 'video');
     } catch (_) { _showErr('Erreur vidéo'); }
   }
 
   Future<void> _pickDoc() async {
     try {
-      final r = await FilePicker.platform.pickFiles(type: FileType.any);
-      if (r?.files.single.path != null) {
-        await _send(filePath: r!.files.single.path!, type: 'document');
+      final r = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowCompression: false,
+      );
+      if (r?.files.single.path == null) return;
+      final path = r!.files.single.path!;
+      // Vérifier la taille : max 100 Mo
+      final size = await File(path).length();
+      if (size > 100 * 1024 * 1024) {
+        _showErr('Fichier trop lourd (max 100 Mo)');
+        return;
       }
+      await _send(filePath: path, type: 'document');
     } catch (_) { _showErr('Erreur document'); }
   }
 

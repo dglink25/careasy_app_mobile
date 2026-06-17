@@ -511,7 +511,8 @@ class MessageProvider extends ChangeNotifier {
     if (replyId  != null) req.fields['reply_to_id'] = replyId;
     req.files.add(await http.MultipartFile.fromPath('file', filePath));
 
-    final streamed = await req.send().timeout(const Duration(seconds: 90));
+    // Timeout élevé pour les gros fichiers (vidéos, documents) jusqu'à 100 Mo
+    final streamed = await req.send().timeout(const Duration(minutes: 10));
     final resp     = await http.Response.fromStream(streamed);
     return _parse(resp);
   }
@@ -525,6 +526,19 @@ class MessageProvider extends ChangeNotifier {
           return d;
         }
       } catch (_) {}
+    }
+    if (resp.statusCode == 422) {
+      // Erreur de validation (ex: fichier trop lourd)
+      try {
+        final d = jsonDecode(resp.body) as Map<String, dynamic>;
+        final msg = d['message'] ?? d['errors']?.toString() ?? 'Fichier refusé';
+        throw Exception(msg.toString());
+      } catch (e) {
+        if (e is Exception) rethrow;
+      }
+    }
+    if (resp.statusCode == 413) {
+      throw Exception('Fichier trop lourd pour le serveur (max 100 Mo)');
     }
     throw Exception('HTTP ${resp.statusCode}');
   }
