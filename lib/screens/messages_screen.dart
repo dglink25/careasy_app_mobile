@@ -1,28 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:http/http.dart' as http;
 import '../providers/message_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/conversation_model.dart';
 import '../utils/constants.dart';
 import 'chat_screen.dart';
 import 'home_screen.dart';
-import 'settings_screen.dart';
-import 'welcome_screen.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'dart:async';
-import 'dart:convert';
 import '../main.dart';
-import '../services/message_polling_service.dart';
 import '../services/message_service.dart';
 import 'package:careasy_app_mobile/screens/mes_entreprises_screen.dart' as entreprises;
 import 'package:careasy_app_mobile/screens/rendez_vous/rendez_vous_list_screen.dart';
 import '../providers/rendez_vous_provider.dart';
 import '../widgets/app_bottom_nav.dart';
-import 'package:careasy_app_mobile/screens/create_entreprise_screen.dart';
 import 'carai_screen.dart';
 import '../widgets/accessibility_button.dart';
+import '../models/message_model.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -36,21 +29,9 @@ class _MessagesScreenState extends State<MessagesScreen>
   final DateFormat _timeFormat = DateFormat('HH:mm');
   final DateFormat _dateFormat = DateFormat('dd/MM/yy');
 
-  static const _androidOptions =
-      AndroidOptions(encryptedSharedPreferences: true);
-  static const _iOSOptions =
-      IOSOptions(accessibility: KeychainAccessibility.first_unlock);
-  final _storage = const FlutterSecureStorage(
-    aOptions: _androidOptions,
-    iOptions: _iOSOptions,
-  );
-
-  // ── Refresh automatique ────────────────────────────────────────────────────
-  Timer? _refreshTimer;
-
-  bool _isSearching = false;
-  final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
+  bool                    _isSearching    = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String                  _searchQuery    = '';
 
   @override
   void initState() {
@@ -58,52 +39,41 @@ class _MessagesScreenState extends State<MessagesScreen>
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _reload();
-      MessagePollingService().setActiveConversation(null);
+      // Chargement initial uniquement — Pusher gère les mises à jour suivantes
+      context.read<MessageProvider>().loadConversations();
       setupNotificationNavigation(context);
     });
 
-    // Polling de secours toutes les 15 s (fallback si Pusher déconnecté)
-    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (mounted) context.read<MessageProvider>().loadConversations();
+    _searchCtrl.addListener(() {
+      setState(() => _searchQuery = _searchCtrl.text.trim().toLowerCase());
     });
-
-    _searchController.addListener(() {
-      setState(
-          () => _searchQuery = _searchController.text.trim().toLowerCase());
-    });
-  }
-
-  void _reload() {
-    context.read<MessageProvider>().loadConversations();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _reload();
-      MessagePollingService().setActiveConversation(null);
+      // Rechargement au retour au premier plan (pour rattraper les messages
+      // reçus pendant que l'app était en arrière-plan)
+      context.read<MessageProvider>().loadConversations();
     }
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
-    _searchController.dispose();
+    _searchCtrl.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   String _formatTime(DateTime t) {
-    final now = DateTime.now();
-    if (now.difference(t).inDays == 0) return _timeFormat.format(t);
-    if (now.difference(t).inDays == 1) return 'Hier';
+    final now  = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inDays == 0) return _timeFormat.format(t);
+    if (diff.inDays == 1) return 'Hier';
     return _dateFormat.format(t);
   }
 
-  // ── Navigation vers le chat ────────────────────────────────────────────────
-  Future<void> _openChat(
-      ConversationModel conv, MessageProvider provider) async {
+  Future<void> _openChat(ConversationModel conv, MessageProvider provider) async {
     await provider.markConversationAsRead(conv.id);
     if (!mounted) return;
     await Navigator.push(
@@ -112,18 +82,16 @@ class _MessagesScreenState extends State<MessagesScreen>
         builder: (_) => ChangeNotifierProvider.value(
           value: provider,
           child: ChatScreen(
-            conversationId: conv.id,
-            otherUser: conv.otherUser,
-            serviceName: conv.serviceName,
-            entrepriseName: conv.entrepriseName,
+            conversationId : conv.id,
+            otherUser      : conv.otherUser,
+            serviceName    : conv.serviceName,
+            entrepriseName : conv.entrepriseName,
           ),
         ),
       ),
     );
-    if (mounted) {
-      MessagePollingService().setActiveConversation(null);
-      provider.loadConversations();
-    }
+    // Rafraîchir après retour du chat (lecture, nouveaux messages, etc.)
+    if (mounted) provider.loadConversations();
   }
 
   @override
@@ -136,26 +104,36 @@ class _MessagesScreenState extends State<MessagesScreen>
         elevation: 0,
         title: _isSearching
             ? _buildSearchField()
-            : const Text('Messages',
-                style:
-                    TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            : const Text('Messages', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         actions: [
-          if (!_isSearching)
+          if (!_isSearching) ...[
+            // Indicateur de connexion WebSocket
+            Consumer<MessageProvider>(builder: (_, pv, __) {
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Tooltip(
+                  message: pv.isRealtimeConnected ? 'Temps réel actif' : 'Reconnexion…',
+                  child: Icon(
+                    pv.isRealtimeConnected ? Icons.wifi : Icons.wifi_off,
+                    size: 18,
+                    color: pv.isRealtimeConnected
+                        ? Colors.white
+                        : Colors.white54,
+                  ),
+                ),
+              );
+            }),
             IconButton(
               icon: const Icon(Icons.search),
               onPressed: () => setState(() => _isSearching = true),
             ),
-          // Bouton refresh manuel
-          if (!_isSearching)
             IconButton(
               icon: const Icon(Icons.refresh),
-              onPressed: _reload,
+              onPressed: () => context.read<MessageProvider>().loadConversations(),
               tooltip: 'Actualiser',
             ),
-
-          if (!_isSearching)
             const AccessibilityButton(),
-
+          ],
         ],
       ),
       body: _isSearching ? _buildSearchResults() : _buildConversationList(),
@@ -173,54 +151,44 @@ class _MessagesScreenState extends State<MessagesScreen>
         borderRadius: BorderRadius.circular(20),
       ),
       child: TextField(
-        controller: _searchController,
+        controller: _searchCtrl,
         autofocus: true,
         style: const TextStyle(color: Colors.black87, fontSize: 14),
         decoration: InputDecoration(
-          hintText: 'Rechercher une conversation...',
-          hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
-          prefixIcon: const Icon(Icons.search,
-              color: AppConstants.primaryRed, size: 20),
-          suffixIcon: IconButton(
+          hintText   : 'Rechercher une conversation...',
+          hintStyle  : TextStyle(color: Colors.grey[500], fontSize: 13),
+          prefixIcon : const Icon(Icons.search, color: AppConstants.primaryRed, size: 20),
+          suffixIcon : IconButton(
             icon: Icon(Icons.close, color: Colors.grey[600], size: 18),
             onPressed: () {
-              _searchController.clear();
-              setState(() {
-                _isSearching = false;
-                _searchQuery = '';
-              });
+              _searchCtrl.clear();
+              setState(() { _isSearching = false; _searchQuery = ''; });
             },
           ),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          border           : InputBorder.none,
+          contentPadding   : const EdgeInsets.symmetric(vertical: 10),
         ),
       ),
     );
   }
 
-  // ── Résultats de recherche ─────────────────────────────────────────────────
   Widget _buildSearchResults() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
-      final query = _searchQuery;
-      if (query.isEmpty) {
+      if (_searchQuery.isEmpty) {
         return _emptySearch('Tapez pour rechercher une conversation');
       }
-
       final filtered = provider.conversations.where((conv) {
-        final name = conv.otherUser.name.toLowerCase();
-        final lastMsg = conv.lastMessage?.content.toLowerCase() ?? '';
-        final service = (conv.serviceName ?? '').toLowerCase();
-        final entreprise = (conv.entrepriseName ?? '').toLowerCase();
-        return name.contains(query) ||
-            lastMsg.contains(query) ||
-            service.contains(query) ||
-            entreprise.contains(query);
+        final name        = conv.otherUser.name.toLowerCase();
+        final lastMsg     = conv.lastMessage?.content.toLowerCase() ?? '';
+        final service     = (conv.serviceName ?? '').toLowerCase();
+        final entreprise  = (conv.entrepriseName ?? '').toLowerCase();
+        return name.contains(_searchQuery)     ||
+               lastMsg.contains(_searchQuery)  ||
+               service.contains(_searchQuery)  ||
+               entreprise.contains(_searchQuery);
       }).toList();
 
-      if (filtered.isEmpty) {
-        return _emptySearch('Aucune conversation trouvée');
-      }
-
+      if (filtered.isEmpty) return _emptySearch('Aucune conversation trouvée');
       return ListView.builder(
         padding: const EdgeInsets.all(12),
         itemCount: filtered.length,
@@ -229,30 +197,25 @@ class _MessagesScreenState extends State<MessagesScreen>
     });
   }
 
-  Widget _emptySearch(String msg) {
-    return Center(
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
-        const SizedBox(height: 16),
-        Text(msg,
-            style: TextStyle(color: Colors.grey[500], fontSize: 14)),
-      ]),
-    );
-  }
+  Widget _emptySearch(String msg) => Center(child: Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(Icons.search_off, size: 64, color: Colors.grey[300]),
+      const SizedBox(height: 16),
+      Text(msg, style: TextStyle(color: Colors.grey[500], fontSize: 14)),
+    ],
+  ));
 
   // ── Liste principale ───────────────────────────────────────────────────────
   Widget _buildConversationList() {
     return Consumer<MessageProvider>(builder: (_, provider, __) {
       if (provider.isLoading && provider.conversations.isEmpty) {
         return const Center(
-            child:
-                CircularProgressIndicator(color: AppConstants.primaryRed));
+            child: CircularProgressIndicator(color: AppConstants.primaryRed));
       }
-
       if (provider.error != null && provider.conversations.isEmpty) {
         return _buildError(provider);
       }
-
       if (provider.conversations.isEmpty) {
         return _buildEmpty();
       }
@@ -261,154 +224,111 @@ class _MessagesScreenState extends State<MessagesScreen>
         onRefresh: provider.loadConversations,
         color: AppConstants.primaryRed,
         child: ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: provider.conversations.length,
-          itemBuilder: (_, i) =>
-              _buildConvItem(provider.conversations[i], provider),
+          padding   : const EdgeInsets.all(12),
+          itemCount : provider.conversations.length,
+          itemBuilder: (_, i) => _buildConvItem(provider.conversations[i], provider),
         ),
       );
     });
   }
 
-  Widget _buildError(MessageProvider provider) {
-    return Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+  Widget _buildError(MessageProvider provider) => Center(
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
       Icon(Icons.error_outline, size: 64, color: Colors.grey[400]),
       const SizedBox(height: 16),
-      Text('Erreur de chargement',
-          style: TextStyle(fontSize: 18, color: Colors.grey[600])),
+      Text('Erreur de chargement', style: TextStyle(fontSize: 18, color: Colors.grey[600])),
       const SizedBox(height: 8),
-      Text(provider.error!,
-          style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+      Text(provider.error!, style: TextStyle(fontSize: 14, color: Colors.grey[500]),
           textAlign: TextAlign.center),
       const SizedBox(height: 16),
       ElevatedButton(
         onPressed: provider.loadConversations,
         style: ElevatedButton.styleFrom(
-            backgroundColor: AppConstants.primaryRed,
-            foregroundColor: Colors.white),
+          backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white),
         child: const Text('Réessayer'),
       ),
-    ]));
-  }
+    ]),
+  );
 
-  Widget _buildEmpty() {
-    return Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+  Widget _buildEmpty() => Center(
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
       Container(
-        padding: const EdgeInsets.all(20),
-        decoration:
-            BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
-        child:
-            Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[600]),
+        padding   : const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: Colors.grey[200], shape: BoxShape.circle),
+        child: Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[600]),
       ),
       const SizedBox(height: 20),
       Text('Aucune conversation',
-          style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[800])),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[800])),
       const SizedBox(height: 8),
       Text('Commencez à discuter avec des professionnels',
-          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-          textAlign: TextAlign.center),
+          style: TextStyle(fontSize: 14, color: Colors.grey[600]), textAlign: TextAlign.center),
       const SizedBox(height: 24),
       ElevatedButton.icon(
         onPressed: () => Navigator.pushReplacement(
-            context, MaterialPageRoute(builder: (_) => const HomeScreen())),
-        icon: const Icon(Icons.explore),
-        label: const Text('Découvrir des services'),
-        style: ElevatedButton.styleFrom(
-            backgroundColor: AppConstants.primaryRed,
-            foregroundColor: Colors.white,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
+          context, MaterialPageRoute(builder: (_) => const HomeScreen())),
+        icon    : const Icon(Icons.explore),
+        label   : const Text('Découvrir des services'),
+        style   : ElevatedButton.styleFrom(
+          backgroundColor: AppConstants.primaryRed, foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
       ),
-    ]));
-  }
+    ]),
+  );
 
   // ── Tuile conversation ─────────────────────────────────────────────────────
   Widget _buildConvItem(ConversationModel conv, MessageProvider provider) {
-    final hasUnread = conv.unreadCount > 0;
-    final isOnline = provider.getUserOnlineStatus(conv.otherUser.id) ||
-        conv.otherUser.isOnline;
+    final hasUnread    = conv.unreadCount > 0;
+    final isOnline     = provider.getUserOnlineStatus(conv.otherUser.id) || conv.otherUser.isOnline;
     final contextLabel = conv.contextLabel;
 
     return Dismissible(
       key: Key('conv_${conv.id}'),
       direction: DismissDirection.endToStart,
-      confirmDismiss: (_) async {
-        return await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Supprimer la conversation'),
-            content: Text(
-              'Supprimer la conversation avec ${conv.otherUser.name} ?\nTous les messages seront perdus.',
+      confirmDismiss: (_) async => await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          shape  : RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title  : const Text('Supprimer la conversation'),
+          content: Text('Supprimer la conversation avec ${conv.otherUser.name} ?\nTous les messages seront perdus.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annuler')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+              child: const Text('Oui'),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Annuler'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Oui'),
-              ),
-            ],
-          ),
-        );
-      },
-      onDismissed: (_) async {
-        final success = await MessageService().deleteConversation(conv.id);
-        if (mounted) {
-          if (success) {
-            provider.loadConversations();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Conversation avec ${conv.otherUser.name} supprimée'),
-                backgroundColor: Colors.green,
-                behavior: SnackBarBehavior.floating,
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          } else {
-            provider.loadConversations(); // réafficher si échec
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Erreur lors de la suppression'),
-                backgroundColor: Colors.red,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        }
-      },
-      background: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: Colors.red,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.delete_outline, color: Colors.white, size: 28),
-            SizedBox(height: 4),
-            Text('Supprimer',
-                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
           ],
         ),
       ),
+      onDismissed: (_) async {
+        final success = await MessageService().deleteConversation(conv.id);
+        if (mounted) {
+          provider.loadConversations();
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content         : Text(success
+                ? 'Conversation avec ${conv.otherUser.name} supprimée'
+                : 'Erreur lors de la suppression'),
+            backgroundColor : success ? Colors.green : Colors.red,
+            behavior        : SnackBarBehavior.floating,
+            duration        : const Duration(seconds: 2),
+          ));
+        }
+      },
+      background: Container(
+        margin    : const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)),
+        alignment : Alignment.centerRight,
+        padding   : const EdgeInsets.only(right: 20),
+        child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.delete_outline, color: Colors.white, size: 28),
+          SizedBox(height: 4),
+          Text('Supprimer', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+        ]),
+      ),
       child: Card(
-        margin: const EdgeInsets.only(bottom: 8),
-        elevation: hasUnread ? 3 : 1,
+        margin    : const EdgeInsets.only(bottom: 8),
+        elevation : hasUnread ? 3 : 1,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: hasUnread
@@ -416,17 +336,17 @@ class _MessagesScreenState extends State<MessagesScreen>
               : BorderSide.none,
         ),
         child: InkWell(
-          onTap: () => _openChat(conv, provider),
-          borderRadius: BorderRadius.circular(12),
-          // ... tout le contenu Padding inchangé
+          onTap        : () => _openChat(conv, provider),
+          borderRadius : BorderRadius.circular(12),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(children: [
+              // Avatar + indicateur en ligne
               Stack(children: [
                 CircleAvatar(
-                  radius: 28,
-                  backgroundColor: Colors.grey[200],
-                  backgroundImage: conv.otherUser.photoUrl != null
+                  radius          : 28,
+                  backgroundColor : Colors.grey[200],
+                  backgroundImage : conv.otherUser.photoUrl != null
                       ? NetworkImage(conv.otherUser.photoUrl!) : null,
                   child: conv.otherUser.photoUrl == null
                       ? Text(
@@ -442,74 +362,69 @@ class _MessagesScreenState extends State<MessagesScreen>
                   child: Container(
                     width: 14, height: 14,
                     decoration: BoxDecoration(
-                        color: Colors.green, shape: BoxShape.circle,
+                        color : Colors.green,
+                        shape : BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 2)),
                   ),
                 ),
               ]),
               const SizedBox(width: 12),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Expanded(
-                      child: Text(
-                        conv.otherUser.name,
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: hasUnread ? FontWeight.bold : FontWeight.w600,
-                            color: hasUnread ? AppConstants.primaryRed : Colors.black87),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(child: Text(
+                    conv.otherUser.name,
+                    style: TextStyle(
+                        fontSize    : 16,
+                        fontWeight  : hasUnread ? FontWeight.bold : FontWeight.w600,
+                        color       : hasUnread ? AppConstants.primaryRed : Colors.black87),
+                    overflow: TextOverflow.ellipsis,
+                  )),
+                  if (contextLabel != null)
+                    Container(
+                      margin     : const EdgeInsets.only(right: 6),
+                      padding    : const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      constraints: const BoxConstraints(maxWidth: 100),
+                      decoration : BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(4)),
+                      child: Text(contextLabel,
+                          style   : TextStyle(fontSize: 10, color: Colors.blue[800], fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis, maxLines: 1),
                     ),
-                    if (contextLabel != null)
-                      Container(
-                        margin: const EdgeInsets.only(right: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        constraints: const BoxConstraints(maxWidth: 100),
-                        decoration: BoxDecoration(
-                            color: Colors.blue[50],
-                            borderRadius: BorderRadius.circular(4)),
-                        child: Text(contextLabel,
-                            style: TextStyle(fontSize: 10, color: Colors.blue[800],
-                                fontWeight: FontWeight.w600),
-                            overflow: TextOverflow.ellipsis, maxLines: 1),
-                      ),
-                    Text(
-                      conv.lastMessage != null
-                          ? _formatTime(conv.lastMessage!.createdAt)
-                          : _formatTime(conv.updatedAt),
-                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                    ),
-                  ]),
-                  const SizedBox(height: 4),
-                  if (conv.lastMessage != null)
-                    Row(children: [
-                      if (conv.lastMessage!.isMe)
-                        Text('Vous: ',
-                            style: TextStyle(fontSize: 13, color: Colors.grey[700],
-                                fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
-                      Expanded(
-                        child: Text(
-                          _lastMsgPreview(conv.lastMessage!),
-                          style: TextStyle(fontSize: 13,
-                              fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
-                              color: Colors.grey[600]),
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ]),
+                  Text(
+                    conv.lastMessage != null
+                        ? _formatTime(conv.lastMessage!.createdAt)
+                        : _formatTime(conv.updatedAt),
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
                 ]),
-              ),
+                const SizedBox(height: 4),
+                // Aperçu dernier message
+                if (conv.lastMessage != null)
+                  Row(children: [
+                    if (conv.lastMessage!.isMe)
+                      Text('Vous: ', style: TextStyle(
+                          fontSize: 13, color: Colors.grey[700],
+                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal)),
+                    Expanded(child: Text(
+                      _lastMsgPreview(conv.lastMessage!),
+                      style: TextStyle(
+                          fontSize  : 13,
+                          fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                          color     : Colors.grey[600]),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                    )),
+                  ]),
+              ])),
+              // Badge non lus
               if (hasUnread)
                 Container(
-                  margin: const EdgeInsets.only(left: 8),
+                  margin : const EdgeInsets.only(left: 8),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                      color: AppConstants.primaryRed,
-                      borderRadius: BorderRadius.circular(12)),
+                    color        : AppConstants.primaryRed,
+                    borderRadius : BorderRadius.circular(12)),
                   child: Text('${conv.unreadCount}',
-                      style: const TextStyle(color: Colors.white, fontSize: 11,
-                          fontWeight: FontWeight.bold)),
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
                 ),
             ]),
           ),
@@ -517,23 +432,16 @@ class _MessagesScreenState extends State<MessagesScreen>
       ),
     );
   }
-  
-  
-  String _lastMsgPreview(lastMsg) {
-    switch (lastMsg.type) {
-      case 'image':
-        return 'Image';
-      case 'video':
-        return 'Vidéo';
-      case 'audio':
-      case 'vocal':
-        return 'Message vocal';
-      case 'document':
-        return 'Document';
-      case 'location':
-        return 'Localisation';
-      default:
-        return lastMsg.content ?? '';
+
+  String _lastMsgPreview(MessageModel msg) {
+    switch (msg.type) {
+      case 'image'   : return 'Image';
+      case 'video'   : return 'Vidéo';
+      case 'audio'   :
+      case 'vocal'   : return 'Message vocal';
+      case 'document': return 'Document';
+      case 'location': return 'Localisation';
+      default        : return msg.content;
     }
   }
 }
