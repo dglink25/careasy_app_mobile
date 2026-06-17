@@ -26,6 +26,7 @@ import '../utils/constants.dart';
 import '../services/notification_service.dart';
 import '../services/pusher_service.dart';
 import '../services/message_service.dart';
+import 'media_viewer_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String    conversationId;
@@ -55,8 +56,10 @@ class _ChatScreenState extends State<ChatScreen>
   final ImagePicker           _picker     = ImagePicker();
   final AudioRecorder         _rec        = AudioRecorder();
   final Map<String, AudioPlayer>            _players = {};
-  final Map<String, VideoPlayerController>  _vCtrl   = {};
-  final Map<String, ChewieController>       _cCtrl   = {};
+  final Map<String, VideoPlayerController>  _vCtrl       = {};
+  final Map<String, ChewieController>       _cCtrl       = {};
+  final Set<String>                         _vInitializing = {};
+  final Set<String>                         _vError        = {};
 
   static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
   static const _iOSOptions     = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
@@ -227,7 +230,7 @@ class _ChatScreenState extends State<ChatScreen>
       _msgProvider?.sendTypingIndicator(widget.conversationId, false);
     }
     if (_recActive) {
-      _rec.stop().catchError((_) {}).then((p) {
+      _rec.stop().catchError((_) => null).then((p) {
         if (p != null) try { File(p).deleteSync(); } catch (_) {}
       });
       _msgProvider?.sendRecordingIndicator(widget.conversationId, false);
@@ -802,7 +805,8 @@ class _ChatScreenState extends State<ChatScreen>
       '${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 
   Future<void> _initVideo(String id, String url) async {
-    if (_vCtrl.containsKey(id)) return;
+    if (_vCtrl.containsKey(id) || _vInitializing.contains(id)) return;
+    _vInitializing.add(id);
     try {
       final vc = VideoPlayerController.networkUrl(Uri.parse(url));
       await vc.initialize();
@@ -813,8 +817,18 @@ class _ChatScreenState extends State<ChatScreen>
           aspectRatio: vc.value.aspectRatio,
           errorBuilder: (_, __) =>
               const Center(child: Icon(Icons.error, color: Colors.red)));
-      if (mounted) setState(() { _vCtrl[id] = vc; _cCtrl[id] = cc; });
-    } catch (_) {}
+      if (mounted) setState(() {
+        _vCtrl[id] = vc;
+        _cCtrl[id] = cc;
+        _vInitializing.remove(id);
+      });
+    } catch (e) {
+      debugPrint('[Video] Erreur init $id: $e');
+      if (mounted) setState(() {
+        _vInitializing.remove(id);
+        _vError.add(id);
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1403,39 +1417,161 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildImgContent(MessageModel m) {
-    if (m.fileUrl == null) return const SizedBox.shrink();
-    return GestureDetector(
-      onTap: () => _openImg(m.fileUrl!),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.network(
-          m.fileUrl!,
+    final url = m.fileUrl;
+    if (url == null || url.isEmpty) {
+      return Container(
           width : 220,
           height: 180,
-          fit   : BoxFit.cover,
-          loadingBuilder: (_, c, p) => p == null
-              ? c
-              : Container(
-                  width : 220,
-                  height: 180,
-                  color : Colors.grey[200],
-                  child : const Center(
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2))),
-          errorBuilder: (_, __, ___) => Container(
-              width : 220,
-              height: 180,
-              color : Colors.grey[200],
-              child : const Icon(Icons.broken_image)),
+          color : Colors.grey[200],
+          child : const Center(child: CircularProgressIndicator(strokeWidth: 2)));
+    }
+
+    // Chemin local : image en cours d'upload
+    if (!url.startsWith('http')) {
+      final file = File(url);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(children: [
+          Image.file(
+            file,
+            width : 220,
+            height: 180,
+            fit   : BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+                width : 220,
+                height: 180,
+                color : Colors.grey[200],
+                child : const Icon(Icons.broken_image)),
+          ),
+          Positioned.fill(
+            child: Container(
+              color: Colors.black26,
+              child: const Center(
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+            ),
+          ),
+        ]),
+      );
+    }
+
+    final heroTag = 'img_${m.id}';
+    return GestureDetector(
+      onTap: () => ImageViewerModal.show(context, url, heroTag: heroTag),
+      child: Hero(
+        tag: heroTag,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Stack(
+            children: [
+              Image.network(
+                url,
+                width : 220,
+                height: 180,
+                fit   : BoxFit.cover,
+                loadingBuilder: (_, child, progress) => progress == null
+                    ? child
+                    : Container(
+                        width : 220,
+                        height: 180,
+                        color : Colors.grey[200],
+                        child : const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2))),
+                errorBuilder: (_, __, ___) => Container(
+                    width : 220,
+                    height: 180,
+                    color : Colors.grey[200],
+                    child : const Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.broken_image, color: Colors.grey),
+                        SizedBox(height: 4),
+                        Text('Image indisponible',
+                            style: TextStyle(fontSize: 11, color: Colors.grey)),
+                      ],
+                    )),
+              ),
+              // Icône "agrandir" en bas à droite
+              Positioned(
+                bottom: 6, right: 6,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.black45,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.zoom_out_map,
+                      color: Colors.white, size: 14),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildVidContent(MessageModel m) {
-    if (m.fileUrl == null) return const SizedBox.shrink();
+    // Message optimiste : pas encore d'URL distante
+    final url = m.fileUrl;
+    if (url == null || url.isEmpty) {
+      return Container(
+          width     : 220,
+          height    : 160,
+          decoration: BoxDecoration(
+              color       : Colors.black,
+              borderRadius: BorderRadius.circular(8)),
+          child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 8),
+            Text('Envoi…',
+                style: TextStyle(color: Colors.white70, fontSize: 11)),
+          ]));
+    }
+
+    // URL locale (chemin fichier) : pas encore sur le serveur
+    if (!url.startsWith('http')) {
+      return Container(
+          width     : 220,
+          height    : 160,
+          decoration: BoxDecoration(
+              color       : Colors.black,
+              borderRadius: BorderRadius.circular(8)),
+          child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 8),
+            Text('Envoi en cours…',
+                style: TextStyle(color: Colors.white70, fontSize: 11)),
+          ]));
+    }
+
+    // Erreur d'initialisation
+    if (_vError.contains(m.id)) {
+      return GestureDetector(
+        onTap: () {
+          setState(() => _vError.remove(m.id));
+          _initVideo(m.id, url);
+        },
+        child: Container(
+            width     : 220,
+            height    : 160,
+            decoration: BoxDecoration(
+                color       : Colors.black87,
+                borderRadius: BorderRadius.circular(8)),
+            child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.error_outline, color: Colors.red, size: 36),
+              SizedBox(height: 6),
+              Text('Impossible de charger la vidéo',
+                  style: TextStyle(color: Colors.white70, fontSize: 11)),
+              SizedBox(height: 4),
+              Text('Appuyer pour réessayer',
+                  style: TextStyle(color: Colors.white38, fontSize: 10)),
+            ])),
+      );
+    }
+
+    // En cours d'initialisation
     if (!_cCtrl.containsKey(m.id)) {
-      _initVideo(m.id, m.fileUrl!);
+      _initVideo(m.id, url);
       return Container(
           width     : 220,
           height    : 160,
@@ -1443,15 +1579,40 @@ class _ChatScreenState extends State<ChatScreen>
               color       : Colors.black,
               borderRadius: BorderRadius.circular(8)),
           child: const Center(
-              child: CircularProgressIndicator(
-                  color: Colors.white)));
+              child: CircularProgressIndicator(color: Colors.white)));
     }
-    return SizedBox(
+
+    // Vidéo prête — thumbnail + bouton play qui ouvre le modal plein écran
+    return GestureDetector(
+      onTap: () => VideoViewerModal.show(context, url),
+      child: SizedBox(
         width : 220,
         height: 160,
         child : ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Chewie(controller: _cCtrl[m.id]!)));
+          borderRadius: BorderRadius.circular(8),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Player réduit en fond (muet, sans contrôles)
+              Chewie(controller: _cCtrl[m.id]!),
+              // Overlay "plein écran"
+              Positioned(
+                bottom: 6, right: 6,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.fullscreen,
+                      color: Colors.white, size: 16),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildLocContent(MessageModel m) {
@@ -1598,25 +1759,70 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildAudioContent(MessageModel m) {
+    final url = m.fileUrl;
+
+    // Pas encore d'URL — en cours d'envoi
+    if (url == null || url.isEmpty) {
+      return SizedBox(
+        width: 210,
+        child: Row(children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+                color: Colors.grey[300], shape: BoxShape.circle),
+            child: const Center(
+                child: SizedBox(
+                    width: 18, height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.grey))),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(height: 3,
+                    decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2))),
+                const SizedBox(height: 8),
+                Text('Envoi en cours…',
+                    style: TextStyle(
+                        fontSize: 10, color: Colors.grey[500])),
+              ],
+            ),
+          ),
+        ]),
+      );
+    }
+
     final p       = _players[m.id];
     final playing = p?.playing ?? false;
+
     return StreamBuilder<Duration>(
       stream : p?.positionStream ?? const Stream.empty(),
       builder: (_, snap) {
         final pos = snap.data ?? Duration.zero;
         final dur = p?.duration ?? Duration.zero;
         final pct = dur.inMilliseconds > 0
-            ? (pos.inMilliseconds / dur.inMilliseconds)
-                .clamp(0.0, 1.0)
+            ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
             : 0.0;
+
         return SizedBox(
           width: 210,
           child: Row(children: [
+            // Bouton play — tap court lance la lecture inline,
+            // tap long ouvre le modal plein écran
             GestureDetector(
-              onTap: () {
-                if (m.fileUrl != null)
-                  _playAudio(m.id, m.fileUrl!);
-              },
+              onTap: () => _playAudio(m.id, url),
+              onLongPress: () => AudioPlayerModal.show(
+                context,
+                url: url,
+                senderName: widget.otherUser.name,
+                isMe: m.isMe,
+                senderPhotoUrl: m.isMe ? null : widget.otherUser.photoUrl,
+              ),
               child: Container(
                 width : 40,
                 height: 40,
@@ -1627,8 +1833,7 @@ class _ChatScreenState extends State<ChatScreen>
                     shape: BoxShape.circle),
                 child: Icon(
                     playing ? Icons.pause : Icons.play_arrow,
-                    color: Colors.white,
-                    size : 22)),
+                    color: Colors.white, size: 22)),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -1656,8 +1861,7 @@ class _ChatScreenState extends State<ChatScreen>
                             (v * dur.inMilliseconds).toInt()))),
               ),
               Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Row(
                       mainAxisAlignment:
                           MainAxisAlignment.spaceBetween,
@@ -1666,6 +1870,11 @@ class _ChatScreenState extends State<ChatScreen>
                             style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.grey[600])),
+                        // Hint "appui long"
+                        Text('appui long pour agrandir',
+                            style: TextStyle(
+                                fontSize: 9,
+                                color: Colors.grey[400])),
                         Text(_fmt(dur),
                             style: TextStyle(
                                 fontSize: 10,
@@ -1679,33 +1888,90 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildDocContent(MessageModel m) {
-    if (m.fileUrl == null) return const SizedBox.shrink();
-    final fn  = m.fileUrl!.split('/').last;
-    final ext = fn.split('.').last.toLowerCase();
-    final ico = ext == 'pdf'
-        ? Icons.picture_as_pdf
-        : (ext == 'doc' || ext == 'docx')
-            ? Icons.description
-            : Icons.insert_drive_file;
-    return GestureDetector(
-      onTap: () => _openUrl(m.fileUrl!),
-      child: Container(
-        width    : 200,
-        padding  : const EdgeInsets.all(10),
+    if (m.fileUrl == null) {
+      // En cours d'envoi
+      return Container(
+        width  : 200,
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
             color       : Colors.grey[100],
             borderRadius: BorderRadius.circular(8),
             border      : Border.all(color: Colors.grey[300]!)),
         child: Row(children: [
-          Icon(ico, color: AppConstants.primaryRed, size: 28),
+          const SizedBox(
+              width: 28, height: 28,
+              child: CircularProgressIndicator(strokeWidth: 2)),
           const SizedBox(width: 8),
           Expanded(
-              child: Text(fn,
-                  style   : const TextStyle(fontSize: 12),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis)),
-          const Icon(Icons.download, size: 18, color: Colors.grey),
-        ])),
+              child: Text('Envoi en cours…',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.grey[500]),
+                  maxLines: 1)),
+        ]),
+      );
+    }
+
+    final fn  = m.fileUrl!.split('/').last.split('?').first;
+    final ext = fn.split('.').last.toLowerCase();
+    final ico = ext == 'pdf'
+        ? Icons.picture_as_pdf
+        : (ext == 'doc' || ext == 'docx')
+            ? Icons.description
+            : (ext == 'xls' || ext == 'xlsx')
+                ? Icons.table_chart
+                : Icons.insert_drive_file;
+    final color = ext == 'pdf'
+        ? Colors.red
+        : (ext == 'doc' || ext == 'docx')
+            ? const Color(0xFF2B579A)
+            : (ext == 'xls' || ext == 'xlsx')
+                ? const Color(0xFF217346)
+                : Colors.grey[700]!;
+
+    return GestureDetector(
+      onTap: () => DocumentViewerModal.show(context, m.fileUrl!, fn),
+      child: Container(
+        width    : 210,
+        padding  : const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+            color       : Colors.grey[50],
+            borderRadius: BorderRadius.circular(10),
+            border      : Border.all(color: Colors.grey[300]!),
+            boxShadow   : [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 4, offset: const Offset(0, 1))
+            ]),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(ico, color: color, size: 24),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                Text(fn,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w500),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(ext.toUpperCase(),
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: color,
+                        fontWeight: FontWeight.w600)),
+              ])),
+          Icon(Icons.chevron_right, size: 16, color: Colors.grey[400]),
+        ]),
+      ),
     );
   }
 
@@ -2680,34 +2946,13 @@ class _ChatScreenState extends State<ChatScreen>
 
   // ── Ouverture URLs / images / carte ───────────────────────────────────────
 
-  void _openImg(String url) => Navigator.push(
-      context,
-      MaterialPageRoute(
-          builder: (_) => Scaffold(
-            backgroundColor: Colors.black,
-            appBar: AppBar(
-                backgroundColor: Colors.black,
-                iconTheme: const IconThemeData(
-                    color: Colors.white)),
-            body: Center(
-                child: InteractiveViewer(
-                    child: Image.network(url))),
-          )));
+  // _openImg est désormais géré par ImageViewerModal.show() dans _buildImgContent
 
   Future<void> _openLoc(double lat, double lng) async {
     final uri = Uri.parse(
         'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
     if (await canLaunchUrl(uri)) {
-      await launchUrl(uri,
-          mode: LaunchMode.externalApplication);
-    }
-  }
-
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri,
-          mode: LaunchMode.externalApplication);
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
