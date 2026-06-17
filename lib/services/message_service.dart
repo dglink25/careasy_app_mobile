@@ -11,7 +11,13 @@ class MessageService {
   factory MessageService() => _instance;
   MessageService._internal();
 
-  final _storage = const FlutterSecureStorage();
+  static const _androidOptions = AndroidOptions(encryptedSharedPreferences: true);
+  static const _iOSOptions = IOSOptions(accessibility: KeychainAccessibility.first_unlock);
+
+  final _storage = const FlutterSecureStorage(
+    aOptions: _androidOptions,
+    iOptions: _iOSOptions,
+  );
   String? _cachedToken;
 
   Future<String?> _getToken() async {
