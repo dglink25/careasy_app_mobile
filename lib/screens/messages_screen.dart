@@ -72,7 +72,7 @@ class _MessagesScreenState extends State<MessagesScreen>
   Future<void> _openChat(ConversationModel conv, MessageProvider provider) async {
     await provider.markConversationAsRead(conv.id);
     if (!mounted) return;
-    await Navigator.push(
+    final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider.value(
@@ -86,8 +86,31 @@ class _MessagesScreenState extends State<MessagesScreen>
         ),
       ),
     );
-    // Rafraîchir après retour du chat (lecture, nouveaux messages, etc.)
-    if (mounted) provider.loadConversations();
+
+    if (!mounted) return;
+
+    // Conversation supprimée depuis le ChatScreen
+    if (result == 'deleted') {
+      provider.loadConversations();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(children: [
+            const Icon(Icons.check_circle, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Text('Conversation avec ${conv.otherUser.name} supprimée'),
+          ]),
+          backgroundColor: Colors.green[700],
+          behavior       : SnackBarBehavior.floating,
+          shape          : RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // Retour normal : rafraîchir la liste
+    provider.loadConversations();
   }
 
   @override

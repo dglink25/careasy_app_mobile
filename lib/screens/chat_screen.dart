@@ -2909,16 +2909,29 @@ class _ChatScreenState extends State<ChatScreen>
                     ),
                   );
                   if (confirm == true && mounted) {
+                    // Afficher un indicateur de chargement
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (_) => const Center(
+                        child: CircularProgressIndicator(
+                            color: AppConstants.primaryRed),
+                      ),
+                    );
+
                     final ok = await MessageService()
-                        .deleteConversation(
-                            widget.conversationId);
-                    if (mounted) {
-                      if (ok) {
-                        Navigator.pop(context);
-                      } else {
-                        _showErr(
-                            'Erreur lors de la suppression');
-                      }
+                        .deleteConversation(widget.conversationId);
+
+                    if (!mounted) return;
+                    // Fermer le loader
+                    Navigator.pop(context);
+
+                    if (ok) {
+                      // Fermer le ChatScreen en passant le résultat
+                      // à MessagesScreen via Navigator.pop
+                      Navigator.pop(context, 'deleted');
+                    } else {
+                      _showErr('Erreur lors de la suppression');
                     }
                   }
                 }),
