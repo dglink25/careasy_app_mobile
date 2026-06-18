@@ -346,6 +346,107 @@ class _EntrepriseServicesScreenState extends State<EntrepriseServicesScreen>
     );
   }
 
+  // ── Démarrer une conversation pour un service spécifique ──────────────────
+  // Règle : (client, prestataire, service) = clé unique → chaque service
+  // possède son propre fil de discussion, indépendamment de l'entreprise.
+  Future<void> _startServiceConversation(
+      BuildContext ctx, Map<String, dynamic> service) async {
+    final messageProvider = ctx.read<MessageProvider>();
+    final navigator       = Navigator.of(ctx, rootNavigator: true);
+
+    showDialog(
+      context: ctx,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (_) => const Center(
+          child: CircularProgressIndicator(color: AppConstants.primaryRed)),
+    );
+
+    try {
+      final token  = await _storage.read(key: 'auth_token');
+      final myRaw  = await _storage.read(key: 'user_data');
+      final myId   = myRaw != null
+          ? jsonDecode(myRaw)['id']?.toString()
+          : null;
+
+      final resp = await http.post(
+        Uri.parse(
+            '${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'service_id': service['id']}),
+      );
+
+      navigator.pop(); // ferme le spinner
+
+      if (resp.statusCode == 200 || resp.statusCode == 201) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+
+        final conversationId = (data['id']
+                ?? data['conversation_id']
+                ?? data['conversation']?['id'])
+            ?.toString();
+        if (conversationId == null) throw Exception('Format inattendu');
+
+        // Récupérer le vrai prestataire depuis la réponse
+        Map<String, dynamic>? otherUserData;
+        for (final key in ['user_one', 'user_two', 'userOne', 'userTwo']) {
+          final u = data[key];
+          if (u is Map && u['id']?.toString() != myId) {
+            otherUserData = Map<String, dynamic>.from(u);
+            break;
+          }
+        }
+        final eu = widget.entreprise;
+        final otherUser = UserModel(
+          id      : otherUserData?['id']?.toString() ?? eu['id']?.toString() ?? '',
+          name    : otherUserData?['name']?.toString() ?? eu['name']?.toString() ?? '',
+          photoUrl: otherUserData?['profile_photo_path']?.toString()
+              ?? otherUserData?['profile_photo_url']?.toString()
+              ?? eu['logo']?.toString(),
+          role    : 'prestataire',
+          isOnline: false,
+        );
+
+        if (!mounted) return;
+        navigator.push(MaterialPageRoute(
+          builder: (_) => ChangeNotifierProvider.value(
+            value: messageProvider,
+            child: ChatScreen(
+              conversationId : conversationId,
+              otherUser      : otherUser,
+              serviceName    : service['name']?.toString() ?? '',
+              entrepriseName : data['entreprise_name']?.toString()
+                  ?? eu['name']?.toString()
+                  ?? '',
+            ),
+          ),
+        ));
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Impossible de démarrer la conversation (${resp.statusCode})'),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      }
+    } catch (e) {
+      try { navigator.pop(); } catch (_) {}
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Erreur de connexion'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
   // ── Contact bottom sheet ───────────────────────────────────────────────────
   void _showContactSheet(BuildContext ctx, Map<String, dynamic> service) {
     HapticFeedback.lightImpact();
@@ -382,12 +483,7 @@ class _EntrepriseServicesScreenState extends State<EntrepriseServicesScreen>
             _SheetBtn(icon: Icons.message_rounded, label: 'Message', sublabel: 'Envoyer un message direct', color: Colors.deepPurple,
               onTap: () {
                 Navigator.pop(ctx);
-                final eu = widget.entreprise;
-                final ou = UserModel(id: eu['id']?.toString() ?? '', name: eu['name'] ?? '', photoUrl: eu['logo'], role: 'entreprise', isOnline: false);
-                Navigator.push(ctx, MaterialPageRoute(builder: (_) => ChangeNotifierProvider.value(
-                  value: ctx.read<MessageProvider>(),
-                  child: ChatScreen(conversationId: eu['id']?.toString() ?? '', otherUser: ou, serviceName: service['name']?.toString()),
-                )));
+                _startServiceConversation(ctx, service);
               }),
             const SizedBox(height: 8),
             _SheetBtn(icon: Icons.calendar_month, label: 'Rendez-vous', sublabel: 'Planifier une intervention', color: Colors.blue,

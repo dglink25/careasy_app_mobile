@@ -1,16 +1,3 @@
-// lib/widgets/service_selection_modal.dart
-//
-// Modal de sélection de service avant :
-//   - Prendre un rendez-vous  (mode: ServiceSelectionMode.rendezVous)
-//   - Envoyer un message      (mode: ServiceSelectionMode.message)
-//
-// Usage depuis n'importe quel écran :
-//   showServiceSelectionModal(
-//     context: context,
-//     entreprise: entrepriseMap,
-//     mode: ServiceSelectionMode.rendezVous,
-//   );
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -214,97 +201,99 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
 
   
   Future<void> _startConversation(Map<String, dynamic> service) async {
-    
-    final navigator = Navigator.of(context, rootNavigator: true);
+    final navigator      = Navigator.of(context, rootNavigator: true);
     final messageProvider = context.read<MessageProvider>();
 
     try {
       final token = await _storage.read(key: 'auth_token');
       final userRaw = await _storage.read(key: 'user_data');
-      final userId =
-          userRaw != null ? jsonDecode(userRaw)['id']?.toString() : null;
-      final entrepriseId = widget.entreprise['id']?.toString() ?? '';
+      final myId = userRaw != null
+          ? jsonDecode(userRaw)['id']?.toString()
+          : null;
 
-      // Afficher le loading AVANT de fermer le modal
       if (!mounted) return;
       showDialog(
         context: context,
         barrierDismissible: false,
         useRootNavigator: true,
-        builder: (_) => const Center(
-          child: CircularProgressIndicator(color: AppConstants.primaryRed),
-        ),
+        builder: (_) =>
+            const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed)),
       );
 
       final resp = await http.post(
-        Uri.parse(
-            '${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
         headers: {
           'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: jsonEncode({
-          'service_id': service['id'],
-          'entreprise_id': entrepriseId,
-          'user_id': userId,
-        }),
+        // Seul service_id est nécessaire — le backend résout le prestataire lui-même
+        body: jsonEncode({'service_id': service['id']}),
       );
 
-      navigator.pop(); // Ferme le CircularProgressIndicator
+      navigator.pop(); // ferme le spinner
 
       if (resp.statusCode == 200 || resp.statusCode == 201) {
-        final data = jsonDecode(resp.body);
-        String conversationId;
-        if (data['conversation_id'] != null) {
-          conversationId = data['conversation_id'].toString();
-        } else if (data['conversation']?['id'] != null) {
-          conversationId = data['conversation']['id'].toString();
-        } else if (data['id'] != null) {
-          conversationId = data['id'].toString();
-        } else {
-          throw Exception('Format inattendu');
-        }
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
 
+        // Récupérer l'ID de conversation
+        final conversationId = (data['id']
+                ?? data['conversation_id']
+                ?? data['conversation']?['id'])
+            ?.toString();
+        if (conversationId == null) throw Exception('Format inattendu');
+
+        // ── Construire l'otherUser depuis la réponse serveur ──────────────
+        Map<String, dynamic>? otherUserData;
+        for (final key in ['user_one', 'user_two', 'userOne', 'userTwo']) {
+          final u = data[key];
+          if (u is Map && u['id']?.toString() != myId) {
+            otherUserData = Map<String, dynamic>.from(u);
+            break;
+          }
+        }
+        // Fallback sur les données locales de l'entreprise du widget
         final otherUser = UserModel(
-          id: entrepriseId,
-          name: _entrepriseName,
-          photoUrl: _logo.isNotEmpty ? _logo : null,
-          role: 'entreprise',
+          id      : otherUserData?['id']?.toString()
+              ?? widget.entreprise['id']?.toString()
+              ?? '',
+          name    : otherUserData?['name']?.toString() ?? _entrepriseName,
+          photoUrl: otherUserData?['profile_photo_path']?.toString()
+              ?? otherUserData?['profile_photo_url']?.toString()
+              ?? (_logo.isNotEmpty ? _logo : null),
+          role    : 'prestataire',
           isOnline: false,
         );
 
-        
-        navigator.pop(); // Ferme le modal de sélection de service
+        navigator.pop(); // ferme le modal de sélection de service
 
         navigator.push(
           _slideRoute(
             ChangeNotifierProvider.value(
               value: messageProvider,
               child: ChatScreen(
-                conversationId: conversationId,
-                otherUser: otherUser,
-                serviceName: service['name']?.toString() ?? '',
-                entrepriseName: _entrepriseName,
+                conversationId : conversationId,
+                otherUser      : otherUser,
+                serviceName    : service['name']?.toString() ?? '',
+                entrepriseName : data['entreprise_name']?.toString()
+                    ?? _entrepriseName,
               ),
             ),
           ),
         );
-      } 
-      
-      else {
-        
-        navigator.pop(); // Ferme le modal de sélection
+      } else {
+        navigator.pop(); // ferme le modal de sélection
         ScaffoldMessenger.of(navigator.context).showSnackBar(SnackBar(
-          content: Text('Impossible de démarrer la conversation (${resp.statusCode})'),
+          content: Text(
+              'Impossible de démarrer la conversation (${resp.statusCode})'),
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ));
       }
     } catch (e) {
-      try { navigator.pop(); } catch (_) {} // Ferme le loading si encore ouvert
-      try { navigator.pop(); } catch (_) {} // Ferme le modal si encore ouvert
+      try { navigator.pop(); } catch (_) {}
+      try { navigator.pop(); } catch (_) {}
       ScaffoldMessenger.of(navigator.context).showSnackBar(SnackBar(
         content: const Text('Erreur de connexion'),
         backgroundColor: Colors.red.shade700,

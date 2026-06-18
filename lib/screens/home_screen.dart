@@ -433,42 +433,88 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Future<void> _startConversationWithEntreprise(Map<String, dynamic> service) async {
     try {
       final token = await _storage.read(key: 'auth_token');
-      final userId = _userData?['id'];
-      Map<String, dynamic>? entreprise;
-      if (service['entreprise'] != null) {
-        entreprise = service['entreprise'] is Map ? Map<String, dynamic>.from(service['entreprise']) : null;
-      } else if (service['entreprise_id'] != null) {
-        entreprise = {'id': service['entreprise_id']};
-      }
-      if (entreprise == null) { _showError('Entreprise non identifiée'); return; }
-      final entrepriseId = entreprise['id']?.toString();
-      if (entrepriseId == null || entrepriseId.isEmpty) { _showError('ID entreprise manquant'); return; }
 
-      showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: AppConstants.primaryRed)));
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(
+            child: CircularProgressIndicator(color: AppConstants.primaryRed)),
+      );
 
       final response = await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
-        headers: {'Authorization': 'Bearer $token', 'Content-Type': 'application/json', 'Accept': 'application/json'},
-        body: jsonEncode({'service_id': service['id'], 'entreprise_id': entrepriseId, 'user_id': userId}),
+        Uri.parse(
+            '${AppConstants.apiBaseUrl}/conversation/service/${service['id']}/start'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'service_id': service['id']}),
       );
-      if (context.mounted) Navigator.pop(context);
+
+      if (context.mounted) Navigator.pop(context); // ferme le spinner
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        String conversationId;
-        if (data['conversation_id'] != null) conversationId = data['conversation_id'].toString();
-        else if (data['conversation']?['id'] != null) conversationId = data['conversation']['id'].toString();
-        else if (data['id'] != null) conversationId = data['id'].toString();
-        else throw Exception('Format de réponse inattendu');
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+        // Récupérer l'ID de conversation
+        final conversationId = (data['id']
+                ?? data['conversation_id']
+                ?? data['conversation']?['id'])
+            ?.toString();
+        if (conversationId == null) throw Exception('Format de réponse inattendu');
+
+        // ── Construire l'otherUser depuis la réponse serveur ──────────────────
+        // Le backend renvoie user_one / user_two ; l'autre = celui qui n'est pas moi
+        final myId = _userData?['id']?.toString();
+        Map<String, dynamic>? otherUserData;
+        for (final key in ['user_one', 'user_two', 'userOne', 'userTwo']) {
+          final u = data[key];
+          if (u is Map && u['id']?.toString() != myId) {
+            otherUserData = Map<String, dynamic>.from(u);
+            break;
+          }
+        }
+        // Fallback : utiliser les données locales du service si l'API ne renvoie pas l'user
+        final entreprise = service['entreprise'] is Map
+            ? Map<String, dynamic>.from(service['entreprise'] as Map)
+            : <String, dynamic>{};
+        final otherUser = UserModel(
+          id      : otherUserData?['id']?.toString() ?? entreprise['id']?.toString() ?? '',
+          name    : otherUserData?['name']?.toString()
+              ?? entreprise['name']?.toString()
+              ?? service['entreprise_name']?.toString()
+              ?? 'Entreprise',
+          photoUrl: otherUserData?['profile_photo_path']?.toString()
+              ?? otherUserData?['profile_photo_url']?.toString()
+              ?? entreprise['logo']?.toString()
+              ?? service['entreprise_logo']?.toString(),
+          role    : 'prestataire',
+          isOnline: false,
+        );
 
         if (context.mounted) {
-          final otherUser = UserModel(id: entrepriseId, name: entreprise['name'] ?? service['entreprise_name'] ?? 'Entreprise', email: '', photoUrl: entreprise['logo'] ?? service['entreprise_logo'], role: 'entreprise', isOnline: false);
-          Navigator.push(context, MaterialPageRoute(builder: (context) => ChangeNotifierProvider.value(
-            value: context.read<MessageProvider>(),
-            child: ChatScreen(conversationId: conversationId, otherUser: otherUser, serviceName: service['name']?.toString() ?? '', entrepriseName: entreprise!['name']?.toString() ?? 'Entreprise'),
-          )));
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (ctx) => ChangeNotifierProvider.value(
+                value: ctx.read<MessageProvider>(),
+                child: ChatScreen(
+                  conversationId : conversationId,
+                  otherUser      : otherUser,
+                  serviceName    : service['name']?.toString() ?? '',
+                  entrepriseName : entreprise['name']?.toString()
+                      ?? data['entreprise_name']?.toString()
+                      ?? '',
+                ),
+              ),
+            ),
+          );
         }
-      } else { _showError('Impossible de démarrer la conversation (${response.statusCode})'); }
+      } else {
+        _showError(
+            'Impossible de démarrer la conversation (${response.statusCode})');
+      }
     } catch (e) {
       if (context.mounted) Navigator.pop(context);
       _showError('Erreur de connexion: ${e.toString()}');
