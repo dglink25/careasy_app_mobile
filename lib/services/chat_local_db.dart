@@ -40,7 +40,7 @@ class ChatLocalDb {
     final path = join(await getDatabasesPath(), 'careasy_chat_v2.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 3,   // v3 : ajout local_file_path
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onConfigure: (d) async => await d.execute('PRAGMA foreign_keys = ON'),
@@ -50,21 +50,22 @@ class ChatLocalDb {
   Future<void> _onCreate(Database d, int version) async {
     await d.execute('''
       CREATE TABLE messages (
-        id             TEXT    PRIMARY KEY,
-        conversation_id TEXT   NOT NULL,
-        sender_id      TEXT    NOT NULL,
-        content        TEXT    NOT NULL DEFAULT '',
-        type           TEXT    NOT NULL DEFAULT 'text',
-        file_url       TEXT,
-        file_path      TEXT,
-        latitude       REAL,
-        longitude      REAL,
-        read_at        TEXT,
-        is_me          INTEGER NOT NULL DEFAULT 0,
-        status         TEXT    DEFAULT 'sent',
-        temporary_id   TEXT,
-        reply_to_json  TEXT,
-        created_at     TEXT    NOT NULL
+        id               TEXT    PRIMARY KEY,
+        conversation_id  TEXT    NOT NULL,
+        sender_id        TEXT    NOT NULL,
+        content          TEXT    NOT NULL DEFAULT '',
+        type             TEXT    NOT NULL DEFAULT 'text',
+        file_url         TEXT,
+        file_path        TEXT,
+        local_file_path  TEXT,
+        latitude         REAL,
+        longitude        REAL,
+        read_at          TEXT,
+        is_me            INTEGER NOT NULL DEFAULT 0,
+        status           TEXT    DEFAULT 'sent',
+        temporary_id     TEXT,
+        reply_to_json    TEXT,
+        created_at       TEXT    NOT NULL
       )
     ''');
 
@@ -90,10 +91,14 @@ class ChatLocalDb {
 
   Future<void> _onUpgrade(Database d, int oldV, int newV) async {
     if (oldV < 2) {
-      // Migration v1 → v2 : ajout colonne reply_to_json si elle manque
       try {
         await d.execute('ALTER TABLE messages ADD COLUMN reply_to_json TEXT');
-      } catch (_) {} // colonne déjà présente sur une install fraîche
+      } catch (_) {}
+    }
+    if (oldV < 3) {
+      try {
+        await d.execute('ALTER TABLE messages ADD COLUMN local_file_path TEXT');
+      } catch (_) {}
     }
   }
 
@@ -210,6 +215,17 @@ class ChatLocalDb {
     await d.update(
       'messages',
       {'status': status},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Met à jour le chemin local d'un fichier média téléchargé.
+  Future<void> updateMessageLocalPath(String id, String localPath) async {
+    final d = await db;
+    await d.update(
+      'messages',
+      {'local_file_path': localPath},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -335,6 +351,7 @@ class ChatLocalDb {
     'type'           : m.type,
     'file_url'       : m.fileUrl,
     'file_path'      : m.filePath,
+    'local_file_path': m.localFilePath,
     'latitude'       : m.latitude,
     'longitude'      : m.longitude,
     'read_at'        : m.readAt?.toIso8601String(),
@@ -375,6 +392,7 @@ class ChatLocalDb {
       type          : r['type'] as String? ?? 'text',
       fileUrl       : r['file_url'] as String?,
       filePath      : r['file_path'] as String?,
+      localFilePath : r['local_file_path'] as String?,
       latitude      : r['latitude'] != null
           ? (r['latitude'] as num).toDouble() : null,
       longitude     : r['longitude'] != null

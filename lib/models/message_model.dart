@@ -32,7 +32,8 @@ class MessageModel {
   final String type;
   final String? fileUrl;
   final String? filePath;
-  final DateTime createdAt;     // toujours heure locale téléphone
+  final String? localFilePath; // chemin disque local après téléchargement
+  final DateTime createdAt;
   final DateTime? readAt;
   final bool isMe;
   final String? status;
@@ -49,6 +50,7 @@ class MessageModel {
     required this.type,
     this.fileUrl,
     this.filePath,
+    this.localFilePath,
     required this.createdAt,
     this.readAt,
     required this.isMe,
@@ -58,6 +60,19 @@ class MessageModel {
     this.temporaryId,
     this.replyTo,
   });
+
+  /// URL/chemin à utiliser pour la lecture :
+  ///   1. fichier local s'il existe
+  ///   2. sinon URL réseau
+  String? get effectiveMediaUrl {
+    if (localFilePath != null && localFilePath!.isNotEmpty) {
+      return localFilePath;
+    }
+    return fileUrl;
+  }
+
+  bool get hasLocalMedia =>
+      localFilePath != null && localFilePath!.isNotEmpty;
 
   factory MessageModel.fromJson(Map<String, dynamic> json, String currentUserId) {
     final senderId = json['sender_id']?.toString() ?? json['user_id']?.toString() ?? '';
@@ -143,6 +158,7 @@ class MessageModel {
     String? type,
     String? fileUrl,
     String? filePath,
+    String? localFilePath,
     DateTime? createdAt,
     DateTime? readAt,
     bool? isMe,
@@ -153,21 +169,22 @@ class MessageModel {
     ReplyToModel? replyTo,
   }) {
     return MessageModel(
-      id:             id             ?? this.id,
+      id            : id             ?? this.id,
       conversationId: conversationId ?? this.conversationId,
-      senderId:       senderId       ?? this.senderId,
-      content:        content        ?? this.content,
-      type:           type           ?? this.type,
-      fileUrl:        fileUrl        ?? this.fileUrl,
-      filePath:       filePath       ?? this.filePath,
-      createdAt:      createdAt      ?? this.createdAt,
-      readAt:         readAt         ?? this.readAt,
-      isMe:           isMe           ?? this.isMe,
-      status:         status         ?? this.status,
-      latitude:       latitude       ?? this.latitude,
-      longitude:      longitude      ?? this.longitude,
-      temporaryId:    temporaryId    ?? this.temporaryId,
-      replyTo:        replyTo        ?? this.replyTo,
+      senderId      : senderId       ?? this.senderId,
+      content       : content        ?? this.content,
+      type          : type           ?? this.type,
+      fileUrl       : fileUrl        ?? this.fileUrl,
+      filePath      : filePath       ?? this.filePath,
+      localFilePath : localFilePath  ?? this.localFilePath,
+      createdAt     : createdAt      ?? this.createdAt,
+      readAt        : readAt         ?? this.readAt,
+      isMe          : isMe           ?? this.isMe,
+      status        : status         ?? this.status,
+      latitude      : latitude       ?? this.latitude,
+      longitude     : longitude      ?? this.longitude,
+      temporaryId   : temporaryId    ?? this.temporaryId,
+      replyTo       : replyTo        ?? this.replyTo,
     );
   }
 }

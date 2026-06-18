@@ -8,6 +8,7 @@ import '../services/pusher_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/chat_local_db.dart';
 import '../services/token_cache.dart';
+import '../services/media_cache_service.dart';
 import '../utils/constants.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ class MessageProvider extends ChangeNotifier {
   final ConnectivityService _net = ConnectivityService();
   final ChatLocalDb         _db  = ChatLocalDb();
   final TokenCache          _tok = TokenCache();
+  final MediaCacheService   _mc  = MediaCacheService();
 
   // ── État ──────────────────────────────────────────────────────────────────
   final Map<String, List<MessageModel>> _messages      = {};
@@ -201,6 +203,17 @@ class MessageProvider extends ChangeNotifier {
     // Persister en base locale
     _db.saveMessage(msg);
 
+    // Télécharger le média en arrière-plan (priorité haute — message frais)
+    if (msg.fileUrl != null && msg.fileUrl!.isNotEmpty) {
+      _mc.enqueue(
+        msgId   : msg.id,
+        convId  : ev.convId,
+        url     : msg.fileUrl!,
+        type    : msg.type,
+        priority: 1,
+      );
+    }
+
     // Conversations
     final idx = _conversations.indexWhere((c) => c.id == ev.convId);
     if (idx != -1) {
@@ -250,6 +263,17 @@ class MessageProvider extends ChangeNotifier {
       _db.confirmMessage(tempId, confirmed);
     } else {
       _db.saveMessage(confirmed);
+    }
+
+    // Télécharger le média confirmé (URL serveur définitive)
+    if (confirmed.fileUrl != null && confirmed.fileUrl!.isNotEmpty) {
+      _mc.enqueue(
+        msgId   : confirmed.id,
+        convId  : ev.convId,
+        url     : confirmed.fileUrl!,
+        type    : confirmed.type,
+        priority: 1,
+      );
     }
 
     _notify();
@@ -452,6 +476,9 @@ class MessageProvider extends ChangeNotifier {
         // Persister en base (upsert complet)
         _db.saveMessages(convId, fresh);
 
+        // Télécharger les médias en arrière-plan pour lecture hors-ligne
+        _cacheMedias(convId, fresh);
+
         // Statut en ligne de l'interlocuteur
         final otherData = data['other_user'];
         if (otherData is Map) {
@@ -472,7 +499,29 @@ class MessageProvider extends ChangeNotifier {
     }
   }
 
-  /// Charge les messages plus anciens (pagination infinie vers le haut).
+  /// Déclenche le téléchargement en arrière-plan de tous les médias
+  /// d'une liste de messages.
+  void _cacheMedias(String convId, List<MessageModel> msgs) {
+    for (final m in msgs) {
+      final url = m.fileUrl;
+      if (url == null || url.isEmpty) continue;
+      final type = m.type; // image | video | audio | vocal | document
+      if (!const {'image', 'video', 'audio', 'vocal', 'document'}.contains(type)) continue;
+      _mc.enqueue(
+        msgId   : m.id,
+        convId  : convId,
+        url     : url,
+        type    : type,
+        // Priorité : images d'abord (visible à l'écran), puis audio, puis vidéo/doc
+        priority: switch (type) {
+          'image'              => 1,
+          'audio' || 'vocal'  => 2,
+          'video'              => 3,
+          _                   => 4,
+        },
+      );
+    }
+  }
   Future<void> loadOlderMessages(String convId) async {
     final msgs = _messages[convId];
     if (msgs == null || msgs.isEmpty) return;
@@ -720,6 +769,19 @@ class MessageProvider extends ChangeNotifier {
 
     // Persister en base (supprime le temp, insère le confirmé)
     _db.confirmMessage(tempId, confirmed);
+
+    // Télécharger le média si pas déjà local (URL serveur définitive)
+    if (confirmed.fileUrl != null &&
+        confirmed.fileUrl!.isNotEmpty &&
+        confirmed.fileUrl!.startsWith('http')) {
+      _mc.enqueue(
+        msgId   : confirmed.id,
+        convId  : convId,
+        url     : confirmed.fileUrl!,
+        type    : confirmed.type,
+        priority: 1,
+      );
+    }
 
     // Mettre à jour aperçu conversation
     final idx = _conversations.indexWhere((c) => c.id == convId);

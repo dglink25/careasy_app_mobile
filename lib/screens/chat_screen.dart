@@ -816,7 +816,7 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
-  Future<void> _playAudio(String id, String url) async {
+  Future<void> _playAudio(String id, String src) async {
     try {
       for (final e in _players.entries) {
         if (e.key != id && e.value.playing) await e.value.stop();
@@ -831,7 +831,12 @@ class _ChatScreenState extends State<ChatScreen>
       if (p.playing) {
         await p.pause();
       } else {
-        await p.setUrl(url);
+        // Fichier local ou URL réseau
+        if (src.startsWith('http')) {
+          await p.setUrl(src);
+        } else {
+          await p.setFilePath(src);
+        }
         await p.play();
       }
       if (mounted) setState(() {});
@@ -846,7 +851,9 @@ class _ChatScreenState extends State<ChatScreen>
     if (_vCtrl.containsKey(id) || _vInitializing.contains(id)) return;
     _vInitializing.add(id);
     try {
-      final vc = VideoPlayerController.networkUrl(Uri.parse(url));
+      final vc = url.startsWith('http')
+          ? VideoPlayerController.networkUrl(Uri.parse(url))
+          : VideoPlayerController.file(File(url));
       await vc.initialize();
       final cc = ChewieController(
           videoPlayerController: vc,
@@ -1395,7 +1402,7 @@ class _ChatScreenState extends State<ChatScreen>
             Text(
               reply.type == 'text'
                   ? reply.content
-                  : '📎 ${_typeLabel(reply.type)}',
+                  : '${_typeLabel(reply.type)}',
               maxLines : 2,
               overflow : TextOverflow.ellipsis,
               style    : TextStyle(
@@ -1455,8 +1462,10 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildImgContent(MessageModel m) {
-    final url = m.fileUrl;
-    if (url == null || url.isEmpty) {
+    // Priorité : fichier local → URL réseau
+    final src = m.effectiveMediaUrl;
+
+    if (src == null || src.isEmpty) {
       return Container(
           width : 220,
           height: 180,
@@ -1464,9 +1473,9 @@ class _ChatScreenState extends State<ChatScreen>
           child : const Center(child: CircularProgressIndicator(strokeWidth: 2)));
     }
 
-    // Chemin local : image en cours d'upload
-    if (!url.startsWith('http')) {
-      final file = File(url);
+    // Chemin local (fichier déjà téléchargé ou en cours d'upload)
+    if (!src.startsWith('http')) {
+      final file = File(src);
       return ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Stack(children: [
@@ -1481,20 +1490,23 @@ class _ChatScreenState extends State<ChatScreen>
                 color : Colors.grey[200],
                 child : const Icon(Icons.broken_image)),
           ),
-          Positioned.fill(
-            child: Container(
-              color: Colors.black26,
-              child: const Center(
-                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+          // Overlay "envoi en cours" seulement si le message est encore en statut sending
+          if (m.status == 'sending')
+            Positioned.fill(
+              child: Container(
+                color: Colors.black26,
+                child: const Center(
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2)),
+              ),
             ),
-          ),
         ]),
       );
     }
 
     final heroTag = 'img_${m.id}';
     return GestureDetector(
-      onTap: () => ImageViewerModal.show(context, url, heroTag: heroTag),
+      onTap: () => ImageViewerModal.show(context, src, heroTag: heroTag),
       child: Hero(
         tag: heroTag,
         child: ClipRRect(
@@ -1502,7 +1514,7 @@ class _ChatScreenState extends State<ChatScreen>
           child: Stack(
             children: [
               Image.network(
-                url,
+                src,
                 width : 220,
                 height: 180,
                 fit   : BoxFit.cover,
@@ -1528,7 +1540,6 @@ class _ChatScreenState extends State<ChatScreen>
                       ],
                     )),
               ),
-              // Icône "agrandir" en bas à droite
               Positioned(
                 bottom: 6, right: 6,
                 child: Container(
@@ -1549,80 +1560,40 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildVidContent(MessageModel m) {
-    // Message optimiste : pas encore d'URL distante
-    final url = m.fileUrl;
-    if (url == null || url.isEmpty) {
-      return Container(
-          width     : 220,
-          height    : 160,
-          decoration: BoxDecoration(
-              color       : Colors.black,
-              borderRadius: BorderRadius.circular(8)),
-          child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 8),
-            Text('Envoi…',
-                style: TextStyle(color: Colors.white70, fontSize: 11)),
-          ]));
+    // Priorité : fichier local → URL réseau
+    final src = m.effectiveMediaUrl;
+
+    if (src == null || src.isEmpty) {
+      return _videoPlaceholder('Envoi…');
     }
 
-    // URL locale (chemin fichier) : pas encore sur le serveur
-    if (!url.startsWith('http')) {
-      return Container(
-          width     : 220,
-          height    : 160,
-          decoration: BoxDecoration(
-              color       : Colors.black,
-              borderRadius: BorderRadius.circular(8)),
-          child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 8),
-            Text('Envoi en cours…',
-                style: TextStyle(color: Colors.white70, fontSize: 11)),
-          ]));
+    // Fichier local ou envoi en cours
+    if (!src.startsWith('http')) {
+      if (m.status == 'sending') return _videoPlaceholder('Envoi en cours…');
+      // Fichier local disponible → lecture directe
+      if (!_cCtrl.containsKey(m.id)) {
+        _initVideoFromPath(m.id, src);
+        return _videoPlaceholder('Chargement…');
+      }
+    } else {
+      // Erreur d'initialisation réseau
+      if (_vError.contains(m.id)) {
+        return GestureDetector(
+          onTap: () {
+            setState(() => _vError.remove(m.id));
+            _initVideo(m.id, src);
+          },
+          child: _videoError(),
+        );
+      }
+      if (!_cCtrl.containsKey(m.id)) {
+        _initVideo(m.id, src);
+        return _videoPlaceholder('Chargement…');
+      }
     }
 
-    // Erreur d'initialisation
-    if (_vError.contains(m.id)) {
-      return GestureDetector(
-        onTap: () {
-          setState(() => _vError.remove(m.id));
-          _initVideo(m.id, url);
-        },
-        child: Container(
-            width     : 220,
-            height    : 160,
-            decoration: BoxDecoration(
-                color       : Colors.black87,
-                borderRadius: BorderRadius.circular(8)),
-            child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.error_outline, color: Colors.red, size: 36),
-              SizedBox(height: 6),
-              Text('Impossible de charger la vidéo',
-                  style: TextStyle(color: Colors.white70, fontSize: 11)),
-              SizedBox(height: 4),
-              Text('Appuyer pour réessayer',
-                  style: TextStyle(color: Colors.white38, fontSize: 10)),
-            ])),
-      );
-    }
-
-    // En cours d'initialisation
-    if (!_cCtrl.containsKey(m.id)) {
-      _initVideo(m.id, url);
-      return Container(
-          width     : 220,
-          height    : 160,
-          decoration: BoxDecoration(
-              color       : Colors.black,
-              borderRadius: BorderRadius.circular(8)),
-          child: const Center(
-              child: CircularProgressIndicator(color: Colors.white)));
-    }
-
-    // Vidéo prête — thumbnail + bouton play qui ouvre le modal plein écran
     return GestureDetector(
-      onTap: () => VideoViewerModal.show(context, url),
+      onTap: () => VideoViewerModal.show(context, src),
       child: SizedBox(
         width : 220,
         height: 160,
@@ -1631,9 +1602,7 @@ class _ChatScreenState extends State<ChatScreen>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Player réduit en fond (muet, sans contrôles)
               Chewie(controller: _cCtrl[m.id]!),
-              // Overlay "plein écran"
               Positioned(
                 bottom: 6, right: 6,
                 child: Container(
@@ -1651,6 +1620,61 @@ class _ChatScreenState extends State<ChatScreen>
         ),
       ),
     );
+  }
+
+  Widget _videoPlaceholder(String label) => Container(
+      width     : 220,
+      height    : 160,
+      decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(8)),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const CircularProgressIndicator(color: Colors.white),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+      ]));
+
+  Widget _videoError() => Container(
+      width     : 220,
+      height    : 160,
+      decoration: BoxDecoration(
+          color: Colors.black87,
+          borderRadius: BorderRadius.circular(8)),
+      child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.error_outline, color: Colors.red, size: 36),
+        SizedBox(height: 6),
+        Text('Impossible de charger la vidéo',
+            style: TextStyle(color: Colors.white70, fontSize: 11)),
+        SizedBox(height: 4),
+        Text('Appuyer pour réessayer',
+            style: TextStyle(color: Colors.white38, fontSize: 10)),
+      ]));
+
+  /// Initialise un lecteur vidéo depuis un chemin fichier local.
+  Future<void> _initVideoFromPath(String id, String path) async {
+    if (_vCtrl.containsKey(id) || _vInitializing.contains(id)) return;
+    _vInitializing.add(id);
+    try {
+      final vc = VideoPlayerController.file(File(path));
+      await vc.initialize();
+      final cc = ChewieController(
+          videoPlayerController: vc,
+          autoPlay: false,
+          looping: false,
+          aspectRatio: vc.value.aspectRatio,
+          errorBuilder: (_, __) =>
+              const Center(child: Icon(Icons.error, color: Colors.red)));
+      if (mounted) setState(() {
+        _vCtrl[id] = vc;
+        _cCtrl[id] = cc;
+        _vInitializing.remove(id);
+      });
+    } catch (e) {
+      if (mounted) setState(() {
+        _vInitializing.remove(id);
+        _vError.add(id);
+      });
+    }
   }
 
   Widget _buildLocContent(MessageModel m) {
@@ -1797,10 +1821,11 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildAudioContent(MessageModel m) {
-    final url = m.fileUrl;
+    // Priorité : fichier local → URL réseau
+    final src = m.effectiveMediaUrl;
 
     // Pas encore d'URL — en cours d'envoi
-    if (url == null || url.isEmpty) {
+    if (src == null || src.isEmpty) {
       return SizedBox(
         width: 210,
         child: Row(children: [
@@ -1850,13 +1875,11 @@ class _ChatScreenState extends State<ChatScreen>
         return SizedBox(
           width: 210,
           child: Row(children: [
-            // Bouton play — tap court lance la lecture inline,
-            // tap long ouvre le modal plein écran
             GestureDetector(
-              onTap: () => _playAudio(m.id, url),
+              onTap: () => _playAudio(m.id, src),
               onLongPress: () => AudioPlayerModal.show(
                 context,
-                url: url,
+                url: src,
                 senderName: widget.otherUser.name,
                 isMe: m.isMe,
                 senderPhotoUrl: m.isMe ? null : widget.otherUser.photoUrl,
@@ -1908,8 +1931,7 @@ class _ChatScreenState extends State<ChatScreen>
                             style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.grey[600])),
-                        // Hint "appui long"
-                        Text('appui long pour agrandir',
+                        Text('',
                             style: TextStyle(
                                 fontSize: 9,
                                 color: Colors.grey[400])),
@@ -1926,8 +1948,10 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Widget _buildDocContent(MessageModel m) {
-    if (m.fileUrl == null) {
-      // En cours d'envoi
+    // Priorité : fichier local → URL réseau
+    final src = m.effectiveMediaUrl;
+
+    if (src == null || src.isEmpty) {
       return Container(
         width  : 200,
         padding: const EdgeInsets.all(10),
@@ -1942,14 +1966,13 @@ class _ChatScreenState extends State<ChatScreen>
           const SizedBox(width: 8),
           Expanded(
               child: Text('Envoi en cours…',
-                  style: TextStyle(
-                      fontSize: 11, color: Colors.grey[500]),
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                   maxLines: 1)),
         ]),
       );
     }
 
-    final fn  = m.fileUrl!.split('/').last.split('?').first;
+    final fn  = src.split('/').last.split('?').first;
     final ext = fn.split('.').last.toLowerCase();
     final ico = ext == 'pdf'
         ? Icons.picture_as_pdf
@@ -1966,8 +1989,11 @@ class _ChatScreenState extends State<ChatScreen>
                 ? const Color(0xFF217346)
                 : Colors.grey[700]!;
 
+    // Pour l'ouverture : préférer le chemin local, sinon l'URL réseau
+    final openSrc = m.hasLocalMedia ? src : (m.fileUrl ?? src);
+
     return GestureDetector(
-      onTap: () => DocumentViewerModal.show(context, m.fileUrl!, fn),
+      onTap: () => DocumentViewerModal.show(context, openSrc, fn),
       child: Container(
         width    : 210,
         padding  : const EdgeInsets.all(10),
@@ -2001,11 +2027,17 @@ class _ChatScreenState extends State<ChatScreen>
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
-                Text(ext.toUpperCase(),
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: color,
-                        fontWeight: FontWeight.w600)),
+                Row(children: [
+                  Text(ext.toUpperCase(),
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: color,
+                          fontWeight: FontWeight.w600)),
+                  if (m.hasLocalMedia) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.offline_pin, size: 10, color: Colors.green[600]),
+                  ],
+                ]),
               ])),
           Icon(Icons.chevron_right, size: 16, color: Colors.grey[400]),
         ]),
