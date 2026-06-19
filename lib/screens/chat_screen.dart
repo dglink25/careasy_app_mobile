@@ -547,7 +547,7 @@ class _ChatScreenState extends State<ChatScreen>
               onPressed: () => Navigator.pop(context, true),
               style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red, foregroundColor: Colors.white),
-              child: const Text('Supprimer')),
+              child: const Text('Oui')),
         ],
       ),
     );
