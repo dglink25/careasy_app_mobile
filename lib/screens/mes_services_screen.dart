@@ -145,8 +145,9 @@ class _MesServicesScreenState extends State<MesServicesScreen>
         body: jsonEncode({'is_visibility': newValue}),
       );
 
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+
+      if (res.statusCode == 200 && data['success'] == true) {
         // Confirmer la valeur retournée par le serveur (source de vérité)
         setState(() {
           _services[index]['is_visibility'] = data['is_visibility'] ?? newValue;
@@ -157,11 +158,16 @@ class _MesServicesScreenState extends State<MesServicesScreen>
               : '🔒 Service masqué — les clients ne peuvent plus le voir',
           isError: false,
         );
-      } else {
-        // Rollback si le serveur refuse
+      } else if (res.statusCode == 403 &&
+          data['code'] == 'NO_ACTIVE_SUBSCRIPTION') {
+        // Rollback + afficher le dialog d'abonnement
         setState(() => _services[index]['is_visibility'] = oldValue);
-        final body = jsonDecode(res.body) as Map<String, dynamic>;
-        _showSnack(body['message'] ?? 'Erreur lors de la mise à jour', isError: true);
+        _showSubscriptionRequiredDialog(data);
+      } else {
+        // Rollback générique
+        setState(() => _services[index]['is_visibility'] = oldValue);
+        _showSnack(data['message'] ?? 'Erreur lors de la mise à jour',
+            isError: true);
       }
     } catch (_) {
       // Rollback sur erreur réseau
@@ -170,6 +176,88 @@ class _MesServicesScreenState extends State<MesServicesScreen>
     } finally {
       setState(() => _updatingVisibility[serviceId] = false);
     }
+  }
+
+  /// Dialogue affiché quand l'entreprise n'a ni essai ni abonnement actif.
+  void _showSubscriptionRequiredDialog(Map<String, dynamic> data) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.orange[50],
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.lock_outline_rounded,
+                color: Colors.orange[700], size: 22),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text('Abonnement requis',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          ),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              data['message'] ?? 'Un abonnement actif est nécessaire pour rendre un service visible.',
+              style: const TextStyle(fontSize: 13, height: 1.5),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange[200]!),
+              ),
+              child: Row(children: [
+                Icon(Icons.info_outline, color: Colors.orange[700], size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Souscrivez à un plan pour activer la visibilité de vos services.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange[800]),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Plus tard', style: TextStyle(color: Colors.grey[600])),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              // Naviguer vers l'écran des plans d'abonnement
+              Navigator.pushNamed(context, '/plans-abonnement').catchError((_) {
+                // Fallback si la route nommée n'est pas définie
+                _showSnack('Accédez à Plans & Abonnements depuis votre profil',
+                    isError: false);
+                return null;
+              });
+            },
+            icon: const Icon(Icons.payment_rounded, size: 16),
+            label: const Text('Voir les plans'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppConstants.primaryRed,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deleteService(Map<String, dynamic> service) async {
