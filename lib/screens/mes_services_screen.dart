@@ -122,41 +122,53 @@ class _MesServicesScreenState extends State<MesServicesScreen>
 
   Future<void> _toggleVisibility(Map<String, dynamic> service, bool newValue) async {
     final serviceId = service['id'];
-    setState(() { _updatingVisibility[serviceId] = true; });
+
+    // ── Patch optimiste : mettre à jour l'UI immédiatement ──────────────
+    final oldValue = service['is_visibility'] ?? true;
+    final index    = _services.indexWhere((s) => s['id'] == serviceId);
+    if (index == -1) return;
+
+    setState(() {
+      _services[index]['is_visibility'] = newValue;
+      _updatingVisibility[serviceId]    = true;
+    });
 
     try {
       final token = await _storage.read(key: 'auth_token');
-      final res = await http.patch(
-        Uri.parse('${AppConstants.apiBaseUrl}/services/${serviceId}/toggle-visibility'),
+      final res   = await http.patch(
+        Uri.parse('${AppConstants.apiBaseUrl}/services/$serviceId/toggle-visibility'),
         headers: {
           'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
+          'Accept'       : 'application/json',
+          'Content-Type' : 'application/json',
         },
         body: jsonEncode({'is_visibility': newValue}),
       );
 
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        // Confirmer la valeur retournée par le serveur (source de vérité)
         setState(() {
-          final index = _services.indexWhere((s) => s['id'] == serviceId);
-          if (index != -1) {
-            _services[index]['is_visibility'] = data['is_visibility'];
-          }
+          _services[index]['is_visibility'] = data['is_visibility'] ?? newValue;
         });
         _showSnack(
           newValue
-              ? 'Service visible pour les clients'
-              : 'Service masqué. Les clients ne pourront plus le voir',
+              ? '✅ Service visible pour les clients'
+              : '🔒 Service masqué — les clients ne peuvent plus le voir',
           isError: false,
         );
       } else {
-        _showSnack('Erreur lors de la mise à jour', isError: true);
+        // Rollback si le serveur refuse
+        setState(() => _services[index]['is_visibility'] = oldValue);
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        _showSnack(body['message'] ?? 'Erreur lors de la mise à jour', isError: true);
       }
-    } catch (e) {
+    } catch (_) {
+      // Rollback sur erreur réseau
+      setState(() => _services[index]['is_visibility'] = oldValue);
       _showSnack('Erreur de connexion', isError: true);
     } finally {
-      setState(() { _updatingVisibility[serviceId] = false; });
+      setState(() => _updatingVisibility[serviceId] = false);
     }
   }
 
@@ -604,7 +616,7 @@ class _MesServicesScreenState extends State<MesServicesScreen>
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10))),
-              child: const Text('Masquer'),
+              child: const Text('Oui'),
             ),
           ],
         ),
