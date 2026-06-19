@@ -38,7 +38,8 @@ class AppNotification {
       title     : d['title']?.toString() ?? '',
       body      : d['body']?.toString() ?? '',
       isRead    : json['read_at'] != null,
-      createdAt : DateTime.tryParse(json['created_at']?.toString() ?? '') ??
+      createdAt : (DateTime.tryParse(json['created_at']?.toString() ?? '')
+                  ?.toLocal()) ??
                   DateTime.now(),
       data      : d,
     );

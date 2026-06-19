@@ -26,6 +26,7 @@ import '../utils/constants.dart';
 import '../services/notification_service.dart';
 import '../services/pusher_service.dart';
 import '../services/message_service.dart';
+import '../services/audio_metadata_cache.dart';
 import 'media_viewer_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -133,6 +134,9 @@ class _ChatScreenState extends State<ChatScreen>
 
   // ── Provider ──────────────────────────────────────────────────────────────
   MessageProvider? _msgProvider;
+
+  // ── Cache durées audio ────────────────────────────────────────────────────
+  final AudioMetadataCache _audioMeta = AudioMetadataCache();
 
   // ── Emojis fréquents ──────────────────────────────────────────────────────
   final List<String> _frequentEmojis = [
@@ -267,10 +271,41 @@ class _ChatScreenState extends State<ChatScreen>
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> _loadMessages() async {
-    // loadMessages() souscrit aussi au canal Pusher de la conversation
     await _msgProvider?.loadMessages(widget.conversationId);
     _markRead();
     _scrollBottom(animated: false);
+    // Pré-charger les durées de tous les audios de la conversation
+    _preloadAudioDurations();
+  }
+
+  /// Pré-charge la durée de chaque message vocal/audio visible.
+  void _preloadAudioDurations() {
+    final msgs = _msgProvider?.getMessages(widget.conversationId) ?? [];
+    final batch = <({String msgId, String src})>[];
+    for (final m in msgs) {
+      if (m.type != 'audio' && m.type != 'vocal') continue;
+      final src = m.effectiveMediaUrl;
+      if (src == null || src.isEmpty) continue;
+      batch.add((msgId: m.id, src: src));
+    }
+    if (batch.isEmpty) return;
+    _audioMeta.preloadBatch(batch, notify: () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  /// Appelé à chaque rebuild du Consumer — ne charge que les audios
+  /// pas encore en cache (idempotent, très peu coûteux).
+  void _preloadNewAudioDurations(List<MessageModel> msgs) {
+    for (final m in msgs) {
+      if (m.type != 'audio' && m.type != 'vocal') continue;
+      final src = m.effectiveMediaUrl;
+      if (src == null || src.isEmpty) continue;
+      if (_audioMeta.getDuration(m.id) != null) continue; // déjà en cache
+      _audioMeta.preload(m.id, src, notify: () {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   void _markRead() =>
@@ -818,29 +853,57 @@ class _ChatScreenState extends State<ChatScreen>
 
   Future<void> _playAudio(String id, String src) async {
     try {
+      // Mettre en pause tous les autres lecteurs actifs
       for (final e in _players.entries) {
-        if (e.key != id && e.value.playing) await e.value.stop();
+        if (e.key != id && e.value.playing) {
+          await e.value.pause();
+        }
       }
-      _players[id] ??= AudioPlayer()
-        ..playerStateStream.listen((s) {
-          if (s.processingState == ProcessingState.completed && mounted) {
-            setState(() {});
+
+      if (!_players.containsKey(id)) {
+        final player = AudioPlayer();
+        _players[id] = player;
+
+        // Écouter les changements d'état pour rebuild
+        player.playerStateStream.listen((s) {
+          if (mounted) setState(() {});
+        });
+        // Écouter la durée (mise à jour dès le chargement)
+        player.durationStream.listen((dur) {
+          if (dur != null && dur.inMilliseconds > 0) {
+            _audioMeta.cacheDuration(id, dur);
+            if (mounted) setState(() {});
           }
         });
+
+        // Charger la source
+        if (src.startsWith('http')) {
+          await player.setUrl(src);
+        } else {
+          await player.setFilePath(src);
+        }
+
+        // Mettre en cache la durée dès qu'elle est disponible
+        final dur = player.duration;
+        if (dur != null && dur.inMilliseconds > 0) {
+          _audioMeta.cacheDuration(id, dur);
+          if (mounted) setState(() {});
+        }
+      }
+
       final p = _players[id]!;
       if (p.playing) {
         await p.pause();
       } else {
-        // Fichier local ou URL réseau
-        if (src.startsWith('http')) {
-          await p.setUrl(src);
-        } else {
-          await p.setFilePath(src);
+        if (p.processingState == ProcessingState.completed) {
+          await p.seek(Duration.zero);
         }
         await p.play();
       }
       if (mounted) setState(() {});
-    } catch (_) { _showErr("Impossible de lire l'audio"); }
+    } catch (e) {
+      _showErr("Impossible de lire l'audio");
+    }
   }
 
   String _fmt(Duration d) =>
@@ -1078,6 +1141,11 @@ class _ChatScreenState extends State<ChatScreen>
     return Consumer<MessageProvider>(
       builder: (ctx, pv, _) {
         final msgs = pv.getMessages(widget.conversationId);
+
+        // Pré-charger les durées audio de tous les nouveaux messages
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _preloadNewAudioDurations(msgs);
+        });
 
         // Scroll auto uniquement si on est déjà en bas
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1824,128 +1892,204 @@ class _ChatScreenState extends State<ChatScreen>
     // Priorité : fichier local → URL réseau
     final src = m.effectiveMediaUrl;
 
-    // Pas encore d'URL — en cours d'envoi
+    // En cours d'envoi — pas encore d'URL
     if (src == null || src.isEmpty) {
-      return SizedBox(
-        width: 210,
-        child: Row(children: [
-          Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(
-                color: Colors.grey[300], shape: BoxShape.circle),
-            child: const Center(
-                child: SizedBox(
-                    width: 18, height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.grey))),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(height: 3,
-                    decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(2))),
-                const SizedBox(height: 8),
-                Text('Envoi en cours…',
-                    style: TextStyle(
-                        fontSize: 10, color: Colors.grey[500])),
-              ],
-            ),
-          ),
-        ]),
-      );
+      return _audioSendingWidget();
     }
 
-    final p       = _players[m.id];
-    final playing = p?.playing ?? false;
+    // Pré-charger la durée dès l'affichage de la bulle (fire-and-forget)
+    _audioMeta.preload(m.id, src, notify: () {
+      if (mounted) setState(() {});
+    });
+
+    final player  = _players[m.id];
+    final playing = player?.playing ?? false;
+
+    // Durée : depuis le cache (disponible immédiatement) ou depuis le player actif
+    final cachedDur = _audioMeta.getDuration(m.id);
+    final isMe = m.isMe;
+    final accent = isMe ? const Color(0xFF25D366) : AppConstants.primaryRed;
 
     return StreamBuilder<Duration>(
-      stream : p?.positionStream ?? const Stream.empty(),
-      builder: (_, snap) {
-        final pos = snap.data ?? Duration.zero;
-        final dur = p?.duration ?? Duration.zero;
+      stream : player?.positionStream ?? const Stream.empty(),
+      builder: (_, posSnap) {
+        final pos = posSnap.data ?? Duration.zero;
+
+        // Durée finale : player actif (précis) > cache > zéro
+        final dur = player?.duration ?? cachedDur ?? Duration.zero;
         final pct = dur.inMilliseconds > 0
             ? (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0)
             : 0.0;
 
-        return SizedBox(
-          width: 210,
-          child: Row(children: [
-            GestureDetector(
-              onTap: () => _playAudio(m.id, src),
-              onLongPress: () => AudioPlayerModal.show(
-                context,
-                url: src,
-                senderName: widget.otherUser.name,
-                isMe: m.isMe,
-                senderPhotoUrl: m.isMe ? null : widget.otherUser.photoUrl,
+        final isCompleted =
+            player?.processingState == ProcessingState.completed;
+
+        return Container(
+          width  : 220,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child  : Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Bouton play/pause ─────────────────────────────────────────
+              GestureDetector(
+                onTap: () => _playAudio(m.id, src),
+                onLongPress: () => AudioPlayerModal.show(
+                  context,
+                  url           : src,
+                  senderName    : widget.otherUser.name,
+                  isMe          : isMe,
+                  senderPhotoUrl: isMe ? null : widget.otherUser.photoUrl,
+                ),
+                child: AnimatedContainer(
+                  duration  : const Duration(milliseconds: 150),
+                  width     : 40,
+                  height    : 40,
+                  decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+                  child     : Icon(
+                    playing
+                        ? Icons.pause_rounded
+                        : isCompleted
+                            ? Icons.replay_rounded
+                            : Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size : 24,
+                  ),
+                ),
               ),
-              child: Container(
-                width : 40,
-                height: 40,
-                decoration: BoxDecoration(
-                    color: m.isMe
-                        ? const Color(0xFF25D366)
-                        : AppConstants.primaryRed,
-                    shape: BoxShape.circle),
-                child: Icon(
-                    playing ? Icons.pause : Icons.play_arrow,
-                    color: Colors.white, size: 22)),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
+              const SizedBox(width: 8),
+
+              // ── Barre de progression + durée ──────────────────────────────
+              Expanded(
                 child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-              SliderTheme(
-                data: SliderThemeData(
-                    thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 5),
-                    trackHeight       : 3,
-                    thumbColor        : m.isMe
-                        ? const Color(0xFF25D366)
-                        : AppConstants.primaryRed,
-                    activeTrackColor  : m.isMe
-                        ? const Color(0xFF25D366)
-                        : AppConstants.primaryRed,
-                    inactiveTrackColor: Colors.grey[300],
-                    overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 10)),
-                child: Slider(
-                    value    : pct.toDouble(),
-                    onChanged: (v) => p?.seek(Duration(
-                        milliseconds:
-                            (v * dur.inMilliseconds).toInt()))),
+                  mainAxisSize     : MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Waveform-like slider
+                    SizedBox(
+                      height: 28,
+                      child : SliderTheme(
+                        data : SliderThemeData(
+                          thumbShape        : const RoundSliderThumbShape(
+                              enabledThumbRadius: 5),
+                          trackHeight       : 3,
+                          thumbColor        : accent,
+                          activeTrackColor  : accent,
+                          inactiveTrackColor: isMe
+                              ? Colors.white.withAlpha(100)
+                              : Colors.grey[300],
+                          overlayShape      : const RoundSliderOverlayShape(
+                              overlayRadius: 12),
+                          trackShape        : const RoundedRectSliderTrackShape(),
+                        ),
+                        child: Slider(
+                          value    : pct.toDouble(),
+                          onChanged: (v) {
+                            if (player != null && dur.inMilliseconds > 0) {
+                              player.seek(Duration(
+                                  milliseconds:
+                                      (v * dur.inMilliseconds).toInt()));
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+
+                    // Durée : temps écoulé à gauche, durée totale à droite
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child  : Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            playing || pos.inMilliseconds > 0
+                                ? _fmt(pos)
+                                : '',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color   : isMe
+                                    ? Colors.white70
+                                    : Colors.grey[600]),
+                          ),
+                          Row(children: [
+                            // Petit indicateur de chargement si durée pas encore dispo
+                            if (dur == Duration.zero &&
+                                _audioMeta.isLoading(m.id))
+                              SizedBox(
+                                width : 8,
+                                height: 8,
+                                child : CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: isMe
+                                      ? Colors.white60
+                                      : Colors.grey[400],
+                                ),
+                              )
+                            else
+                              Text(
+                                _fmt(dur),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color   : isMe
+                                        ? Colors.white70
+                                        : Colors.grey[600]),
+                              ),
+                            // Icône hors-ligne si fichier local dispo
+                            if (m.hasLocalMedia) ...[
+                              const SizedBox(width: 3),
+                              Icon(Icons.offline_pin,
+                                  size : 9,
+                                  color: isMe
+                                      ? Colors.white54
+                                      : Colors.green[600]),
+                            ],
+                          ]),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                      mainAxisAlignment:
-                          MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(_fmt(pos),
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey[600])),
-                        Text('',
-                            style: TextStyle(
-                                fontSize: 9,
-                                color: Colors.grey[400])),
-                        Text(_fmt(dur),
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey[600])),
-                      ])),
-            ])),
-          ]),
+            ],
+          ),
         );
       },
     );
   }
+
+  /// Placeholder pendant l'envoi d'un audio
+  Widget _audioSendingWidget() => SizedBox(
+    width: 220,
+    child: Row(children: [
+      Container(
+        width : 40,
+        height: 40,
+        decoration: BoxDecoration(
+            color: Colors.grey[300], shape: BoxShape.circle),
+        child: const Center(
+          child: SizedBox(
+            width: 18, height: 18,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.grey),
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height    : 3,
+            decoration: BoxDecoration(
+                color       : Colors.grey[300],
+                borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 8),
+          Text('Envoi en cours…',
+              style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+        ],
+      )),
+    ]),
+  );
 
   Widget _buildDocContent(MessageModel m) {
     // Priorité : fichier local → URL réseau

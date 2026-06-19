@@ -105,30 +105,12 @@ class MessageModel {
 
     DateTime createdAt = DateTime.now();
     if (json['created_at'] != null) {
-      final raw = json['created_at'].toString().trim();
-      DateTime? parsed;
-
-      // Essai direct
-      parsed = DateTime.tryParse(raw);
-
-      // Si pas de suffix timezone, ajouter 'Z' pour forcer UTC
-      if (parsed != null && !raw.contains('Z') && !raw.contains('+') && !raw.contains('-', 10)) {
-        parsed = DateTime.tryParse('${raw}Z');
-      }
-
-      if (parsed != null) {
-        createdAt = parsed.toLocal();
-      }
+      createdAt = _parseDate(json['created_at'].toString()) ?? DateTime.now();
     }
 
     DateTime? readAt;
     if (json['read_at'] != null) {
-      final raw = json['read_at'].toString().trim();
-      DateTime? parsed = DateTime.tryParse(raw);
-      if (parsed != null && !raw.contains('Z') && !raw.contains('+') && !raw.contains('-', 10)) {
-        parsed = DateTime.tryParse('${raw}Z');
-      }
-      readAt = parsed?.toLocal();
+      readAt = _parseDate(json['read_at'].toString());
     }
 
     return MessageModel(
@@ -139,6 +121,7 @@ class MessageModel {
       type:           msgType,
       fileUrl:        json['file_url'] ?? json['url'],
       filePath:       json['file_path'],
+      localFilePath:  json['local_file_path'],
       createdAt:      createdAt,
       readAt:         readAt,
       isMe:           isMe,
@@ -148,6 +131,32 @@ class MessageModel {
       longitude:      lng,
       replyTo:        replyTo,
     );
+  }
+
+  /// Parse une chaîne de date depuis l'API et retourne un DateTime local.
+  ///
+  /// Gère les formats :
+  ///   • ISO 8601 avec Z ou offset  : "2026-06-18T19:40:05Z"  → UTC → toLocal()
+  ///   • Chaîne sans suffixe (legacy): "2026-06-18 20:40:05"  → traitée comme UTC
+  ///     (avec le fix backend BaseModel, ce cas ne devrait plus arriver)
+  static DateTime? _parseDate(String raw) {
+    raw = raw.trim();
+    if (raw.isEmpty) return null;
+
+    // 1. Essai direct — fonctionne avec Z, +HH:MM, etc.
+    DateTime? dt = DateTime.tryParse(raw);
+    if (dt != null) return dt.toLocal();
+
+    // 2. Remplacer l'espace par T (format MySQL/PostgreSQL sans T)
+    final withT = raw.replaceFirst(' ', 'T');
+    dt = DateTime.tryParse(withT);
+    if (dt != null) return dt.toLocal();
+
+    // 3. Chaîne sans suffixe timezone → supposer UTC (comportement du nouveau backend)
+    dt = DateTime.tryParse('${withT}Z');
+    if (dt != null) return dt.toLocal();
+
+    return null;
   }
 
   MessageModel copyWith({

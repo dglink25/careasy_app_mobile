@@ -81,7 +81,7 @@ class ConversationModel {
       lastMessage: lastMessage,
       unreadCount: json['unread_count'] ?? 0,
       updatedAt: json['updated_at'] != null
-          ? DateTime.tryParse(json['updated_at'].toString()) ?? DateTime.now()
+          ? (DateTime.tryParse(json['updated_at'].toString())?.toLocal() ?? DateTime.now())
           : DateTime.now(),
       serviceName: serviceName,
       entrepriseName: entrepriseName,
