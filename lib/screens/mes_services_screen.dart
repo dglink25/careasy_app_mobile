@@ -154,8 +154,8 @@ class _MesServicesScreenState extends State<MesServicesScreen>
         });
         _showSnack(
           newValue
-              ? '✅ Service visible pour les clients'
-              : '🔒 Service masqué — les clients ne peuvent plus le voir',
+              ? 'Service visible pour les clients'
+              : 'Service masqué — les clients ne peuvent plus le voir',
           isError: false,
         );
       } else if (res.statusCode == 403 &&
