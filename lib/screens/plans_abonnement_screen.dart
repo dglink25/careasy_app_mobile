@@ -18,9 +18,6 @@ const _kAmber  = Color(0xFFF59E0B);
 const _kRadius = 20.0;
 const _kRadiusLg = 28.0;
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  ÉCRAN PRINCIPAL
-// ═══════════════════════════════════════════════════════════════════════════════
 class PlansAbonnementScreen extends StatefulWidget {
   const PlansAbonnementScreen({super.key});
 
@@ -51,6 +48,10 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
   bool _loadingPlans = true;
   bool _loadingAbonnement = true;
   bool _initiating = false;
+
+  // ── Entreprises du prestataire ────────────────────────────────────────────────
+  List<Map<String, dynamic>> _entreprises    = [];
+  bool                       _loadingEntreprises = false;
 
   @override
   void initState() {
@@ -132,14 +133,42 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
   }
 
   // ── Paiement ──────────────────────────────────────────────────────────────────
-  Future<void> _initierPaiement(Map<String, dynamic> plan) async {
+
+  /// Charge la liste des entreprises du prestataire (une seule fois).
+  Future<List<Map<String, dynamic>>> _getEntreprises() async {
+    if (_entreprises.isNotEmpty) return _entreprises;
+    _set(() => _loadingEntreprises = true);
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      final res   = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/mes-entreprises'),
+        headers: _hdr(token),
+      );
+      if (res.statusCode == 200) {
+        final b = jsonDecode(res.body);
+        final l = (b is List ? b : (b['data'] ?? [])) as List;
+        final list = l.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        _set(() => _entreprises = list);
+        return list;
+      }
+    } catch (_) {}
+    finally { _set(() => _loadingEntreprises = false); }
+    return [];
+  }
+
+  Future<void> _initierPaiement(
+    Map<String, dynamic> plan,
+    Map<String, dynamic> entreprise,
+  ) async {
     _set(() => _initiating = true);
     try {
       final token = await _storage.read(key: 'auth_token');
-      final res = await http.post(
+      final res   = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/paiements/initier/${plan['id']}'),
         headers: _hdr(token, json: true),
-        body: jsonEncode({}),
+        body: jsonEncode({
+          'entreprise_id': entreprise['id'],
+        }),
       );
 
       final b = jsonDecode(res.body);
@@ -159,7 +188,8 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
           PageRouteBuilder(
             pageBuilder: (_, a1, a2) => _WebViewScreen(
               url: url, reference: ref ?? '',
-              planName: plan['name'] ?? '', montant: plan['formatted_price'] ?? '',
+              planName: plan['name'] ?? '',
+              montant: plan['formatted_price'] ?? '',
             ),
             transitionsBuilder: (_, a, __, child) => SlideTransition(
               position: Tween(begin: const Offset(0, 1), end: Offset.zero)
@@ -172,25 +202,33 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
 
         if (result == null) return;
         if (result.success) {
-            _showResultSheet(success: true, ref: result.reference, planName: plan['name'] ?? '');
-            _verifierEtRecharger(result.reference);
-            // Recharger en arrière-plan avec un délai pour laisser le temps au callback
-            Future.delayed(const Duration(seconds: 3), () async {
-                if (mounted) await _loadAbonnements();
-            });
-            // Second retry à 8s au cas où le webhook POST arrive en retard
-            Future.delayed(const Duration(seconds: 8), () async {
-                if (mounted) await _loadAbonnements();
-            });
-        }
-        else {
-          _showResultSheet(success: false, ref: result.reference, planName: plan['name'] ?? '');
+          _showResultSheet(
+              success: true,
+              ref: result.reference,
+              planName: plan['name'] ?? '',
+              entrepriseName: entreprise['name']?.toString() ?? '');
+          _verifierEtRecharger(result.reference);
+          Future.delayed(const Duration(seconds: 3), () async {
+            if (mounted) await _loadAbonnements();
+          });
+          Future.delayed(const Duration(seconds: 8), () async {
+            if (mounted) await _loadAbonnements();
+          });
+        } else {
+          _showResultSheet(
+              success: false,
+              ref: result.reference,
+              planName: plan['name'] ?? '',
+              entrepriseName: entreprise['name']?.toString() ?? '');
         }
         return;
       }
       _err(b['message'] ?? 'Erreur d\'initiation du paiement');
-    } catch (_) { _err('Erreur de connexion'); }
-    finally { if (mounted) _set(() => _initiating = false); }
+    } catch (_) {
+      _err('Erreur de connexion');
+    } finally {
+      if (mounted) _set(() => _initiating = false);
+    }
   }
 
   Future<void> _verifierEtRecharger(String reference) async {
@@ -218,7 +256,12 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
   }
 
   // ── Result bottom sheet ────────────────────────────────────────────────────────
-  void _showResultSheet({required bool success, required String ref, required String planName}) {
+  void _showResultSheet({
+    required bool success,
+    required String ref,
+    required String planName,
+    String entrepriseName = '',
+  }) {
     if (!mounted) return;
     HapticFeedback.mediumImpact();
     showModalBottomSheet(
@@ -227,7 +270,10 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black54,
       builder: (_) => _ResultSheet(
-        success: success, reference: ref, planName: planName,
+        success: success,
+        reference: ref,
+        planName: planName,
+        entrepriseName: entrepriseName,
         onContinue: () {
           Navigator.pop(context);
           if (success) _tabCtrl.animateTo(1);
@@ -365,12 +411,68 @@ class _PlansAbonnementScreenState extends State<PlansAbonnementScreen>
       barrierColor: Colors.black54,
       builder: (_) => _ConfirmSheet(
         plan: plan,
-        onConfirm: () {
-          Navigator.pop(context);
-          _initierPaiement(plan);
+        onConfirm: () async {
+          Navigator.pop(context); // ferme _ConfirmSheet
+          await _pickEntrepriseAndPay(plan);
         },
       ),
     );
+  }
+
+  /// Charge les entreprises, affiche le picker, puis lance le paiement.
+  Future<void> _pickEntrepriseAndPay(Map<String, dynamic> plan) async {
+    // Afficher un spinner pendant le chargement des entreprises
+    if (_entreprises.isEmpty) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(
+              child: CircularProgressIndicator(color: _kRed)),
+        );
+      }
+    }
+
+    final entreprises = await _getEntreprises();
+
+    if (!mounted) return;
+    if (_loadingEntreprises == false && _entreprises.isEmpty) {
+      // Ferme le spinner si ouvert
+      if (Navigator.canPop(context)) Navigator.pop(context);
+    }
+    // Fermer le spinner si ouvert
+    if (_entreprises.isNotEmpty && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+
+    if (!mounted) return;
+
+    if (entreprises.isEmpty) {
+      _err('Aucune entreprise trouvée. Créez d\'abord une entreprise.');
+      return;
+    }
+
+    // Une seule entreprise → sélection automatique, pas de picker
+    if (entreprises.length == 1) {
+      await _initierPaiement(plan, entreprises.first);
+      return;
+    }
+
+    // Plusieurs entreprises → afficher le picker
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      builder: (_) => _EntreprisePickerSheet(
+        plan       : plan,
+        entreprises: entreprises,
+      ),
+    );
+
+    if (selected == null) return; // l'utilisateur a annulé
+    await _initierPaiement(plan, selected);
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -1182,8 +1284,15 @@ class _HistoriqueItem extends StatelessWidget {
 class _ResultSheet extends StatefulWidget {
   final bool success;
   final String reference, planName;
+  final String entrepriseName;
   final VoidCallback onContinue;
-  const _ResultSheet({required this.success, required this.reference, required this.planName, required this.onContinue});
+  const _ResultSheet({
+    required this.success,
+    required this.reference,
+    required this.planName,
+    this.entrepriseName = '',
+    required this.onContinue,
+  });
   @override
   State<_ResultSheet> createState() => _ResultSheetState();
 }
@@ -1245,7 +1354,7 @@ class _ResultSheetState extends State<_ResultSheet> with SingleTickerProviderSta
             const SizedBox(height: 10),
             Text(
               widget.success
-                  ? 'Votre abonnement "${widget.planName}" est maintenant actif. Profitez de toutes les fonctionnalités !'
+                  ? 'Votre abonnement "${widget.planName}" est maintenant actif${widget.entrepriseName.isNotEmpty ? ' pour ${widget.entrepriseName}' : ''}. Profitez de toutes les fonctionnalités !'
                   : 'Le paiement n\'a pas pu aboutir. Vérifiez votre solde ou changez de moyen de paiement.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Colors.grey.shade600, height: 1.55),
@@ -1553,5 +1662,260 @@ class _WebViewScreenState extends State<_WebViewScreen> {
       ),
     );
     if (ok == true && mounted) _finish(false);
+  }
+}
+
+
+class _EntreprisePickerSheet extends StatefulWidget {
+  final Map<String, dynamic>       plan;
+  final List<Map<String, dynamic>> entreprises;
+
+  const _EntreprisePickerSheet({
+    required this.plan,
+    required this.entreprises,
+  });
+
+  @override
+  State<_EntreprisePickerSheet> createState() => _EntreprisePickerSheetState();
+}
+
+class _EntreprisePickerSheetState extends State<_EntreprisePickerSheet> {
+  Map<String, dynamic>? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final price = widget.plan['formatted_price'] ?? '${widget.plan['price']} F CFA';
+
+    return Container(
+      decoration: BoxDecoration(
+        color        : Theme.of(context).cardColor,
+        borderRadius : const BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom +
+                MediaQuery.of(context).padding.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Poignée ────────────────────────────────────────────────────────
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 4),
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          // ── En-tête ────────────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 14, 22, 0),
+            child: Row(children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  color : _kRed.withOpacity(0.1),
+                  shape : BoxShape.circle,
+                ),
+                child: const Icon(Icons.business_rounded, color: _kRed, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Choisir une entreprise',
+                    style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2),
+                  ),
+                  Text(
+                    'Pour quel établissement souscrivez-vous\n'
+                    'au plan ${widget.plan['name'] ?? ''} · $price ?',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500, height: 1.4),
+                  ),
+                ],
+              )),
+            ]),
+          ),
+
+          const SizedBox(height: 16),
+          Divider(color: Colors.grey.shade100, height: 1),
+          const SizedBox(height: 8),
+
+          // ── Liste d'entreprises ────────────────────────────────────────────
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.45,
+            ),
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              itemCount: widget.entreprises.length,
+              itemBuilder: (_, i) {
+                final e        = widget.entreprises[i];
+                final id       = e['id']?.toString() ?? '';
+                final name     = e['name']?.toString() ?? 'Entreprise';
+                final logo     = e['logo']?.toString();
+                final domaine  = (e['domaines'] as List?)?.isNotEmpty == true
+                    ? (e['domaines'] as List).first['name']?.toString() ?? ''
+                    : '';
+                final isActive = e['status']?.toString() == 'active' ||
+                                 e['status']?.toString() == 'approved';
+                final isSelected = _selected?['id']?.toString() == id;
+
+                return GestureDetector(
+                  onTap: () => setState(() => _selected = e),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? _kRed.withOpacity(0.06)
+                          : Theme.of(context).scaffoldBackgroundColor,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isSelected
+                            ? _kRed
+                            : Colors.grey.shade200,
+                        width: isSelected ? 2 : 1,
+                      ),
+                    ),
+                    child: Row(children: [
+                      // Logo / avatar
+                      Container(
+                        width: 46, height: 46,
+                        decoration: BoxDecoration(
+                          color       : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                          image       : logo != null && logo.isNotEmpty
+                              ? DecorationImage(
+                                  image: NetworkImage(logo),
+                                  fit  : BoxFit.cover,
+                                  onError: (_, __) {})
+                              : null,
+                        ),
+                        child: logo == null || logo.isEmpty
+                            ? Center(
+                                child: Text(
+                                  name.isNotEmpty ? name[0].toUpperCase() : 'E',
+                                  style: TextStyle(
+                                    fontSize  : 20,
+                                    fontWeight: FontWeight.bold,
+                                    color     : Colors.grey.shade600,
+                                  ),
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
+
+                      // Infos
+                      Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: TextStyle(
+                              fontSize  : 14,
+                              fontWeight: FontWeight.w700,
+                              color     : isSelected ? _kRed : null,
+                            ),
+                          ),
+                          if (domaine.isNotEmpty)
+                            Text(
+                              domaine,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color   : Colors.grey.shade500),
+                            ),
+                          const SizedBox(height: 2),
+                          Row(children: [
+                            Container(
+                              width : 7, height: 7,
+                              decoration: BoxDecoration(
+                                color: isActive
+                                    ? _kGreen
+                                    : _kAmber,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              isActive ? 'Active' : 'En attente',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color   : isActive ? _kGreen : _kAmber,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ]),
+                        ],
+                      )),
+
+                      // Indicateur sélection
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: isSelected
+                            ? const Icon(Icons.check_circle_rounded,
+                                color: _kRed, size: 24, key: ValueKey('check'))
+                            : Icon(Icons.radio_button_unchecked,
+                                color: Colors.grey.shade300,
+                                size: 24, key: const ValueKey('uncheck')),
+                      ),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ── Bouton Payer ───────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 22),
+            child: SizedBox(
+              width : double.infinity,
+              height: 54,
+              child : ElevatedButton(
+                onPressed: _selected == null
+                    ? null
+                    : () => Navigator.pop(context, _selected),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kRed,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.grey.shade200,
+                  disabledForegroundColor: Colors.grey.shade400,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.payment_rounded, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      _selected == null
+                          ? 'Sélectionnez une entreprise'
+                          : 'Payer maintenant · $price',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
