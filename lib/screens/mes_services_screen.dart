@@ -735,7 +735,7 @@ class _MesServicesScreenState extends State<MesServicesScreen>
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10))),
-              child: const Text('Rendre visible'),
+              child: const Text('Oui'),
             ),
           ],
         ),
