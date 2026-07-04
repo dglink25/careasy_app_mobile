@@ -7,10 +7,13 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../models/user_model.dart';
+import '../providers/message_provider.dart';
+import '../providers/rendez_vous_provider.dart';
 import '../utils/constants.dart';
 import '../widgets/whatsapp_icon.dart';
-import '../widgets/service_selection_modal.dart';
-import '../providers/message_provider.dart';
+import 'chat_screen.dart';
+import 'rendez_vous/create_rendez_vous_screen.dart';
 
 // ─── Modèles ─────────────────────────────────────────────────────────────────
 
@@ -426,6 +429,140 @@ class _CarAIScreenState extends State<CarAIScreen>
       // Silencieux — le feedback ne doit pas bloquer l'UX
     }
   }
+
+  // ── Navigation directe RDV ────────────────────────────────────────────────
+
+  void _openRdvForService(Map<String, dynamic> svc) {
+    HapticFeedback.lightImpact();
+    final enriched = Map<String, dynamic>.from(svc);
+    // S'assurer que entreprise est présent dans le service
+    if (enriched['entreprise'] == null && svc['entreprise'] is Map) {
+      enriched['entreprise'] = Map<String, dynamic>.from(svc['entreprise'] as Map);
+    }
+    Navigator.push(
+      context,
+      _slidePageRoute(
+        ChangeNotifierProvider(
+          create: (_) => RendezVousProvider(),
+          child: CreateRendezVousScreen(service: enriched),
+        ),
+      ),
+    );
+  }
+
+  // ── Navigation directe Chat ────────────────────────────────────────────────
+
+  Future<void> _openChatForService(Map<String, dynamic> svc) async {
+    HapticFeedback.lightImpact();
+    final serviceId = svc['id']?.toString() ?? '';
+    if (serviceId.isEmpty) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    // Spinner
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: AppConstants.primaryRed),
+      ),
+    );
+
+    try {
+      final token   = await _storage.read(key: 'auth_token');
+      final userRaw = await _storage.read(key: 'user_data');
+      final myId    = userRaw != null
+          ? jsonDecode(userRaw)['id']?.toString()
+          : null;
+
+      final resp = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/conversation/service/$serviceId/start'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type' : 'application/json',
+          'Accept'       : 'application/json',
+        },
+        body: jsonEncode({'service_id': int.tryParse(serviceId) ?? 0}),
+      ).timeout(const Duration(seconds: 15));
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // ferme spinner
+
+      if (resp.statusCode == 200 || resp.statusCode == 201) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final conversationId = (data['id'] ?? data['conversation_id'])?.toString();
+        if (conversationId == null) throw Exception('Format inattendu');
+
+        // Trouver l'autre utilisateur
+        Map<String, dynamic>? otherUserData;
+        for (final key in ['user_one', 'user_two', 'userOne', 'userTwo']) {
+          final u = data[key];
+          if (u is Map && u['id']?.toString() != myId) {
+            otherUserData = Map<String, dynamic>.from(u as Map);
+            break;
+          }
+        }
+
+        final e = svc['entreprise'] is Map
+            ? Map<String, dynamic>.from(svc['entreprise'] as Map)
+            : <String, dynamic>{};
+
+        final otherUser = UserModel(
+          id      : otherUserData?['id']?.toString() ?? e['id']?.toString() ?? '',
+          name    : otherUserData?['name']?.toString() ?? e['name']?.toString() ?? 'Prestataire',
+          photoUrl: otherUserData?['profile_photo_path']?.toString()
+              ?? otherUserData?['profile_photo_url']?.toString()
+              ?? e['logo']?.toString(),
+          role    : 'prestataire',
+          isOnline: false,
+        );
+
+        final mp = context.read<MessageProvider>();
+        Navigator.push(
+          context,
+          _slidePageRoute(
+            ChangeNotifierProvider.value(
+              value: mp,
+              child: ChatScreen(
+                conversationId : conversationId,
+                otherUser      : otherUser,
+                serviceName    : svc['name']?.toString() ?? '',
+                entrepriseName : data['entreprise_name']?.toString() ?? e['name']?.toString() ?? '',
+              ),
+            ),
+          ),
+        );
+      } else {
+        messenger.showSnackBar(SnackBar(
+          content: Text('Impossible de démarrer la conversation (${resp.statusCode})'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        messenger.showSnackBar(SnackBar(
+          content: const Text('Erreur de connexion'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+      }
+    }
+  }
+
+  PageRoute _slidePageRoute(Widget child) => PageRouteBuilder(
+    pageBuilder: (_, __, ___) => child,
+    transitionsBuilder: (_, anim, __, child) => SlideTransition(
+      position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+          .animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
+      child: child,
+    ),
+    transitionDuration: const Duration(milliseconds: 320),
+  );
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -908,12 +1045,7 @@ class _CarAIScreenState extends State<CarAIScreen>
     final note = (svc['average_rating'] as num?)?.toDouble();
     final avis = (svc['total_reviews'] as num?)?.toInt() ?? 0;
 
-    // Entreprise enrichie avec le service pour showServiceSelectionModal
-    final entrepriseForModal = <String, dynamic>{
-      ...e,
-      // Injecter le service courant comme liste pour éviter un appel API
-      'services': [svc],
-    };
+    // Entreprise enrichie avec le service — gardé pour référence future
 
     return Container(
       margin: const EdgeInsets.only(bottom: 7),
@@ -1007,11 +1139,7 @@ class _CarAIScreenState extends State<CarAIScreen>
                 icon: Icons.message_rounded,
                 label: 'Message',
                 color: Colors.deepPurple,
-                onTap: () => showServiceSelectionModal(
-                  context: context,
-                  entreprise: entrepriseForModal,
-                  mode: ServiceSelectionMode.message,
-                ),
+                onTap: () => _openChatForService(svc),
                 isDark: isDark,
               )),
               const SizedBox(width: 7),
@@ -1020,11 +1148,7 @@ class _CarAIScreenState extends State<CarAIScreen>
                 icon: Icons.calendar_month_rounded,
                 label: 'RDV',
                 color: Colors.blue.shade600,
-                onTap: () => showServiceSelectionModal(
-                  context: context,
-                  entreprise: entrepriseForModal,
-                  mode: ServiceSelectionMode.rendezVous,
-                ),
+                onTap: () => _openRdvForService(svc),
                 isDark: isDark,
               )),
             ],
