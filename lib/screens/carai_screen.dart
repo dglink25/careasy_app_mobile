@@ -1143,14 +1143,6 @@ class _CarAIScreenState extends State<CarAIScreen>
                 isDark: isDark,
               )),
               const SizedBox(width: 7),
-              // Rendez-vous
-              Expanded(child: _cardActionBtn(
-                icon: Icons.calendar_month_rounded,
-                label: 'RDV',
-                color: Colors.blue.shade600,
-                onTap: () => _openRdvForService(svc),
-                isDark: isDark,
-              )),
             ],
           ),
         ],
