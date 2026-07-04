@@ -429,7 +429,7 @@ class _EntrepriseServicesScreenState extends State<EntrepriseServicesScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
-                'Impossible de démarrer la conversation (${resp.statusCode})'),
+                'Vous ne pouvez pas vous contacter vous même par rapport à votre propre service'),
             backgroundColor: Colors.red.shade700,
             behavior: SnackBarBehavior.floating,
           ));

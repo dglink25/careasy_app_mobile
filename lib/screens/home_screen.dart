@@ -524,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         }
       } else {
         _showError(
-            'Impossible de démarrer la conversation (${response.statusCode})');
+            'Vous ne pouvez pas vous contacter vous même par rapport à votre propre service');
       }
     } catch (e) {
       if (context.mounted) Navigator.pop(context);

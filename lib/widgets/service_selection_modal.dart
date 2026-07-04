@@ -285,7 +285,7 @@ class _ServiceSelectionModalState extends State<_ServiceSelectionModal>
         navigator.pop(); // ferme le modal de sélection
         ScaffoldMessenger.of(navigator.context).showSnackBar(SnackBar(
           content: Text(
-              'Impossible de démarrer la conversation (${resp.statusCode})'),
+              'Vous ne pouvez pas vous contacter vous même par rapport à votre propre service'),
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
