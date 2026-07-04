@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import '../utils/constants.dart';
+import '../widgets/whatsapp_icon.dart';
 
 // ─── Modèles ─────────────────────────────────────────────────────────────────
 
@@ -1016,7 +1017,8 @@ class _CarAIScreenState extends State<CarAIScreen>
               if (wa.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 _iconBtn(
-                  icon: Icons.chat_rounded,
+                  icon: null,
+                  waIcon: true,
                   color: _UI.whatsapp,
                   onTap: () => _launchUrl(
                     'https://wa.me/${wa.replaceAll('+', '').replaceAll(' ', '')}',
@@ -1032,7 +1034,8 @@ class _CarAIScreenState extends State<CarAIScreen>
   }
 
   Widget _iconBtn({
-    required IconData icon,
+    required IconData? icon,
+    bool waIcon = false,
     required Color color,
     required VoidCallback onTap,
     String? tooltip,
@@ -1048,7 +1051,11 @@ class _CarAIScreenState extends State<CarAIScreen>
             color: color.withOpacity(0.1),
             borderRadius: BorderRadius.circular(9),
           ),
-          child: Icon(icon, color: color, size: 17),
+          child: Center(
+            child: waIcon
+                ? const WhatsAppIcon(size: 18)
+                : Icon(icon, color: color, size: 17),
+          ),
         ),
       ),
     );

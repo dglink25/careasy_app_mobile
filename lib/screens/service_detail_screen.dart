@@ -12,7 +12,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../widgets/cached_image.dart';   // ← widget image mis en cache
+import '../widgets/cached_image.dart';
+import '../widgets/whatsapp_icon.dart';
+import '../widgets/service_selection_modal.dart';
 
 // ─── Widget étoiles inline ────────────────────────────────────────────────────
 class _StarRow extends StatelessWidget {
@@ -467,9 +469,26 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
                         child: IconButton(
-                          icon: const Icon(Icons.message, color: Color(0xFF25D366)),
+                          icon: const WhatsAppIcon(size: 22),
                           onPressed: entreprise['whatsapp_phone'] != null ? () => _openWhatsApp(entreprise['whatsapp_phone']) : null,
                           constraints: const BoxConstraints(), padding: EdgeInsets.zero,
+                          tooltip: 'WhatsApp',
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Bouton message in-app
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.1), borderRadius: BorderRadius.circular(15)),
+                        child: IconButton(
+                          icon: const Icon(Icons.message_rounded, color: Colors.deepPurple),
+                          onPressed: () => showServiceSelectionModal(
+                            context: context,
+                            entreprise: entreprise,
+                            mode: ServiceSelectionMode.message,
+                          ),
+                          constraints: const BoxConstraints(), padding: EdgeInsets.zero,
+                          tooltip: 'Message',
                         ),
                       ),
                     ]),
@@ -829,10 +848,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
         ),
       if (entreprise['whatsapp_phone'] != null && entreprise['whatsapp_phone'].toString().isNotEmpty)
         ListTile(
-          leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.message, color: Color(0xFF25D366), size: 20)),
+          leading: Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFF25D366).withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: const WhatsAppIcon(size: 20)),
           title: const Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Text(entreprise['whatsapp_phone']),
-          trailing: IconButton(icon: const Icon(Icons.open_in_browser, color: Color(0xFF25D366)), onPressed: () => _openWhatsApp(entreprise['whatsapp_phone'])),
+          trailing: IconButton(icon: const WhatsAppIcon(size: 20), onPressed: () => _openWhatsApp(entreprise['whatsapp_phone'])),
         ),
       if (entreprise['email'] != null && entreprise['email'].toString().isNotEmpty)
         ListTile(

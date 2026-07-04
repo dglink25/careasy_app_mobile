@@ -17,6 +17,7 @@ import '../models/user_model.dart';
 import '../providers/message_provider.dart';
 import '../providers/rendez_vous_provider.dart';
 import '../utils/constants.dart';
+import '../widgets/whatsapp_icon.dart';
 import 'chat_screen.dart';
 import 'entreprise_services_screen.dart';
 import 'itinerary_screen.dart';
@@ -670,7 +671,7 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
   String get _phone   => widget.entreprise['call_phone']?.toString() ?? '';
   String get _status  => widget.entreprise['status']?.toString() ?? '';
   List   get _doms    => (widget.entreprise['domaines'] as List?) ?? [];
-  List   get _servicesList => (widget.entreprise['services'] as List?) ?? [];
+  List   get _servicesList => ((widget.entreprise['services'] ?? widget.entreprise['service']) as List?) ?? [];
 
   LatLng? get _position {
     final lat = double.tryParse(widget.entreprise['latitude']?.toString() ?? '');
@@ -1162,7 +1163,7 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
       ),
       // WhatsApp
       _ActionIcon(
-        icon: Icons.chat,
+        customIcon: const WhatsAppIcon(size: 26),
         label: 'WhatsApp',
         color: const Color(0xFF25D366),
         onTap: hasWhatsapp ? _openWhatsApp : null,
@@ -1218,17 +1219,19 @@ class _EntrepriseModalState extends State<_EntrepriseModal> {
 
 
 class _ActionIcon extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final Widget? customIcon;
   final String label;
   final Color color;
   final VoidCallback? onTap;
 
   const _ActionIcon({
-    required this.icon,
+    this.icon,
+    this.customIcon,
     required this.label,
     required this.color,
     this.onTap,
-  });
+  }) : assert(icon != null || customIcon != null, 'icon ou customIcon requis');
 
   @override
   Widget build(BuildContext context) {
@@ -1251,7 +1254,9 @@ class _ActionIcon extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: color.withOpacity(0.25), width: 1.5),
             ),
-            child: Icon(icon, color: color, size: 24),
+            child: Center(
+              child: customIcon ?? Icon(icon, color: color, size: 24),
+            ),
           ),
           const SizedBox(height: 5),
           Text(
