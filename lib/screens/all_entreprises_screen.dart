@@ -309,7 +309,7 @@ class _AllEntreprisesScreenState extends State<AllEntreprisesScreen> {
   Widget _buildCompactCard(Map<String, dynamic> entreprise) {
     final isValidated = entreprise['status'] == 'validated';
     final domaines = entreprise['domaines'] as List? ?? [];
-    final services = entreprise['services'] as List? ?? [];
+    final services = (entreprise['services'] ?? entreprise['service']) as List? ?? [];
     final logo = entreprise['logo']?.toString() ?? '';
     final address = entreprise['google_formatted_address'] ??
         entreprise['siege'] ??

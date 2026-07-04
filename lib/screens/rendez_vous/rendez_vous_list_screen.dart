@@ -702,7 +702,7 @@ class _RendezVousListScreenState extends State<RendezVousListScreen>
             Text(
               _statusFilter == 'all'
                   ? 'Aucun rendez-vous sur cette période'
-                  : 'Aucun rendez-vous "${_statusFilter}"',
+                  : 'Aucun rendez-vous pour ce statut',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
             ),

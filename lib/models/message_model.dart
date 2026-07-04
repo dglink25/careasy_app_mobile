@@ -79,10 +79,13 @@ class MessageModel {
 
 
     bool isMe;
-    if (json.containsKey('is_me') && json['is_me'] != null) {
-      isMe = json['is_me'] == true;
-    } else if (currentUserId.isNotEmpty && senderId.isNotEmpty) {
+    if (currentUserId.isNotEmpty && senderId.isNotEmpty) {
+      // Toujours recalculer depuis sender_id — plus fiable que is_me du JSON
+      // (is_me dans Pusher est calculé du point de vue de l'émetteur, pas du récepteur)
       isMe = senderId == currentUserId;
+    } else if (json.containsKey('is_me') && json['is_me'] != null) {
+      // Fallback uniquement si on n'a pas le currentUserId
+      isMe = json['is_me'] == true;
     } else {
       isMe = false;
     }

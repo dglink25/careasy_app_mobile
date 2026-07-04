@@ -20,6 +20,7 @@ class _CarAIMessage {
   final String? intent;
   final bool isLoading;
   final DateTime createdAt;
+  final bool? feedbackGiven; // null = pas encore, true = positif, false = négatif
 
   const _CarAIMessage({
     required this.id,
@@ -31,6 +32,7 @@ class _CarAIMessage {
     this.intent,
     this.isLoading = false,
     required this.createdAt,
+    this.feedbackGiven,
   });
 
   _CarAIMessage copyWith({
@@ -40,19 +42,26 @@ class _CarAIMessage {
     String? mapUrl,
     String? intent,
     bool? isLoading,
+    Object? feedbackGiven = _sentinel,
   }) =>
       _CarAIMessage(
-        id: id,
-        role: role,
-        content: content ?? this.content,
-        services: services ?? this.services,
-        suggestions: suggestions ?? this.suggestions,
-        mapUrl: mapUrl ?? this.mapUrl,
-        intent: intent ?? this.intent,
-        isLoading: isLoading ?? this.isLoading,
-        createdAt: createdAt,
+        id:            id,
+        role:          role,
+        content:       content       ?? this.content,
+        services:      services      ?? this.services,
+        suggestions:   suggestions   ?? this.suggestions,
+        mapUrl:        mapUrl        ?? this.mapUrl,
+        intent:        intent        ?? this.intent,
+        isLoading:     isLoading     ?? this.isLoading,
+        createdAt:     createdAt,
+        feedbackGiven: feedbackGiven == _sentinel
+            ? this.feedbackGiven
+            : feedbackGiven as bool?,
       );
 }
+
+// Sentinel pour différencier null explicite de "non fourni"
+const Object _sentinel = Object();
 
 // ─── Couleurs & Constantes UI ─────────────────────────────────────────────────
 
@@ -374,6 +383,39 @@ class _CarAIScreenState extends State<CarAIScreen>
     await _startConversation();
   }
 
+  // ── Feedback positif / négatif ────────────────────────────────────────────
+
+  Future<void> _sendFeedback(String messageId, bool isHelpful) async {
+    // Mise à jour optimiste de l'UI
+    setState(() {
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(feedbackGiven: isHelpful);
+      }
+    });
+
+    try {
+      final token = await _storage.read(key: 'auth_token');
+      if (token == null) return;
+
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/ai/feedback'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type' : 'application/json',
+          'Accept'       : 'application/json',
+        },
+        body: jsonEncode({
+          'message_id' : int.tryParse(messageId) ?? 0,
+          'rating'     : isHelpful ? 5 : 1,
+          'is_helpful' : isHelpful,
+        }),
+      ).timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Silencieux — le feedback ne doit pas bloquer l'UX
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   void _scrollToBottom() {
@@ -673,10 +715,102 @@ class _CarAIScreenState extends State<CarAIScreen>
                   const SizedBox(height: 9),
                   _buildSuggestions(msg.suggestions, isDark),
                 ],
+
+                // Feedback 👍 / 👎 — uniquement sur les vraies réponses (pas welcome, pas erreur)
+                if (!msg.isLoading && !msg.id.startsWith('welcome') && !msg.id.startsWith('err_')) ...[
+                  const SizedBox(height: 8),
+                  _buildFeedbackRow(msg, isDark),
+                ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── Feedback row ──────────────────────────────────────────────────────────
+
+  Widget _buildFeedbackRow(_CarAIMessage msg, bool isDark) {
+    final given = msg.feedbackGiven;
+
+    // Après feedback : afficher confirmation compacte
+    if (given != null) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            given ? Icons.thumb_up_rounded : Icons.thumb_down_rounded,
+            size: 13,
+            color: given ? const Color(0xFF22C55E) : _UI.primary,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            given ? 'Merci pour votre retour !' : 'Désolé, nous allons améliorer.',
+            style: TextStyle(
+              fontSize: 11,
+              color: given ? const Color(0xFF22C55E) : _UI.textMuted,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Avant feedback : boutons 👍 👎
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Cette réponse vous a aidé ?',
+          style: TextStyle(
+            fontSize: 11,
+            color: _UI.textMuted,
+          ),
+        ),
+        const SizedBox(width: 8),
+        _feedbackBtn(
+          icon    : Icons.thumb_up_rounded,
+          color   : const Color(0xFF22C55E),
+          tooltip : 'Utile',
+          onTap   : () => _sendFeedback(msg.id, true),
+          isDark  : isDark,
+        ),
+        const SizedBox(width: 6),
+        _feedbackBtn(
+          icon    : Icons.thumb_down_rounded,
+          color   : _UI.primary,
+          tooltip : 'Pas utile',
+          onTap   : () => _sendFeedback(msg.id, false),
+          isDark  : isDark,
+        ),
+      ],
+    );
+  }
+
+  Widget _feedbackBtn({
+    required IconData icon,
+    required Color color,
+    required String tooltip,
+    required VoidCallback onTap,
+    required bool isDark,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: isDark
+                ? color.withOpacity(0.15)
+                : color.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: color.withOpacity(0.25)),
+          ),
+          child: Icon(icon, size: 14, color: color),
+        ),
       ),
     );
   }

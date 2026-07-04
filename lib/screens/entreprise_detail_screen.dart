@@ -124,7 +124,7 @@ class _EntrepriseDetailScreenState extends State<EntrepriseDetailScreen>
       }
       
       // Récupération des services
-      final services = widget.entreprise['services'] as List? ?? [];
+      final services = (widget.entreprise['services'] ?? widget.entreprise['service']) as List? ?? [];
       String servicesText = '';
       if (services.isNotEmpty) {
         servicesText = '\nServices proposés (${services.length}) :\n';
@@ -235,7 +235,7 @@ Téléchargez l'application : https://careasy.app/download
     final isValidated = e['status'] == 'validated';
     final logo = e['logo']?.toString() ?? '';
     final imageBoutique = e['image_boutique']?.toString() ?? '';
-    final services = e['services'] as List? ?? [];
+    final services = (e['services'] ?? e['service']) as List? ?? [];
     final domaines = e['domaines'] as List? ?? [];
     final hasPhone = (e['call_phone'] ?? '').toString().isNotEmpty;
     final hasWhatsapp = (e['whatsapp_phone'] ?? '').toString().isNotEmpty;
