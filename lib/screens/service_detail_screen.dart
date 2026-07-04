@@ -205,7 +205,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       final serviceName       = widget.service['name'] ?? 'Service';
       final entreprise        = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
       final entrepriseName    = entreprise['name'] ?? 'Entreprise';
-      final entrepriseAddress = entreprise['address'] ?? 'Adresse non renseignée';
+      final entrepriseAddress = entreprise['google_formatted_address'] ?? entreprise['siege'] ?? entreprise['address'] ?? 'Adresse non renseignée';
       final hasPromo          = widget.service['has_promo'] ?? false;
       final isPromoActive     = widget.service['is_promo_active'] ?? false;
       String priceText;
@@ -580,7 +580,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
                       Row(children: [
                         Icon(Icons.location_on, size: 14, color: Colors.grey[500]),
                         const SizedBox(width: 4),
-                        Expanded(child: Text(entreprise['address'] ?? 'Adresse non renseignée', style: TextStyle(fontSize: 12, color: Colors.grey[600]), maxLines: 2, overflow: TextOverflow.ellipsis)),
+                        Expanded(child: Text(entreprise['google_formatted_address'] ?? entreprise['siege'] ?? entreprise['address'] ?? 'Adresse non renseignée', style: TextStyle(fontSize: 12, color: Colors.grey[600]), maxLines: 2, overflow: TextOverflow.ellipsis)),
                       ]),
                     ])),
                   ]),
