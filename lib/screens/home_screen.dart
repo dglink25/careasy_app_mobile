@@ -256,23 +256,34 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
       ).timeout(const Duration(seconds: 10));
 
+      debugPrint('[Home] Entreprises status: ${response.statusCode}');
+
       if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        // ▼ Sauvegarde dans le cache
+        final decoded = jsonDecode(response.body);
+        // L'API peut retourner un tableau direct ou {"data": [...]}
+        final List<dynamic> data = decoded is List
+            ? decoded
+            : (decoded is Map && decoded['data'] is List)
+                ? decoded['data'] as List
+                : [];
+        debugPrint('[Home] Entreprises chargées: ${data.length}');
         await _cache.saveEntreprises(data);
-        setState(() { _entreprises = data; _isLoadingEntreprises = false; _isFromCache = false; });
+        if (mounted) setState(() { _entreprises = data; _isLoadingEntreprises = false; _isFromCache = false; });
         return;
+      } else {
+        debugPrint('[Home] Entreprises erreur ${response.statusCode}: ${response.body.substring(0, response.body.length.clamp(0, 200))}');
       }
     } catch (e) {
-      debugPrint('Erreur chargement entreprises: $e');
+      debugPrint('[Home] Erreur chargement entreprises: $e');
     }
 
     // ▼ Fallback cache
     final cached = await _cache.getEntreprises();
     if (cached != null) {
-      setState(() { _entreprises = cached; _isFromCache = true; });
+      debugPrint('[Home] Entreprises depuis cache: ${cached.length}');
+      if (mounted) setState(() { _entreprises = cached; _isFromCache = true; });
     }
-    setState(() => _isLoadingEntreprises = false);
+    if (mounted) setState(() => _isLoadingEntreprises = false);
   }
 
   // ── DOMAINES ────────────────────────────────────────────────────────────────
@@ -1251,7 +1262,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
 
-  Widget _buildEntreprisesList() => SizedBox(height: 200, child: ListView.builder(scrollDirection: Axis.horizontal, itemCount: _entreprises.length, itemBuilder: (_, i) => _buildEntrepriseCard(_entreprises[i])));
+  Widget _buildEntreprisesList() => SizedBox(
+    height: 200,
+    child: ListView.builder(
+      scrollDirection: Axis.horizontal,
+      itemCount: _entreprises.length,
+      itemBuilder: (_, i) {
+        final item = _entreprises[i];
+        if (item is! Map) return const SizedBox.shrink();
+        return _buildEntrepriseCard(Map<String, dynamic>.from(item));
+      },
+    ),
+  );
 
   Widget _buildEntrepriseCard(Map<String, dynamic> entreprise) {
     return Container(
