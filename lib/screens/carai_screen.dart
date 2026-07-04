@@ -5,9 +5,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../utils/constants.dart';
 import '../widgets/whatsapp_icon.dart';
+import '../widgets/service_selection_modal.dart';
+import '../providers/message_provider.dart';
 
 // ─── Modèles ─────────────────────────────────────────────────────────────────
 
@@ -886,7 +889,9 @@ class _CarAIScreenState extends State<CarAIScreen>
   // ── Carte prestataire ─────────────────────────────────────────────────────
 
   Widget _buildServiceCard(Map<String, dynamic> svc, bool isDark) {
-    final e    = svc['entreprise'] as Map<String, dynamic>? ?? {};
+    final e    = svc['entreprise'] is Map
+        ? Map<String, dynamic>.from(svc['entreprise'] as Map)
+        : <String, dynamic>{};
     final name = svc['name']?.toString() ?? 'Service';
     final ent  = e['name']?.toString() ?? '';
     final ph   = e['call_phone']?.toString() ?? '';
@@ -896,136 +901,125 @@ class _CarAIScreenState extends State<CarAIScreen>
     final note = (svc['average_rating'] as num?)?.toDouble();
     final avis = (svc['total_reviews'] as num?)?.toInt() ?? 0;
 
+    // Entreprise enrichie avec le service pour showServiceSelectionModal
+    final entrepriseForModal = <String, dynamic>{
+      ...e,
+      // Injecter le service courant comme liste pour éviter un appel API
+      'services': [svc],
+    };
+
     return Container(
       margin: const EdgeInsets.only(bottom: 7),
       padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
         color: isDark ? _UI.bubbleDark : Colors.white,
         borderRadius: BorderRadius.circular(13),
-        border: Border.all(
-          color: _UI.primary.withOpacity(0.12),
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        border: Border.all(color: _UI.primary.withOpacity(0.12), width: 1),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(0, 2))],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Logo / icône
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: _UI.primary.withOpacity(0.09),
-              borderRadius: BorderRadius.circular(10),
-              image: logo != null && logo.isNotEmpty
-                  ? DecorationImage(
-                      image: NetworkImage(logo),
-                      fit: BoxFit.cover)
-                  : null,
-            ),
-            child: (logo == null || logo.isEmpty)
-                ? const Icon(
-                    Icons.store_rounded,
-                    color: _UI.primary,
-                    size: 20,
-                  )
-                : null,
-          ),
-          const SizedBox(width: 10),
-
-          // Informations
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    color: isDark ? Colors.white : _UI.text,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          // ── Infos prestataire ───────────────────────────────────────
+          Row(
+            children: [
+              // Logo / icône
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: _UI.primary.withOpacity(0.09),
+                  borderRadius: BorderRadius.circular(10),
+                  image: logo != null && logo.isNotEmpty
+                      ? DecorationImage(image: NetworkImage(logo), fit: BoxFit.cover)
+                      : null,
                 ),
-                if (ent.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    ent,
-                    style: const TextStyle(
-                        fontSize: 12, color: _UI.textMuted),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-                const SizedBox(height: 4),
-                Row(
+                child: (logo == null || logo.isEmpty)
+                    ? const Icon(Icons.store_rounded, color: _UI.primary, size: 20)
+                    : null,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (dist != null) ...[
-                      const Icon(
-                        Icons.near_me_rounded,
-                        size: 11,
-                        color: _UI.primary,
-                      ),
-                      const SizedBox(width: 3),
-                      Text(
-                        '${dist} km',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: _UI.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
+                    Text(name, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: isDark ? Colors.white : _UI.text), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    if (ent.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(ent, style: const TextStyle(fontSize: 12, color: _UI.textMuted), maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
-                    if (note != null && avis > 0) ...[
-                      const Icon(
-                        Icons.star_rounded,
-                        size: 11,
-                        color: Color(0xFFF59E0B),
-                      ),
-                      const SizedBox(width: 2),
-                      Text(
-                        '$note ($avis)',
-                        style: const TextStyle(
-                            fontSize: 11, color: _UI.textMuted),
-                      ),
-                    ],
+                    const SizedBox(height: 4),
+                    Row(children: [
+                      if (dist != null) ...[
+                        const Icon(Icons.near_me_rounded, size: 11, color: _UI.primary),
+                        const SizedBox(width: 3),
+                        Text('$dist km', style: const TextStyle(fontSize: 11, color: _UI.primary, fontWeight: FontWeight.w600)),
+                        const SizedBox(width: 8),
+                      ],
+                      if (note != null && avis > 0) ...[
+                        const Icon(Icons.star_rounded, size: 11, color: Color(0xFFF59E0B)),
+                        const SizedBox(width: 2),
+                        Text('$note ($avis)', style: const TextStyle(fontSize: 11, color: _UI.textMuted)),
+                      ],
+                    ]),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
 
-          // Boutons d'action
+          // ── Boutons d'action ─────────────────────────────────────────
+          const SizedBox(height: 10),
           Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              if (ph.isNotEmpty)
-                _iconBtn(
+              // Appeler
+              if (ph.isNotEmpty) ...[
+                Expanded(child: _cardActionBtn(
                   icon: Icons.call_rounded,
+                  label: 'Appeler',
                   color: _UI.callGreen,
                   onTap: () => _launchUrl('tel:$ph'),
-                  tooltip: 'Appeler',
-                ),
-              if (wa.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                _iconBtn(
-                  icon: null,
-                  waIcon: true,
-                  color: _UI.whatsapp,
-                  onTap: () => _launchUrl(
-                    'https://wa.me/${wa.replaceAll('+', '').replaceAll(' ', '')}',
-                  ),
-                  tooltip: 'WhatsApp',
-                ),
+                  isDark: isDark,
+                )),
+                const SizedBox(width: 7),
               ],
+              // WhatsApp
+              if (wa.isNotEmpty) ...[
+                Expanded(child: _cardActionBtn(
+                  icon: null,
+                  label: 'WhatsApp',
+                  color: _UI.whatsapp,
+                  onTap: () => _launchUrl('https://wa.me/${wa.replaceAll('+', '').replaceAll(' ', '')}'),
+                  isDark: isDark,
+                  isWhatsapp: true,
+                )),
+                const SizedBox(width: 7),
+              ],
+              // Message in-app
+              Expanded(child: _cardActionBtn(
+                icon: Icons.message_rounded,
+                label: 'Message',
+                color: Colors.deepPurple,
+                onTap: () => showServiceSelectionModal(
+                  context: context,
+                  entreprise: entrepriseForModal,
+                  mode: ServiceSelectionMode.message,
+                ),
+                isDark: isDark,
+              )),
+              const SizedBox(width: 7),
+              // Rendez-vous
+              Expanded(child: _cardActionBtn(
+                icon: Icons.calendar_month_rounded,
+                label: 'RDV',
+                color: Colors.blue.shade600,
+                onTap: () => showServiceSelectionModal(
+                  context: context,
+                  entreprise: entrepriseForModal,
+                  mode: ServiceSelectionMode.rendezVous,
+                ),
+                isDark: isDark,
+              )),
             ],
           ),
         ],
@@ -1033,29 +1027,32 @@ class _CarAIScreenState extends State<CarAIScreen>
     );
   }
 
-  Widget _iconBtn({
+  Widget _cardActionBtn({
     required IconData? icon,
-    bool waIcon = false,
+    required String label,
     required Color color,
     required VoidCallback onTap,
-    String? tooltip,
+    required bool isDark,
+    bool isWhatsapp = false,
   }) {
-    return Tooltip(
-      message: tooltip ?? '',
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(9),
-          ),
-          child: Center(
-            child: waIcon
-                ? const WhatsAppIcon(size: 18)
-                : Icon(icon, color: color, size: 17),
-          ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withOpacity(isDark ? 0.15 : 0.08),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            isWhatsapp
+                ? const WhatsAppIcon(size: 16)
+                : Icon(icon, color: color, size: 16),
+            const SizedBox(height: 3),
+            Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600)),
+          ],
         ),
       ),
     );
