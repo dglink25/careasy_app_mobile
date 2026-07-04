@@ -189,7 +189,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     if (schedule.isEmpty) return 'Horaires non définis';
     final buffer = StringBuffer();
     for (int i = 0; i < days.length; i++) {
-      final daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]]) : {};
+      final Map<String, dynamic> daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]] as Map) : <String, dynamic>{};
       final isOpen = daySchedule['is_open'] == true || daySchedule['is_open'] == '1' || daySchedule['is_open'] == 1;
       if (isOpen) {
         buffer.writeln('${dayNames[i]} : ${daySchedule['start']?.toString().substring(0, 5) ?? '--:--'} - ${daySchedule['end']?.toString().substring(0, 5) ?? '--:--'}');
@@ -203,7 +203,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
     setState(() => _isSharing = true);
     try {
       final serviceName       = widget.service['name'] ?? 'Service';
-      final entreprise        = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
+      final Map<String, dynamic> entreprise = widget.service['entreprise'] is Map
+          ? Map<String, dynamic>.from(widget.service['entreprise'] as Map)
+          : <String, dynamic>{};
       final entrepriseName    = entreprise['name'] ?? 'Entreprise';
       final entrepriseAddress = entreprise['google_formatted_address'] ?? entreprise['siege'] ?? entreprise['address'] ?? 'Adresse non renseignée';
       final hasPromo          = widget.service['has_promo'] ?? false;
@@ -259,7 +261,9 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
   // ══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final entreprise    = widget.service['entreprise'] is Map ? Map<String, dynamic>.from(widget.service['entreprise']) : {};
+    final Map<String, dynamic> entreprise = widget.service['entreprise'] is Map
+        ? Map<String, dynamic>.from(widget.service['entreprise'] as Map)
+        : <String, dynamic>{};
     final medias        = widget.service['medias'] is List ? List<String>.from(widget.service['medias']) : <String>[];
     final hasPromo      = widget.service['has_promo'] ?? false;
     final isPromoActive = widget.service['is_promo_active'] ?? false;
@@ -812,7 +816,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen>
       itemCount: days.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (_, i) {
-        final daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]]) : {};
+        final Map<String, dynamic> daySchedule = schedule[days[i]] is Map ? Map<String, dynamic>.from(schedule[days[i]] as Map) : <String, dynamic>{};
         final openValue = daySchedule['is_open'];
         final isOpen = openValue == true || openValue == '1' || openValue == 1;
         String start = '--:--'; String end = '--:--';
