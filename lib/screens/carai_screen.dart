@@ -202,10 +202,17 @@ class _CarAIScreenState extends State<CarAIScreen>
         if (!mounted) return;
         setState(() {
           for (final item in list) {
-            final meta = item['ai_metadata'] as Map<String, dynamic>? ?? {};
+            final meta = item['ai_metadata'] is Map
+                ? Map<String, dynamic>.from(item['ai_metadata'] as Map)
+                : <String, dynamic>{};
+            // Priorité : role direct > ai_metadata['role']
+            final rawRole = item['role']?.toString()
+                ?? meta['role']?.toString()
+                ?? 'assistant';
+            final role = rawRole == 'user' ? 'user' : 'assistant';
             _messages.add(_CarAIMessage(
               id:          item['id']?.toString() ?? UniqueKey().toString(),
-              role:        item['role']?.toString() == 'user' ? 'user' : 'assistant',
+              role:        role,
               content:     item['content']?.toString() ?? '',
               services:    _parseServices(meta['services']),
               suggestions: _parseStrList(meta['suggestions']),
