@@ -31,6 +31,10 @@ class CachedImage extends StatelessWidget {
     if (isEmpty) {
       content = errorWidget ?? _defaultError();
     } else {
+        // Garde contre double.infinity qui cause un crash sur memCacheWidth/Height
+        final cacheW = (width != null && width!.isFinite) ? (width! * 2).toInt() : null;
+        final cacheH = (height != null && height!.isFinite) ? (height! * 2).toInt() : null;
+
       content = CachedNetworkImage(
         imageUrl: url!,
         cacheManager: CacheService.imageCache,
@@ -50,9 +54,8 @@ class CachedImage extends StatelessWidget {
               ),
             ),
         errorWidget: (_, __, ___) => errorWidget ?? _defaultError(),
-        // Garde les images en mémoire vive pour des transitions fluides
-        memCacheWidth: width != null ? (width! * 2).toInt() : null,
-        memCacheHeight: height != null ? (height! * 2).toInt() : null,
+        memCacheWidth: cacheW,
+        memCacheHeight: cacheH,
       );
     }
 

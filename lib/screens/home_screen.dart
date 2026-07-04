@@ -1291,10 +1291,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
               child: CachedImage(
                 url: entreprise['logo']?.toString(),
-                width: double.infinity,
+                width: 160,
                 height: 100,
                 fit: BoxFit.cover,
                 errorWidget: Container(
+                  width: 160,
                   height: 100,
                   color: Colors.grey[200],
                   child: Center(child: Icon(Icons.business, size: 30, color: Colors.grey[400])),
